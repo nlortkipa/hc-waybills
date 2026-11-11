@@ -1,0 +1,310 @@
+/**
+ * App-facing API. Today it talks to the in-browser mock DB; later each function
+ * becomes a fetch() to the real backend with the same signature.
+ */
+import { db } from '../mock/db'
+import { formatKg, nowIso, sleep, uid } from '../lib/util'
+import type { Database, Shipment, ShipmentEvent, User } from '../types'
+import { rsge, scale, sms } from './integrations'
+import { buildScalePayload } from './scalePayload'
+
+const quick = () => sleep(150 + Math.random() * 150)
+
+/* ------------------------------ Auth ------------------------------ */
+
+const SESSION_KEY = 'hc.session'
+
+export const auth = {
+  current(): User | null {
+    try {
+      const id = localStorage.getItem(SESSION_KEY)
+      return db.get().users.find((u) => u.id === id) ?? null
+    } catch {
+      return null
+    }
+  },
+  async loginAs(userId: string): Promise<User> {
+    await quick()
+    const user = db.get().users.find((u) => u.id === userId)
+    if (!user) throw new Error('მომხმარებელი ვერ მოიძებნა')
+    try {
+      localStorage.setItem(SESSION_KEY, user.id)
+    } catch {
+      /* ignore */
+    }
+    return user
+  },
+  logout() {
+    try {
+      localStorage.removeItem(SESSION_KEY)
+    } catch {
+      /* ignore */
+    }
+  },
+}
+
+/* ------------------------- Reference data ------------------------- */
+
+export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'items' | 'users'
+type RefRecord<K extends RefCollection> = Database[K][number]
+
+export const refs = {
+  async save<K extends RefCollection>(col: K, record: Omit<RefRecord<K>, 'id'> & { id?: string }) {
+    await quick()
+    const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord<K>
+    db.update((d) => {
+      const list = d[col] as RefRecord<K>[]
+      const exists = list.some((r) => r.id === rec.id)
+      return { ...d, [col]: exists ? list.map((r) => (r.id === rec.id ? rec : r)) : [...list, rec] }
+    })
+    return rec
+  },
+
+  /** Returns why a record cannot be deleted, or null if it can. */
+  usage(col: RefCollection, id: string): string | null {
+    const d = db.get()
+    const n = (k: keyof Shipment) => d.shipments.filter((s) => s[k] === id).length
+    switch (col) {
+      case 'carriers': {
+        const r = d.routes.filter((x) => x.carrierId === id).length
+        const u = d.users.filter((x) => x.carrierId === id).length
+        if (r || u) return `გამოიყენება ${r} მარშრუტში და ${u} მომხმარებელთან.`
+        return n('carrierId') ? `გამოიყენება ${n('carrierId')} რეისში.` : null
+      }
+      case 'routes':
+        return n('routeId') ? `გამოიყენება ${n('routeId')} რეისში.` : null
+      case 'drivers':
+        return n('driverId') ? `გამოიყენება ${n('driverId')} რეისში.` : null
+      case 'trucks':
+        return n('truckId') ? `გამოიყენება ${n('truckId')} რეისში.` : null
+      case 'items':
+        return n('itemId') ? `გამოიყენება ${n('itemId')} რეისში.` : null
+      case 'users':
+        return n('createdBy') ? `შექმნილი აქვს ${n('createdBy')} რეისი.` : null
+    }
+  },
+
+  async remove(col: RefCollection, id: string) {
+    await quick()
+    const reason = refs.usage(col, id)
+    if (reason) throw new Error(`წაშლა შეუძლებელია: ${reason}`)
+    db.update((d) => ({ ...d, [col]: (d[col] as { id: string }[]).filter((r) => r.id !== id) }))
+  },
+}
+
+/* ---------------------------- Shipments ---------------------------- */
+
+export function visibleShipments(d: Database, user: User): Shipment[] {
+  const list = user.role === 'operator' ? d.shipments.filter((s) => s.carrierId === user.carrierId) : d.shipments
+  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+function patch(id: string, fn: (s: Shipment) => Partial<Shipment>, event?: Omit<ShipmentEvent, 'at'>) {
+  db.update((d) => ({
+    ...d,
+    shipments: d.shipments.map((s) =>
+      s.id === id ? { ...s, ...fn(s), events: event ? [...s.events, { at: nowIso(), ...event }] : s.events } : s,
+    ),
+  }))
+}
+
+const get = (id: string) => {
+  const s = db.get().shipments.find((x) => x.id === id)
+  if (!s) throw new Error('რეისი ვერ მოიძებნა')
+  return s
+}
+
+const running = new Set<string>()
+const weighTimers = new Map<string, number>()
+
+export interface NewShipmentInput {
+  carrierId: string
+  routeId: string
+  driverId: string
+  truckId: string
+  itemId: string
+  quantity: number
+}
+
+export const shipments = {
+  /** Creates the record and immediately starts the upload pipeline. */
+  async create(input: NewShipmentInput, user: User): Promise<string> {
+    if (user.role === 'report') throw new Error('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა')
+    if (user.role === 'operator' && input.carrierId !== user.carrierId) throw new Error('ოპერატორს შეუძლია მხოლოდ საკუთარი კარიერის გამოყენება')
+    await quick()
+    const s: Shipment = {
+      id: uid('s'),
+      createdAt: nowIso(),
+      createdBy: user.id,
+      ...input,
+      status: 'uploading',
+      rs: { status: 'pending' },
+      sms: { status: 'pending' },
+      scale: { status: 'pending' },
+      events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
+    }
+    db.update((d) => ({ ...d, shipments: [s, ...d.shipments] }))
+    void shipments.run(s.id)
+    return s.id
+  },
+
+  /** Runs (or resumes) the pipeline: RS.ge → SMS → Scale. Safe to call again for retries. */
+  async run(id: string) {
+    if (running.has(id)) return
+    running.add(id)
+    try {
+      await runPipeline(id)
+    } finally {
+      running.delete(id)
+    }
+  },
+
+  async retrySms(id: string) {
+    const s = get(id)
+    if (!s.waybillNumber) return
+    await sendSms(id)
+  },
+
+  /** Simulates the truck being weighed: the scale calls us back with docEntry + weight. */
+  async simulateWeighing(id: string, weightKg?: number) {
+    const s = get(id)
+    if (s.status !== 'at_scale' || !s.waybillNumber) return
+    clearTimeout(weighTimers.get(id))
+    weighTimers.delete(id)
+    const w = weightKg ?? Math.round(s.quantity * 1000 * (0.96 + Math.random() * 0.08))
+    scale.logWeightCallback(s.waybillNumber, w, id)
+    patch(
+      id,
+      (x) => ({ status: 'weighed', scale: { ...x.scale, weightKg: w, weighedAt: nowIso() } }),
+      { level: 'success', message: `აიწონა: ${formatKg(w)} (docEntry ${s.waybillNumber})` },
+    )
+  },
+
+  /** Re-arms auto-weighing timers after a page reload. */
+  resumeAutoWeigh() {
+    db.get().shipments.filter((s) => s.status === 'at_scale').forEach((s) => scheduleAutoWeigh(s.id))
+  },
+
+  /** Called once on app start: finishes pipelines interrupted by a reload. */
+  resumeAll() {
+    db.get()
+      .shipments.filter((s) => s.status === 'uploading' || s.status === 'uploaded' || s.sms.status === 'running' || s.scale.status === 'running')
+      .forEach((s) => void shipments.run(s.id))
+    shipments.resumeAutoWeigh()
+  },
+
+  isRunning: (id: string) => running.has(id),
+}
+
+function scheduleAutoWeigh(id: string) {
+  const { autoWeigh, autoWeighDelaySec } = db.get().settings
+  if (!autoWeigh || weighTimers.has(id)) return
+  const t = window.setTimeout(() => {
+    weighTimers.delete(id)
+    if (db.get().settings.autoWeigh) void shipments.simulateWeighing(id)
+  }, autoWeighDelaySec * 1000)
+  weighTimers.set(id, t)
+}
+
+async function runPipeline(id: string) {
+  let s = get(id)
+  const d = db.get()
+
+  // 1. RS.ge — create waybill
+  if (s.rs.status !== 'ok') {
+    const route = d.routes.find((r) => r.id === s.routeId)!
+    const driver = d.drivers.find((x) => x.id === s.driverId)!
+    const truck = d.trucks.find((x) => x.id === s.truckId)!
+    const item = d.items.find((x) => x.id === s.itemId)!
+    const carrier = d.carriers.find((x) => x.id === s.carrierId)!
+    if (s.status === 'rs_failed') patch(id, () => ({}), { level: 'info', message: 'RS.ge-ზე ატვირთვის ხელახალი ცდა' })
+    patch(id, () => ({ status: 'uploading', rs: { status: 'running' } }))
+    try {
+      const res = await rsge.createWaybill(
+        {
+          waybill_type: 2,
+          seller_un_id: carrier.code,
+          start_address: route.startLocation,
+          end_address: route.endLocation,
+          driver_tin: driver.personalId,
+          driver_name: `${driver.firstName} ${driver.lastName}`,
+          car_number: truck.plateNumber,
+          trailer: truck.trailerNumber,
+          transport_coast: 0,
+          goods_list: [{ w_name: item.description, unit_id: 2, quantity: s.quantity, bar_code: item.code }],
+        },
+        id,
+      )
+      patch(
+        id,
+        () => ({ status: 'uploaded', waybillNumber: res.waybill_number, rs: { status: 'ok', at: nowIso() } }),
+        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${res.waybill_number}` },
+      )
+    } catch (e) {
+      const msg = (e as Error).message
+      patch(id, () => ({ status: 'rs_failed', rs: { status: 'failed', error: msg, at: nowIso() } }), { level: 'error', message: msg })
+      return
+    }
+  }
+
+  // 2. SMS to driver — failure does not block the scale hand-off
+  s = get(id)
+  if (s.sms.status !== 'ok') await sendSms(id)
+
+  // 3. Scale Service — hand over the waybill
+  s = get(id)
+  if (s.scale.status !== 'ok') {
+    const payload = buildScalePayload(s, db.get())
+    if (s.status === 'scale_failed') patch(id, () => ({}), { level: 'info', message: 'სასწორზე გაგზავნის ხელახალი ცდა' })
+    patch(id, (x) => ({ scale: { ...x.scale, status: 'running', payload } }))
+    try {
+      await scale.sendWaybill(payload, id)
+      patch(
+        id,
+        (x) => ({ status: 'at_scale', scale: { ...x.scale, status: 'ok', error: undefined, sentAt: nowIso() } }),
+        { level: 'success', message: 'ზედნადები გაიგზავნა სასწორზე — ელოდება აწონვას' },
+      )
+      scheduleAutoWeigh(id)
+    } catch (e) {
+      const msg = (e as Error).message
+      patch(id, (x) => ({ status: 'scale_failed', scale: { ...x.scale, status: 'failed', error: msg } }), { level: 'error', message: msg })
+    }
+  }
+}
+
+async function sendSms(id: string) {
+  const s = get(id)
+  const d = db.get()
+  const driver = d.drivers.find((x) => x.id === s.driverId)!
+  const route = d.routes.find((r) => r.id === s.routeId)!
+  const truck = d.trucks.find((x) => x.id === s.truckId)!
+  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.startLocation} → ${route.endLocation}. მანქანა: ${truck.plateNumber}.`
+  patch(id, (x) => ({ sms: { ...x.sms, status: 'running', to: driver.phone, text } }))
+  try {
+    await sms.send(driver.phone, text, id)
+    patch(id, (x) => ({ sms: { ...x.sms, status: 'ok', error: undefined, at: nowIso() } }), {
+      level: 'success',
+      message: `მძღოლს გაეგზავნა SMS (${driver.phone})`,
+    })
+  } catch (e) {
+    const msg = (e as Error).message
+    patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso() } }), { level: 'error', message: msg })
+  }
+}
+
+/* ------------------------------ Mock ------------------------------ */
+
+export const mock = {
+  updateSettings(p: Partial<Database['settings']>) {
+    db.update((d) => ({ ...d, settings: { ...d.settings, ...p } }))
+    if (p.autoWeigh) shipments.resumeAutoWeigh()
+  },
+  clearLogs() {
+    db.update((d) => ({ ...d, logs: [] }))
+  },
+  reset() {
+    weighTimers.forEach((t) => clearTimeout(t))
+    weighTimers.clear()
+    db.reset()
+  },
+}
