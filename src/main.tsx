@@ -7,8 +7,14 @@ import './index.css'
 import App from './App.tsx'
 
 if (Capacitor.isNativePlatform()) {
-  StatusBar.setStyle({ style: Style.Light }).catch(() => {})
-  StatusBar.setBackgroundColor({ color: '#ffffff' }).catch(() => {})
+  // Match the iOS-style grouped background in both appearances.
+  const dark = window.matchMedia('(prefers-color-scheme: dark)')
+  const apply = () => {
+    StatusBar.setStyle({ style: dark.matches ? Style.Dark : Style.Light }).catch(() => {})
+    StatusBar.setBackgroundColor({ color: dark.matches ? '#000000' : '#f2f2f7' }).catch(() => {})
+  }
+  apply()
+  dark.addEventListener('change', apply)
 }
 
 createRoot(document.getElementById('root')!).render(

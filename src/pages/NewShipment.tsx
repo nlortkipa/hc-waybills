@@ -72,7 +72,7 @@ export function NewShipment() {
                 </Select>
               </Field>
             ) : (
-              <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm ring-1 ring-slate-200/70">
+              <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
                 <span className="text-slate-500">კარიერი: </span>
                 <span className="font-medium text-slate-900">{d.carriers.find((c) => c.id === carrierId)?.name ?? '—'}</span>
               </div>

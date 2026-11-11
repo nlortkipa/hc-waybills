@@ -34,9 +34,9 @@ export function Dashboard() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat label="დღეს" value={todays.length} sub="შექმნილი რეისი" icon={<Truck className="size-5" />} />
-        <Stat label="მიმდინარე" value={waiting.length} sub="ელოდება სასწორს" icon={<Clock className="size-5" />} accent="bg-amber-50 text-amber-600" />
-        <Stat label="დღეს აიწონა" value={formatKg(weighedToday)} sub={`${todays.filter((s) => s.status === 'weighed').length} მანქანა`} icon={<Scale className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
-        <Stat label="საჭიროებს ყურადღებას" value={failed.length} sub="შეცდომით" icon={failed.length ? <AlertTriangle className="size-5" /> : <CheckCircle2 className="size-5" />} accent={failed.length ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-500'} />
+        <Stat label="მიმდინარე" value={waiting.length} sub="ელოდება სასწორს" icon={<Clock className="size-5" />} accent="bg-amber-500" />
+        <Stat label="დღეს აიწონა" value={formatKg(weighedToday)} sub={`${todays.filter((s) => s.status === 'weighed').length} მანქანა`} icon={<Scale className="size-5" />} accent="bg-emerald-500" />
+        <Stat label="საჭიროებს ყურადღებას" value={failed.length} sub="შეცდომით" icon={failed.length ? <AlertTriangle className="size-5" /> : <CheckCircle2 className="size-5" />} accent={failed.length ? 'bg-rose-500' : 'bg-slate-400'} />
       </div>
 
       {/* Mobile primary action */}
@@ -47,8 +47,8 @@ export function Dashboard() {
       </Link>
 
       {failed.length > 0 && (
-        <Card className="mt-6 overflow-hidden ring-rose-200">
-          <div className="flex items-center gap-2 border-b border-rose-100 bg-rose-50/60 px-5 py-3">
+        <Card className="mt-6 overflow-hidden">
+          <div className="flex items-center gap-2 hairline-b bg-rose-50 px-5 py-3">
             <AlertTriangle className="size-4 text-rose-500" />
             <h2 className="text-sm font-semibold text-rose-900">საჭიროებს ყურადღებას</h2>
           </div>
@@ -57,7 +57,7 @@ export function Dashboard() {
       )}
 
       <Card className="mt-6 overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+        <div className="flex items-center justify-between border-b border-separator px-5 py-3">
           <h2 className="text-sm font-semibold text-slate-900">ბოლო რეისები</h2>
           <Link to="/shipments" className="text-sm font-medium text-brand-600 hover:text-brand-700">
             ყველას ნახვა

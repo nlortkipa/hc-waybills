@@ -1,5 +1,5 @@
-import { BarChart3, Database, FlaskConical, LayoutDashboard, LogOut, Menu, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useDb } from '../mock/db'
 import { cx, initials } from '../lib/util'
@@ -13,55 +13,93 @@ interface NavItem {
   short?: string
   icon: LucideIcon
   roles: Role[]
+  /** Settings-style icon tile color. */
+  tint: string
   /** Shown in the mobile bottom bar for these roles. */
   mobile: Role[]
 }
 
 export const NAV: NavItem[] = [
-  { to: '/', label: 'მთავარი', short: 'მთავარი', icon: LayoutDashboard, roles: ['admin', 'operator'], mobile: ['admin', 'operator'] },
-  { to: '/new', label: 'ახალი რეისი', short: 'ახალი', icon: PlusCircle, roles: ['admin', 'operator'], mobile: ['operator'] },
-  { to: '/shipments', label: 'რეისები', icon: Truck, roles: ['admin', 'operator', 'report'], mobile: ['admin', 'operator', 'report'] },
-  { to: '/reports', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
-  { to: '/refs', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
-  { to: '/mock', label: 'სატესტო პანელი', short: 'ტესტი', icon: FlaskConical, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
+  { to: '/', tint: 'bg-brand-500', label: 'მთავარი', short: 'მთავარი', icon: LayoutDashboard, roles: ['admin', 'operator'], mobile: ['admin', 'operator'] },
+  { to: '/new', tint: 'bg-emerald-500', label: 'ახალი რეისი', short: 'ახალი', icon: PlusCircle, roles: ['admin', 'operator'], mobile: ['operator'] },
+  { to: '/shipments', tint: 'bg-amber-500', label: 'რეისები', icon: Truck, roles: ['admin', 'operator', 'report'], mobile: ['admin', 'operator', 'report'] },
+  { to: '/reports', tint: 'bg-violet-500', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
+  { to: '/refs', tint: 'bg-slate-500', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
+  { to: '/mock', tint: 'bg-rose-500', label: 'სატესტო პანელი', short: 'ტესტი', icon: FlaskConical, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
 ]
+
+function AppIcon({ className }: { className?: string }) {
+  return (
+    <span className={cx('grid place-items-center rounded-[22%] bg-gradient-to-b from-[#3d9bff] to-[#0062e0] text-white shadow-[inset_0_0.5px_0_rgba(255,255,255,0.4)]', className)}>
+      <Truck className="size-[55%]" strokeWidth={2.25} />
+    </span>
+  )
+}
 
 function Brand() {
   return (
     <div className="flex items-center gap-2.5">
-      <div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-sm shadow-brand-600/30">
-        <Truck className="size-5" />
-      </div>
+      <AppIcon className="size-8" />
       <div className="leading-tight">
-        <p className="text-sm font-semibold text-slate-900">HC Portal</p>
-        <p className="text-[11px] text-slate-500">კარიერი და ზედნადები</p>
+        <p className="text-[15px] font-semibold text-slate-900">HC Portal</p>
+        <p className="text-xs text-slate-500">კარიერი და ზედნადები</p>
       </div>
     </div>
   )
 }
 
-function UserCard({ onLogout }: { onLogout: () => void }) {
+function useAccount() {
   const user = useUser()
   const d = useDb()
   const carrier = d.carriers.find((c) => c.id === user.carrierId)
+  return { user, sub: carrier ? `${roleLabel[user.role]} · ${carrier.name}` : roleLabel[user.role] }
+}
+
+function SidebarAccount({ onLogout }: { onLogout: () => void }) {
+  const { user, sub } = useAccount()
   return (
-    <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200/70">
-      <Avatar text={initials(user.firstName, user.lastName)} />
+    <div className="flex items-center gap-2.5 rounded-[10px] p-2">
+      <Avatar text={initials(user.firstName, user.lastName)} className="size-8 text-xs" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-900">
+        <p className="truncate text-[13px] font-semibold text-slate-900">
           {user.firstName} {user.lastName}
         </p>
-        <p className="truncate text-xs text-slate-500">{carrier ? `${roleLabel[user.role]} · ${carrier.name}` : roleLabel[user.role]}</p>
+        <p className="truncate text-xs text-slate-500">{sub}</p>
       </div>
-      <button onClick={onLogout} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-slate-700" title="მომხმარებლის შეცვლა" aria-label="გასვლა">
+      <button onClick={onLogout} className="pressable grid size-8 place-items-center rounded-full text-slate-500 hover:bg-fill hover:text-slate-900" title="მომხმარებლის შეცვლა" aria-label="გასვლა">
         <LogOut className="size-4" />
       </button>
     </div>
   )
 }
 
+/** Inset-grouped list row (Settings app style). */
+function SheetRow({ icon: Icon, tint, label, onClick, to, destructive, last }: { icon: LucideIcon; tint: string; label: string; onClick?: () => void; to?: string; destructive?: boolean; last?: boolean }) {
+  const inner = (
+    <>
+      <span className={cx('grid size-[29px] shrink-0 place-items-center rounded-[7px] text-white', tint)}>
+        <Icon className="size-[17px]" />
+      </span>
+      <span className={cx('flex flex-1 items-center gap-2 self-stretch py-3 pr-3 text-[17px]', !last && 'hairline-b', destructive ? 'text-rose-600' : 'text-slate-900')}>
+        <span className="flex-1">{label}</span>
+        {!destructive && <ChevronRight className="size-4 text-slate-400" strokeWidth={2.5} />}
+      </span>
+    </>
+  )
+  const cls = 'flex w-full items-center gap-3 pl-4 text-left active:bg-slate-500/15'
+  return to ? (
+    <NavLink to={to} end={to === '/'} onClick={onClick} className={cls}>
+      {inner}
+    </NavLink>
+  ) : (
+    <button onClick={onClick} className={cls}>
+      {inner}
+    </button>
+  )
+}
+
 export function Layout({ children }: { children: ReactNode }) {
-  const user = useUser()
+  const { user, sub } = useAccount()
   const { logout } = useSession()
   const items = NAV.filter((n) => n.roles.includes(user.role))
   const mobileItems = items.filter((n) => n.mobile.includes(user.role))
@@ -69,68 +107,79 @@ export function Layout({ children }: { children: ReactNode }) {
   const loc = useLocation()
   const current = items.find((n) => (n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to)))
 
+  // Nav bar picks up its hairline + material only once content scrolls under it (iOS behavior).
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [loc.pathname])
+
   return (
-    <div className="min-h-full lg:pl-64">
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
-        <div className="px-5 py-5">
+    <div className="min-h-full lg:pl-[260px]">
+      {/* iPadOS-style sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col bg-surface/60 shadow-[inset_-0.5px_0_0_var(--ios-separator)] lg:flex">
+        <div className="px-5 pt-6 pb-5">
           <Brand />
         </div>
-        <nav className="flex-1 space-y-1 px-3">
+        <nav className="flex-1 space-y-0.5 px-3">
           {items.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               end={n.to === '/'}
               className={({ isActive }) =>
-                cx(
-                  'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
-                  isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
-                )
+                cx('flex h-10 items-center gap-3 rounded-[10px] px-3 text-[15px] transition-colors', isActive ? 'bg-brand-600 font-semibold text-white' : 'text-slate-900 hover:bg-fill')
               }
             >
-              <n.icon className="size-[18px]" />
-              {n.label}
-              {n.to === '/mock' && <span className="ml-auto rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700">dev</span>}
+              {({ isActive }) => (
+                <>
+                  <n.icon className={cx('size-[19px]', isActive ? 'text-white' : 'text-brand-600')} />
+                  {n.label}
+                  {n.to === '/mock' && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
+                </>
+              )}
             </NavLink>
           ))}
         </nav>
         <div className="p-3">
-          <UserCard onLogout={logout} />
+          <SidebarAccount onLogout={logout} />
         </div>
       </aside>
 
-      {/* Mobile top bar */}
-      <header className="pt-safe sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur lg:hidden">
-        <div className="flex h-14 items-center justify-between px-4">
-          <Brand />
-          <button onClick={() => setMenuOpen(true)} className="-mr-2 flex items-center gap-2 rounded-xl p-1.5 hover:bg-slate-100" aria-label="მენიუს გახსნა">
+      {/* iOS navigation bar */}
+      <header className={cx('pt-safe sticky top-0 z-30 transition-[background-color,box-shadow] duration-200 lg:hidden', scrolled ? 'material hairline-b' : 'bg-canvas')}>
+        <div className="relative flex h-11 items-center justify-between px-4">
+          <AppIcon className="size-7" />
+          <p className={cx('absolute inset-x-16 truncate text-center text-[17px] font-semibold text-slate-900 transition-opacity duration-200', scrolled ? 'opacity-100' : 'opacity-0')}>{current?.label ?? 'HC Portal'}</p>
+          <button onClick={() => setMenuOpen(true)} className="pressable -mr-1 rounded-full" aria-label="მენიუს გახსნა">
             <Avatar text={initials(user.firstName, user.lastName)} className="size-8 text-xs" />
-            <Menu className="size-5 text-slate-500" />
           </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 pt-5 pb-28 sm:px-6 lg:px-8 lg:pt-8 lg:pb-12">
+      <main className="mx-auto max-w-7xl px-4 pt-2 pb-[calc(env(safe-area-inset-bottom)+6rem)] sm:px-6 lg:px-8 lg:pt-10 lg:pb-12">
         {current && <span className="sr-only">{current.label}</span>}
         {children}
       </main>
 
-      {/* Mobile bottom nav */}
-      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden">
+      {/* iOS tab bar */}
+      <nav className="material hairline-t pb-safe fixed inset-x-0 bottom-0 z-30 lg:hidden">
         <div className="mx-auto flex max-w-md">
           {mobileItems.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               end={n.to === '/'}
-              className={({ isActive }) => cx('flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium', isActive ? 'text-brand-600' : 'text-slate-500')}
+              className={({ isActive }) => cx('pressable flex h-[52px] flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium', isActive ? 'text-brand-600' : 'text-slate-500')}
             >
               {({ isActive }) => (
                 <>
-                  <span className={cx('grid h-7 w-12 place-items-center rounded-full transition-colors', isActive && 'bg-brand-50')}>
-                    <n.icon className="size-5" />
-                  </span>
+                  <n.icon className="size-6" strokeWidth={isActive ? 2.25 : 1.75} />
                   {n.short ?? n.label}
                 </>
               )}
@@ -139,39 +188,48 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </nav>
 
-      {/* Mobile menu sheet */}
+      {/* Account sheet */}
       {menuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="animate-fade-in absolute inset-0 bg-slate-900/40" onClick={() => setMenuOpen(false)} />
-          <div className="animate-slide-up absolute inset-x-0 top-0 rounded-b-3xl bg-white p-4 pt-[calc(env(safe-area-inset-top)+1rem)] shadow-xl">
-            <div className="mb-4 flex items-center justify-between">
-              <Brand />
-              <button onClick={() => setMenuOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100" aria-label="მენიუს დახურვა">
-                <X className="size-5" />
+          <div className="animate-fade-in absolute inset-0 bg-black/40" onClick={() => setMenuOpen(false)} />
+          <div className="animate-sheet-up absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-[14px] bg-canvas px-4 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+            <div className="mx-auto mt-1.5 h-[5px] w-9 rounded-full bg-slate-400/50" />
+            <div className="flex items-center justify-between pt-3 pb-4">
+              <h2 className="text-[17px] font-semibold text-slate-900">ანგარიში</h2>
+              <button onClick={() => setMenuOpen(false)} className="pressable grid size-[30px] place-items-center rounded-full bg-fill text-slate-500" aria-label="მენიუს დახურვა">
+                <X className="size-4" strokeWidth={2.5} />
               </button>
             </div>
-            <nav className="mb-4 grid grid-cols-2 gap-2">
-              {items.map((n) => (
-                <NavLink
-                  key={n.to}
-                  to={n.to}
-                  end={n.to === '/'}
-                  onClick={() => setMenuOpen(false)}
-                  className={({ isActive }) =>
-                    cx('flex items-center gap-2.5 rounded-xl px-3 py-3 text-sm font-medium ring-1', isActive ? 'bg-brand-50 text-brand-700 ring-brand-200' : 'text-slate-700 ring-slate-200')
-                  }
-                >
-                  <n.icon className="size-[18px]" />
-                  {n.label}
-                </NavLink>
+
+            <div className="mb-6 flex items-center gap-3 rounded-xl bg-surface p-4">
+              <Avatar text={initials(user.firstName, user.lastName)} className="size-14 text-xl" />
+              <div className="min-w-0">
+                <p className="truncate text-[20px] font-semibold text-slate-900">
+                  {user.firstName} {user.lastName}
+                </p>
+                <p className="truncate text-[15px] text-slate-500">{sub}</p>
+              </div>
+            </div>
+
+            <div className="mb-6 overflow-hidden rounded-xl bg-surface">
+              {items.map((n, i) => (
+                <SheetRow key={n.to} to={n.to} icon={n.icon} tint={n.tint} label={n.label} last={i === items.length - 1} onClick={() => setMenuOpen(false)} />
               ))}
-            </nav>
-            <UserCard
-              onLogout={() => {
-                setMenuOpen(false)
-                logout()
-              }}
-            />
+            </div>
+
+            <div className="overflow-hidden rounded-xl bg-surface">
+              <SheetRow
+                icon={LogOut}
+                tint="bg-rose-500"
+                label="მომხმარებლის შეცვლა"
+                destructive
+                last
+                onClick={() => {
+                  setMenuOpen(false)
+                  logout()
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

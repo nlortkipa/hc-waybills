@@ -2,7 +2,7 @@ import { ArrowDownLeft, ArrowUpRight, ChevronDown, RotateCcw, Trash2, Waypoints 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { mock } from '../api'
-import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Toggle } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented, Toggle } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatTime } from '../lib/util'
 import { useDb } from '../mock/db'
@@ -40,7 +40,7 @@ export function MockConsole() {
               <Slider label="RS.ge შეცდომების %" value={s.rsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ rsFailRate: v })} />
               <Slider label="SMS შეცდომების %" value={s.smsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ smsFailRate: v })} />
               <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />
-              <div className="border-t border-slate-100 pt-4">
+              <div className="border-t border-separator pt-4">
                 <Toggle checked={s.autoWeigh} onChange={(v) => mock.updateSettings({ autoWeigh: v })} label="სასწორი ავტომატურად წონის მანქანებს" />
                 {s.autoWeigh && (
                   <div className="mt-4">
@@ -62,18 +62,10 @@ export function MockConsole() {
         </div>
 
         <Card className="min-w-0 overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator px-5 py-3">
             <h2 className="text-sm font-semibold text-slate-900">ინტეგრაციების ლოგი</h2>
             <div className="flex items-center gap-1">
-              {(['', 'RS.ge', 'SMS', 'Scale'] as const).map((x) => (
-                <button
-                  key={x || 'all'}
-                  onClick={() => setSvc(x)}
-                  className={cx('h-7 rounded-lg px-2.5 text-xs font-medium', svc === x ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100')}
-                >
-                  {x ? serviceLabel[x] : 'ყველა'}
-                </button>
-              ))}
+              <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS', 'Scale'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
               <button onClick={() => mock.clearLogs()} className="ml-1 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="ლოგის გასუფთავება" aria-label="ლოგის გასუფთავება">
                 <Trash2 className="size-4" />
               </button>
@@ -82,7 +74,7 @@ export function MockConsole() {
           {logs.length === 0 ? (
             <EmptyState icon={<Waypoints className="size-6" />} title="მოთხოვნები ჯერ არ არის" text="შექმენი რეისი და ყველა RS.ge, SMS და სასწორის მოთხოვნა აქ გამოჩნდება." />
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-separator">
               {logs.map((l) => {
                 const isOpen = open === l.id
                 return (

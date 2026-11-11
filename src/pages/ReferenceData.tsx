@@ -218,7 +218,7 @@ export function ReferenceData() {
         }
       />
 
-      <div className="-mx-4 mb-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:rounded-2xl sm:bg-slate-100 sm:p-1">
+      <div className="-mx-4 mb-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:inline-flex sm:max-w-full sm:rounded-[9px] sm:bg-fill sm:p-[2px]">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -227,8 +227,8 @@ export function ReferenceData() {
               setQ('')
             }}
             className={cx(
-              'flex h-9 shrink-0 items-center gap-2 rounded-xl px-3.5 text-sm font-medium transition-colors',
-              tabKey === t.key ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-800',
+              'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] transition-all duration-200 sm:h-7 sm:rounded-[7px]',
+              tabKey === t.key ? 'bg-brand-600 font-semibold text-white sm:bg-white sm:text-slate-900 sm:shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)] sm:dark:bg-slate-400' : 'bg-surface font-medium text-slate-600 sm:bg-transparent',
             )}
           >
             <t.icon className="size-4" />
@@ -256,7 +256,7 @@ export function ReferenceData() {
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-100 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <tr className="border-b border-separator text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                     {tab.columns.map((c) => (
                       <th key={c.label} className="px-5 py-3 first:pl-5">
                         {c.label}
@@ -265,7 +265,7 @@ export function ReferenceData() {
                     <th className="w-24" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-separator">
                   {rows.map((r) => (
                     <tr key={r.id} className="group hover:bg-slate-50/70">
                       {tab.columns.map((c) => (
@@ -281,7 +281,7 @@ export function ReferenceData() {
                 </tbody>
               </table>
             </div>
-            <ul className="divide-y divide-slate-100 md:hidden">
+            <ul className="divide-y divide-separator md:hidden">
               {rows.map((r) => (
                 <li key={r.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-500">

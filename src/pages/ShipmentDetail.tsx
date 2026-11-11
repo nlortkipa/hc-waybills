@@ -120,7 +120,7 @@ export function ShipmentDetail() {
               {steps.map((st, i) => (
                 <li key={st.title} className="relative flex gap-4 pb-6 last:pb-0">
                   {i < steps.length - 1 && <span className={cx('absolute top-7 bottom-1 left-[9px] w-0.5 rounded-full', st.status === 'ok' ? 'bg-emerald-200' : 'bg-slate-200')} />}
-                  <StepIcon status={st.status} className="relative mt-0.5 bg-white" />
+                  <StepIcon status={st.status} className="relative mt-0.5 bg-surface" />
                   <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
@@ -164,7 +164,7 @@ export function ShipmentDetail() {
         <div className="space-y-6">
           <Card className="p-5">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">დეტალები</h2>
-            <dl className="divide-y divide-slate-100 text-sm">
+            <dl className="divide-y divide-separator text-sm">
               <Info k="კარიერი" v={x.carrier} />
               <Info k="მარშრუტი" v={x.route} />
               <Info k="სასწორის ID" v={x.scaleId} mono />

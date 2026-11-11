@@ -128,16 +128,16 @@ export function Reports() {
                   className={cx('w-full rounded-t-[4px] transition-colors', x.t ? 'bg-brand-500 group-hover:bg-brand-600' : 'bg-slate-100')}
                   style={{ height: x.t ? `${Math.max(3, (x.t / max) * 100)}%` : '2px' }}
                 />
-                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs whitespace-nowrap text-white shadow-lg group-hover:block">
+                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 material rounded-[10px] px-2.5 py-1.5 text-xs whitespace-nowrap text-slate-900 shadow-lg ring-[0.5px] ring-black/10 dark:ring-white/10 group-hover:block">
                   <p className="font-medium">{x.label}</p>
-                  <p className="text-slate-300">
+                  <p className="text-slate-500">
                     {formatTonnes(x.t)} · {x.n} მანქანა
                   </p>
                 </div>
               </div>
             ))}
           </div>
-          <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 text-[11px] text-slate-400">
+          <div className="mt-2 flex justify-between border-t border-separator pt-2 text-[11px] text-slate-400">
             <span>{days[0]?.label}</span>
             {days.length > 2 && <span>{days[Math.floor(days.length / 2)]?.label}</span>}
             <span>{days[days.length - 1]?.label}</span>
@@ -145,7 +145,7 @@ export function Reports() {
         </Card>
 
         <Card className="overflow-hidden">
-          <div className="border-b border-slate-100 px-5 py-3">
+          <div className="border-b border-separator px-5 py-3">
             <h2 className="text-sm font-semibold text-slate-900">კარიერების მიხედვით</h2>
           </div>
           <table className="w-full text-sm">
@@ -156,7 +156,7 @@ export function Reports() {
                 <th className="px-5 py-2 text-right font-medium">აწონილი</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-separator">
               {byCarrier.map(([id, e]) => (
                 <tr key={id}>
                   <td className="px-5 py-2.5">

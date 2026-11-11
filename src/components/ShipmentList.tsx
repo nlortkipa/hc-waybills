@@ -16,7 +16,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-100 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+            <tr className="border-b border-separator text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-5 py-3">ზედნადები</th>
               <th className="px-3 py-3">შექმნილია</th>
               {showCarrier && <th className="px-3 py-3">კარიერი</th>}
@@ -28,7 +28,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
               <th className="w-8" />
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-separator">
             {rows.map((s) => {
               const x = L.describe(s)
               return (
@@ -60,7 +60,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
       </div>
 
       {/* Mobile cards */}
-      <ul className="divide-y divide-slate-100 md:hidden">
+      <ul className="divide-y divide-separator md:hidden">
         {rows.map((s) => {
           const x = L.describe(s)
           return (

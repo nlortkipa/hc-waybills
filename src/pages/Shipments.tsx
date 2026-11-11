@@ -77,8 +77,8 @@ export function Shipments() {
             key={x.key}
             onClick={() => setF(x.key)}
             className={cx(
-              'h-8 shrink-0 rounded-full px-3.5 text-sm font-medium ring-1 ring-inset transition-colors',
-              f === x.key ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50',
+              'pressable h-8 shrink-0 rounded-full px-3.5 text-[15px] transition-colors',
+              f === x.key ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill',
             )}
           >
             {x.label}
@@ -96,7 +96,7 @@ export function Shipments() {
 
       {canCreate && (
         <Link to="/new" className="fixed right-4 bottom-24 z-20 sm:hidden" aria-label="ახალი რეისი">
-          <span className="grid size-14 place-items-center rounded-2xl bg-brand-600 text-white shadow-lg shadow-brand-600/30">
+          <span className="grid size-14 place-items-center pressable rounded-full bg-brand-600 text-white shadow-lg shadow-black/20">
             <Plus className="size-6" />
           </span>
         </Link>
