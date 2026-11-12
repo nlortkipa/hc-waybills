@@ -117,7 +117,7 @@ export function Reports() {
         <Stat label="სხვაობა" value={`${variance > 0 ? '+' : ''}${formatNumber(variance, 1)}%`} sub="რეალური vs დეკლარირებული" icon={<TrendingUp className="size-5" />} accent="bg-amber-50 text-amber-600" />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_400px]">
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <Card className="p-5">
           <h2 className="text-sm font-semibold text-slate-900">აწონილი ტონაჟი დღეების მიხედვით</h2>
           <p className="text-xs text-slate-500">ტონა, რეისის შექმნის თარიღით</p>

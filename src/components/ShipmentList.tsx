@@ -79,13 +79,13 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                 <div className="mt-2.5 space-y-1 text-[13px] text-slate-600">
                   <p className="flex items-center gap-2">
                     <MapPin className="size-3.5 shrink-0 text-slate-400" />
-                    <span className="truncate">{x.route}</span>
+                    <span className="min-w-0 truncate">{x.route}</span>
                   </p>
                   <p className="flex items-center gap-2">
                     <UserIcon className="size-3.5 shrink-0 text-slate-400" />
-                    <span className="truncate">{x.driver}</span>
+                    <span className="min-w-0 truncate">{x.driver}</span>
                     <TruckIcon className="ml-1 size-3.5 shrink-0 text-slate-400" />
-                    <span className="font-mono text-xs">{x.plate}</span>
+                    <span className="shrink-0 font-mono text-xs">{x.plate}</span>
                   </p>
                 </div>
                 <div className="mt-2.5 flex gap-4 text-xs">

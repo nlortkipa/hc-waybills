@@ -52,7 +52,7 @@ export function NewShipment() {
   return (
     <>
       <PageHeader title="ახალი რეისი" subtitle="აირჩიე დასრულების მისამართი, მძღოლი და მანქანა, შემდეგ ატვირთე ზედნადები RS.ge-ზე." />
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="p-5 sm:p-6">
           <form onSubmit={submit} className="space-y-5" noValidate>
             {user.role === 'admin' ? (
@@ -93,7 +93,7 @@ export function NewShipment() {
               </Select>
             </Field>
 
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field label="მძღოლი" error={errors.driverId}>
                 <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId}>
                   {d.drivers.map((x) => (
@@ -163,8 +163,8 @@ export function NewShipment() {
 function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
   return (
     <div className="flex justify-between gap-4">
-      <dt className="text-slate-500">{k}</dt>
-      <dd className={`truncate text-right ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
+      <dt className="shrink-0 text-slate-500">{k}</dt>
+      <dd className={`min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
     </div>
   )
 }

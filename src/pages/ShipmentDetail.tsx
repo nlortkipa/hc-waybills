@@ -87,7 +87,7 @@ export function ShipmentDetail() {
       </Link>
 
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="font-mono text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{s.waybillNumber ? `№ ${s.waybillNumber}` : 'ზედნადები მოლოდინშია'}</h1>
             <StatusBadge status={s.status} />
@@ -110,7 +110,7 @@ export function ShipmentDetail() {
         )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-6">
           {/* Progress */}
           <Card className="p-5 sm:p-6">
@@ -243,7 +243,7 @@ function Info({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
   return (
     <div className="flex justify-between gap-4 py-2.5">
       <dt className="shrink-0 text-slate-500">{k}</dt>
-      <dd className={cx('min-w-0 text-right text-slate-900', mono && 'font-mono text-[13px] whitespace-nowrap')}>{v ?? '—'}</dd>
+      <dd className={cx('min-w-0 text-right text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</dd>
     </div>
   )
 }

@@ -371,7 +371,7 @@ function CargoDefaultsCard() {
           <p className="text-xs text-slate-500">ავტომატურად ემატება ყველა ახალ რეისს — ოპერატორი ამას ვერ ცვლის. უკვე შექმნილი რეისები არ იცვლება.</p>
         </div>
       </div>
-      <form onSubmit={save} className="grid gap-4 sm:grid-cols-2" noValidate>
+      <form onSubmit={save} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
         <div className="sm:col-span-2">
           <Field label="ტვირთის დასახელება" error={errors.description}>
             <Input value={form.description} placeholder="მაგ. ღორღი 0–5 მმ" invalid={!!errors.description} onChange={set('description')} />
@@ -480,7 +480,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         </>
       }
     >
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2" noValidate>
+      <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
         {tab.fields
           .filter((f) => !f.showIf || f.showIf(r))
           .map((f) => (
@@ -528,7 +528,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                 }
                 return (
                   <div key={i} className="flex items-start gap-2">
-                    <div className="grid flex-1 gap-2 sm:grid-cols-[1fr_160px]">
+                    <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_160px]">
                       <Field label={`მისამართი ${i + 1}`} error={errors[`dest.${i}.address`]}>
                         <Input value={x.address} placeholder="ჩაბარების პუნქტი" invalid={!!errors[`dest.${i}.address`]} onChange={(e) => upd('address', e.target.value)} />
                       </Field>

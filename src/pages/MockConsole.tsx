@@ -31,7 +31,7 @@ export function MockConsole() {
     <>
       <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge, SMS და სასწორის სერვისები და ნახე ყველა მოთხოვნა." />
 
-      <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="space-y-6">
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-slate-900">სიმულაცია</h2>
@@ -97,7 +97,7 @@ export function MockConsole() {
                       <ChevronDown className={cx('size-4 shrink-0 text-slate-300 transition-transform', isOpen && 'rotate-180')} />
                     </button>
                     {isOpen && (
-                      <div className="grid gap-3 bg-slate-50/70 px-4 pb-4 sm:px-5 xl:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-3 bg-slate-50/70 px-4 pb-4 sm:px-5 xl:grid-cols-2">
                         <div className="min-w-0">
                           <p className="mb-1.5 text-xs font-medium text-slate-500">მოთხოვნა</p>
                           <JsonBlock value={l.request} />

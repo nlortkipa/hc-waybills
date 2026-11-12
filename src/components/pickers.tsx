@@ -45,13 +45,15 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       const up = ph > below && above > below
       const maxHeight = Math.max(120, up ? above : below)
       const h = Math.min(ph, maxHeight)
-      const w = Math.max(matchWidth ? a.width : 0, p.offsetWidth)
-      const left = Math.min(Math.max(m, a.left), window.innerWidth - w - m)
+      const maxWidth = window.innerWidth - 2 * m
+      const w = Math.min(Math.max(matchWidth ? a.width : 0, p.offsetWidth), maxWidth)
+      const left = Math.max(m, Math.min(a.left, window.innerWidth - w - m))
       setStyle({
         position: 'fixed',
         top: up ? a.top - gap - h : a.bottom + gap,
         left,
-        minWidth: matchWidth ? a.width : undefined,
+        minWidth: matchWidth ? Math.min(a.width, maxWidth) : undefined,
+        maxWidth,
         maxHeight,
         transformOrigin: up ? 'bottom center' : 'top center',
       })
@@ -259,13 +261,13 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                   onMouseMove={() => !o.disabled && flash == null && active !== i && setActive(i)}
                   onClick={() => choose(o)}
                   className={cx(
-                    'flex h-9 cursor-default items-center gap-1 rounded-[5px] pr-3 pl-1 text-[15px] whitespace-nowrap select-none sm:h-[24px] sm:text-[13px]',
+                    'flex min-h-9 cursor-default items-center gap-1 rounded-[5px] py-1.5 pr-3 pl-1 text-[15px] leading-snug select-none sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
                     o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
                     flash === o.value && 'animate-menu-blink',
                   )}
                 >
                   <Check className={cx('size-3.5 shrink-0', !on && 'invisible')} strokeWidth={3} />
-                  <span className="truncate">{o.label}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere] sm:truncate">{o.label}</span>
                 </div>
               )
             })}
