@@ -1,4 +1,4 @@
-import { Building2, Package, Pencil, Plus, Route as RouteIcon, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { Building2, Package, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
@@ -6,7 +6,7 @@ import { useToast } from '../components/toast'
 import { cx } from '../lib/util'
 import { useDb } from '../mock/db'
 import { roleLabel } from '../session'
-import type { Database } from '../types'
+import type { Database, Destination } from '../types'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -40,6 +40,9 @@ const vPid = (v: string) => (/^\d{11}$/.test(v.trim()) ? null : 'პირად
 const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-ფოსტა არასწორია')
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
+/** Carrier records carry a destinations array next to their string fields. */
+const destsOf = (r: Rec) => ((r as unknown as { destinations?: Destination[] }).destinations ?? [])
+
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
 const carrierOptions = (d: Database) => d.carriers.map((c) => ({ value: c.id, label: c.name }))
 
@@ -52,35 +55,26 @@ const TABS: TabDef[] = [
     fields: [
       { key: 'name', label: 'დასახელება', placeholder: 'კავკასია ლოჯისტიკი' },
       { key: 'code', label: 'კოდი (cardCode)', placeholder: 'C-1004', mono: true },
-      { key: 'address', label: 'მისამართი', placeholder: 'ქალაქი, ქუჩა' },
+      { key: 'startAddress', label: 'დაწყების მისამართი', placeholder: 'დატვირთვის პუნქტი' },
     ],
     title: (r) => r.name!,
-    subtitle: (r) => r.address,
+    subtitle: (r) => `${r.startAddress} → ${destsOf(r).map((x) => x.address).join(', ') || '—'}`,
     columns: [
       { label: 'სახელი', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
       { label: 'კოდი', render: (r) => <span className="font-mono text-[13px]">{r.code}</span> },
-      { label: 'მისამართი', render: (r) => r.address },
-      { label: 'მარშრუტები', render: (r, d) => d.routes.filter((x) => x.carrierId === r.id).length },
-    ],
-  },
-  {
-    key: 'routes',
-    label: 'მარშრუტები',
-    singular: 'მარშრუტის',
-    icon: RouteIcon,
-    fields: [
-      { key: 'carrierId', label: 'კარიერი', type: 'select', options: carrierOptions },
-      { key: 'name', label: 'მარშრუტის დასახელება (სასწორის ID)', placeholder: 'SCALE-06', mono: true },
-      { key: 'startLocation', label: 'ტრანსპორტირების დაწყების ადგილი', placeholder: 'დატვირთვის პუნქტი' },
-      { key: 'endLocation', label: 'ტრანსპორტირების დასრულების ადგილი', placeholder: 'ჩაბარების პუნქტი' },
-    ],
-    title: (r) => `${r.startLocation} → ${r.endLocation}`,
-    subtitle: (r, d) => `${r.name} · ${carrierName(d, r.carrierId)}`,
-    columns: [
-      { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px] font-medium text-slate-900">{r.name}</span> },
-      { label: 'კარიერი', render: (r, d) => carrierName(d, r.carrierId) },
-      { label: 'საიდან', render: (r) => r.startLocation },
-      { label: 'სადამდე', render: (r) => r.endLocation },
+      { label: 'დაწყების მისამართი', render: (r) => r.startAddress },
+      {
+        label: 'დასრულების მისამართები',
+        render: (r) => (
+          <ul className="space-y-0.5">
+            {destsOf(r).map((x) => (
+              <li key={x.id}>
+                {x.address} <span className="font-mono text-xs text-slate-400">{x.scaleId}</span>
+              </li>
+            ))}
+          </ul>
+        ),
+      },
     ],
   },
   {
@@ -181,12 +175,14 @@ export function ReferenceData() {
   const rows = useMemo(() => {
     const list = d[tabKey] as unknown as Rec[]
     const n = q.trim().toLowerCase()
-    return n ? list.filter((r) => Object.values(r).some((v) => v?.toLowerCase().includes(n))) : list
+    const text = (r: Rec) => [...Object.values(r).filter((v) => typeof v === 'string'), ...destsOf(r).flatMap((x) => [x.address, x.scaleId])]
+    return n ? list.filter((r) => text(r).some((v) => v.toLowerCase().includes(n))) : list
   }, [d, tabKey, q])
 
   const blank = (): Rec => {
     const r: Rec = { id: '' }
     tab.fields.forEach((f) => (r[f.key] = f.type === 'select' ? (f.options!(d)[0]?.value ?? '') : ''))
+    if (tab.key === 'carriers') Object.assign(r, { destinations: [{ id: '', address: '', scaleId: '' }] })
     return r
   }
 
@@ -208,7 +204,7 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მარშრუტები, მძღოლები, მანქანები, ტვირთი და მომხმარებლები."
+        subtitle="კარიერები, მძღოლები, მანქანები, ტვირთი და მომხმარებლები."
         actions={
           <span className="hidden sm:block">
             <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
@@ -337,6 +333,8 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const d = useDb()
   const toast = useToast()
   const [r, setR] = useState<Rec>(rec)
+  const hasDests = tab.key === 'carriers'
+  const [dests, setDests] = useState<Destination[]>(() => destsOf(rec).map((x) => ({ ...x })))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const isNew = !rec.id
@@ -354,6 +352,17 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       const msg = f.validate?.(v, r)
       if (msg) errs[f.key] = msg
     }
+    if (hasDests) {
+      if (!dests.length) errs.destinations = 'დაამატე მინიმუმ ერთი დასრულების მისამართი'
+      const seen = new Set<string>()
+      dests.forEach((x, i) => {
+        if (!x.address.trim()) errs[`dest.${i}.address`] = 'სავალდებულო ველი'
+        const sid = x.scaleId.trim().toUpperCase()
+        if (!sid) errs[`dest.${i}.scaleId`] = 'სავალდებულო ველი'
+        else if (seen.has(sid)) errs[`dest.${i}.scaleId`] = 'სასწორის ID მეორდება'
+        seen.add(sid)
+      })
+    }
     setErrors(errs)
     if (Object.keys(errs).length) return
     setBusy(true)
@@ -365,6 +374,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         if (f.key === 'plateNumber' || f.key === 'trailerNumber') v = v.toUpperCase()
         clean[f.key] = v
       }
+      if (hasDests) Object.assign(clean, { destinations: dests.map((x) => ({ id: x.id, address: x.address.trim(), scaleId: x.scaleId.trim().toUpperCase() })) })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -421,6 +431,49 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
               </Field>
             </div>
           ))}
+        {hasDests && (
+          <div className="sm:col-span-2">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-700">დასრულების მისამართები</span>
+              <Button type="button" variant="secondary" size="sm" icon={<Plus className="size-4" />} onClick={() => setDests((xs) => [...xs, { id: '', address: '', scaleId: '' }])}>
+                დამატება
+              </Button>
+            </div>
+            {errors.destinations && <p className="mb-2 text-xs text-rose-600">{errors.destinations}</p>}
+            <div className="space-y-3">
+              {dests.map((x, i) => {
+                const upd = (k: 'address' | 'scaleId', v: string) => {
+                  setDests((xs) => xs.map((y, j) => (j === i ? { ...y, [k]: v } : y)))
+                  setErrors((e) => ({ ...e, [`dest.${i}.${k}`]: '', destinations: '' }))
+                }
+                return (
+                  <div key={i} className="flex items-start gap-2">
+                    <div className="grid flex-1 gap-2 sm:grid-cols-[1fr_160px]">
+                      <Field label={`მისამართი ${i + 1}`} error={errors[`dest.${i}.address`]}>
+                        <Input value={x.address} placeholder="ჩაბარების პუნქტი" invalid={!!errors[`dest.${i}.address`]} onChange={(e) => upd('address', e.target.value)} />
+                      </Field>
+                      <Field label="სასწორის ID" error={errors[`dest.${i}.scaleId`]}>
+                        <Input value={x.scaleId} placeholder="SCALE-06" className="font-mono" invalid={!!errors[`dest.${i}.scaleId`]} onChange={(e) => upd('scaleId', e.target.value)} />
+                      </Field>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={dests.length === 1}
+                      onClick={() => {
+                        setDests((xs) => xs.filter((_, j) => j !== i))
+                        setErrors({})
+                      }}
+                      className="mt-7 rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:pointer-events-none disabled:opacity-30"
+                      aria-label="მისამართის წაშლა"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
         <button type="submit" className="hidden" />
       </form>
     </Modal>

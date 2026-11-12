@@ -12,7 +12,7 @@ sequenceDiagram
     participant SMS as SMS Provider
     participant Scale as Scale Service (Web.API)
 
-    Op->>App: Pick route, driver, truck
+    Op->>App: Pick end address, driver, truck
     Op->>App: Click "Upload waybill"
     App->>RS: Create waybill
     RS-->>App: Waybill number
@@ -40,8 +40,7 @@ flowchart LR
 
 | Entity | Fields |
 |---|---|
-| **Carrier** | Name, address |
-| **Route** (linked to carrier) | Name (scale ID), start location, end location |
+| **Carrier** | Name, code, start address (one), end addresses (one or more, each with its scale ID) |
 | **Driver** | First/last name, personal ID, phone |
 | **Truck** | Model, plate number, trailer number |
 | **User** | Name, phone, email, role |
@@ -119,12 +118,12 @@ This builds the web app, copies it into the Android project and builds the APK w
 The interface is in Georgian.
 
 1. On the login screen, pick a user. **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
-2. As an operator, open **ახალი რეისი** (new shipment), pick route, driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS → Scale → weighed.
+2. As an operator, open **ახალი რეისი** (new shipment), pick the end address, driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS → Scale → weighed.
 3. The mock scale "weighs" the truck after 15 s. You can also press **აწონვის სიმულაცია** (simulate weighing) to enter a weight yourself.
 4. In **სატესტო პანელი** (mock console): watch every request and response, change latency, force RS.ge, SMS or Scale failures (to test retries), and reset the demo data.
 
 ### Mock assumptions to confirm with the client
 
-- Mapping to the scale payload: `cardCode`/`cardName` = carrier code/name, `u_ShipToCodeS` = route name (scale ID), `shipToCode` = route end location, `itemCode`/`description`/`whsCode` = cargo item (see `src/api/scalePayload.ts`).
+- Mapping to the scale payload: `cardCode`/`cardName` = carrier code/name, `u_ShipToCodeS` = end address scale ID, `shipToCode` = end address, `itemCode`/`description`/`whsCode` = cargo item (see `src/api/scalePayload.ts`).
 - Cargo items (code, description, warehouse) and the declared quantity are not in the spec. They were added because the scale payload needs them.
-- Drivers and trucks are shared across carriers. Only routes and operators are tied to a carrier.
+- Drivers and trucks are shared across carriers. Only start/end addresses and operators are tied to a carrier.

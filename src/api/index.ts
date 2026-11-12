@@ -4,7 +4,8 @@
  */
 import { db } from '../mock/db'
 import { formatKg, nowIso, sleep, uid } from '../lib/util'
-import type { Database, Shipment, ShipmentEvent, User } from '../types'
+import { resolveRoute } from '../lib/route'
+import type { Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
 import { rsge, scale, sms } from './integrations'
 import { buildScalePayload } from './scalePayload'
 
@@ -45,13 +46,21 @@ export const auth = {
 
 /* ------------------------- Reference data ------------------------- */
 
-export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'items' | 'users'
+export type RefCollection = 'carriers' | 'drivers' | 'trucks' | 'items' | 'users'
 type RefRecord<K extends RefCollection> = Database[K][number]
 
 export const refs = {
   async save<K extends RefCollection>(col: K, record: Omit<RefRecord<K>, 'id'> & { id?: string }) {
     await quick()
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord<K>
+    if (col === 'carriers') {
+      const c = rec as Carrier
+      if (!c.destinations?.length) throw new Error('კარიერს უნდა ჰქონდეს მინიმუმ ერთი დასრულების მისამართი')
+      c.destinations = c.destinations.map((x) => ({ ...x, id: x.id || uid('e') }))
+      const kept = new Set(c.destinations.map((x) => x.id))
+      const used = db.get().shipments.filter((s) => s.carrierId === c.id && !kept.has(s.destinationId)).length
+      if (used) throw new Error(`წაშლილი დასრულების მისამართი გამოიყენება ${used} რეისში.`)
+    }
     db.update((d) => {
       const list = d[col] as RefRecord<K>[]
       const exists = list.some((r) => r.id === rec.id)
@@ -66,13 +75,10 @@ export const refs = {
     const n = (k: keyof Shipment) => d.shipments.filter((s) => s[k] === id).length
     switch (col) {
       case 'carriers': {
-        const r = d.routes.filter((x) => x.carrierId === id).length
         const u = d.users.filter((x) => x.carrierId === id).length
-        if (r || u) return `გამოიყენება ${r} მარშრუტში და ${u} მომხმარებელთან.`
+        if (u) return `მიბმულია ${u} მომხმარებელთან.`
         return n('carrierId') ? `გამოიყენება ${n('carrierId')} რეისში.` : null
       }
-      case 'routes':
-        return n('routeId') ? `გამოიყენება ${n('routeId')} რეისში.` : null
       case 'drivers':
         return n('driverId') ? `გამოიყენება ${n('driverId')} რეისში.` : null
       case 'trucks':
@@ -119,7 +125,7 @@ const weighTimers = new Map<string, number>()
 
 export interface NewShipmentInput {
   carrierId: string
-  routeId: string
+  destinationId: string
   driverId: string
   truckId: string
   itemId: string
@@ -132,6 +138,7 @@ export const shipments = {
     if (user.role === 'report') throw new Error('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა')
     if (user.role === 'operator' && input.carrierId !== user.carrierId) throw new Error('ოპერატორს შეუძლია მხოლოდ საკუთარი კარიერის გამოყენება')
     await quick()
+    if (!resolveRoute(db.get().carriers, input.carrierId, input.destinationId).destination) throw new Error('დასრულების მისამართი ვერ მოიძებნა')
     const s: Shipment = {
       id: uid('s'),
       createdAt: nowIso(),
@@ -212,7 +219,7 @@ async function runPipeline(id: string) {
 
   // 1. RS.ge — create waybill
   if (s.rs.status !== 'ok') {
-    const route = d.routes.find((r) => r.id === s.routeId)!
+    const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
     const driver = d.drivers.find((x) => x.id === s.driverId)!
     const truck = d.trucks.find((x) => x.id === s.truckId)!
     const item = d.items.find((x) => x.id === s.itemId)!
@@ -224,8 +231,8 @@ async function runPipeline(id: string) {
         {
           waybill_type: 2,
           seller_un_id: carrier.code,
-          start_address: route.startLocation,
-          end_address: route.endLocation,
+          start_address: route.start,
+          end_address: route.end,
           driver_tin: driver.personalId,
           driver_name: `${driver.firstName} ${driver.lastName}`,
           car_number: truck.plateNumber,
@@ -276,9 +283,9 @@ async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
   const driver = d.drivers.find((x) => x.id === s.driverId)!
-  const route = d.routes.find((r) => r.id === s.routeId)!
+  const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
   const truck = d.trucks.find((x) => x.id === s.truckId)!
-  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.startLocation} → ${route.endLocation}. მანქანა: ${truck.plateNumber}.`
+  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}. მანქანა: ${truck.plateNumber}.`
   patch(id, (x) => ({ sms: { ...x.sms, status: 'running', to: driver.phone, text } }))
   try {
     await sms.send(driver.phone, text, id)

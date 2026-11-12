@@ -2,21 +2,39 @@ import { buildScalePayload } from '../api/scalePayload'
 import { formatKg } from '../lib/util'
 import type { Database, Shipment, ShipmentStatus } from '../types'
 
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export function createSeed(): Database {
   const carriers = [
-    { id: 'c1', code: 'C-1001', name: 'კავკასია ლოჯისტიკი', address: 'თბილისი, წერეთლის გამზ. 12' },
-    { id: 'c2', code: 'C-1002', name: 'რუსთავი ტრანსი', address: 'რუსთავი, ინდუსტრიული ქ. 7' },
-    { id: 'c3', code: 'C-1003', name: 'იმერეთი კარგო', address: 'ქუთაისი, ჭავჭავაძის ქ. 45' },
+    {
+      id: 'c1',
+      code: 'C-1001',
+      name: 'კავკასია ლოჯისტიკი',
+      startAddress: 'თბილისის კარიერი',
+      destinations: [
+        { id: 'e1', address: 'რუსთავის ქარხანა', scaleId: 'SCALE-01' },
+        { id: 'e2', address: 'მცხეთის საწყობი', scaleId: 'SCALE-02' },
+      ],
+    },
+    {
+      id: 'c2',
+      code: 'C-1002',
+      name: 'რუსთავი ტრანსი',
+      startAddress: 'რუსთავის ქარხანა',
+      destinations: [
+        { id: 'e3', address: 'გარდაბნის ობიექტი', scaleId: 'SCALE-03' },
+        { id: 'e4', address: 'მარნეულის საწყობი', scaleId: 'SCALE-04' },
+      ],
+    },
+    {
+      id: 'c3',
+      code: 'C-1003',
+      name: 'იმერეთი კარგო',
+      startAddress: 'ქუთაისის ტერმინალი',
+      destinations: [{ id: 'e5', address: 'ფოთის პორტი', scaleId: 'SCALE-05' }],
+    },
   ]
-  const routes = [
-    { id: 'r1', carrierId: 'c1', name: 'SCALE-01', startLocation: 'თბილისის კარიერი', endLocation: 'რუსთავის ქარხანა' },
-    { id: 'r2', carrierId: 'c1', name: 'SCALE-02', startLocation: 'თბილისის კარიერი', endLocation: 'მცხეთის საწყობი' },
-    { id: 'r3', carrierId: 'c2', name: 'SCALE-03', startLocation: 'რუსთავის ქარხანა', endLocation: 'გარდაბნის ობიექტი' },
-    { id: 'r4', carrierId: 'c2', name: 'SCALE-04', startLocation: 'რუსთავის ქარხანა', endLocation: 'მარნეულის საწყობი' },
-    { id: 'r5', carrierId: 'c3', name: 'SCALE-05', startLocation: 'ქუთაისის ტერმინალი', endLocation: 'ფოთის პორტი' },
-  ]
+  const routes = carriers.flatMap((c) => c.destinations.map((x) => ({ carrierId: c.id, destinationId: x.id })))
   const drivers = [
     { id: 'd1', firstName: 'დავით', lastName: 'მაისურაძე', personalId: '01001012345', phone: '+995 555 12 34 56' },
     { id: 'd2', firstName: 'ირაკლი', lastName: 'კვარაცხელია', personalId: '01001023456', phone: '+995 577 23 45 67' },
@@ -45,7 +63,7 @@ export function createSeed(): Database {
     { id: 'u5', firstName: 'ლევან', lastName: 'კიკნაძე', phone: '+995 555 00 00 05', email: 'levan@hc.ge', role: 'report' as const },
   ]
 
-  const refs = { carriers, routes, drivers, trucks, items }
+  const refs = { carriers, drivers, trucks, items }
 
   // Deterministic pseudo-random so the demo looks the same after every reset.
   let seed = 42
@@ -67,7 +85,7 @@ export function createSeed(): Database {
       createdAt: at,
       createdBy: operatorByCarrier[route.carrierId],
       carrierId: route.carrierId,
-      routeId: route.id,
+      destinationId: route.destinationId,
       driverId: driver.id,
       truckId: trucks[Math.floor(rnd() * trucks.length)].id,
       itemId: items[Math.floor(rnd() * items.length)].id,

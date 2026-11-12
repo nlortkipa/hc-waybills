@@ -1,19 +1,21 @@
 export type Role = 'admin' | 'operator' | 'report'
 
+/** A delivery point of a carrier. Each one is weighed on its own scale. */
+export interface Destination {
+  id: string
+  address: string
+  /** Scale ID (per client spec, formerly the route name). */
+  scaleId: string
+}
+
 export interface Carrier {
   id: string
   code: string
   name: string
-  address: string
-}
-
-export interface Route {
-  id: string
-  carrierId: string
-  /** Route name = scale ID (per client spec). */
-  name: string
-  startLocation: string
-  endLocation: string
+  /** The single place every shipment of this carrier starts from. */
+  startAddress: string
+  /** One or more end addresses. */
+  destinations: Destination[]
 }
 
 export interface Driver {
@@ -89,7 +91,7 @@ export interface Shipment {
   createdAt: string
   createdBy: string
   carrierId: string
-  routeId: string
+  destinationId: string
   driverId: string
   truckId: string
   itemId: string
@@ -138,7 +140,6 @@ export interface MockSettings {
 export interface Database {
   version: number
   carriers: Carrier[]
-  routes: Route[]
   drivers: Driver[]
   trucks: Truck[]
   items: CargoItem[]
