@@ -33,10 +33,10 @@ export interface Truck {
   trailerNumber: string
 }
 
-export interface CargoItem {
-  id: string
-  code: string
+/** Cargo as typed by the admin. Copied onto each shipment when it is created. */
+export interface Cargo {
   description: string
+  code: string
   whsCode: string
 }
 
@@ -94,7 +94,8 @@ export interface Shipment {
   destinationId: string
   driverId: string
   truckId: string
-  itemId: string
+  /** Snapshot of the admin-set cargo at creation time. */
+  cargo: Cargo
   /** Declared quantity in tonnes. */
   quantity: number
   status: ShipmentStatus
@@ -137,14 +138,20 @@ export interface MockSettings {
   autoWeighDelaySec: number
 }
 
+/** Cargo and declared quantity applied to every new shipment. Set by an admin. */
+export interface CargoDefaults extends Cargo {
+  /** Declared quantity in tonnes. */
+  quantity: number
+}
+
 export interface Database {
   version: number
   carriers: Carrier[]
   drivers: Driver[]
   trucks: Truck[]
-  items: CargoItem[]
   users: User[]
   shipments: Shipment[]
   logs: IntegrationLog[]
   settings: MockSettings
+  cargo: CargoDefaults
 }

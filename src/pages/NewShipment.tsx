@@ -2,7 +2,8 @@ import { ArrowRight, FileUp, Info } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { shipments } from '../api'
-import { Button, Card, Field, Input, PageHeader, Select } from '../components/ui'
+import { Button, Card, Field, PageHeader, Select } from '../components/ui'
+import { formatTonnes } from '../lib/util'
 import { useToast } from '../components/toast'
 import { useDb } from '../mock/db'
 import { useUser } from '../session'
@@ -13,7 +14,7 @@ export function NewShipment() {
   const nav = useNavigate()
   const toast = useToast()
   const [carrierId, setCarrierId] = useState(user.carrierId ?? d.carriers[0]?.id ?? '')
-  const [form, setForm] = useState({ destinationId: '', driverId: '', truckId: '', itemId: d.items[0]?.id ?? '', quantity: '' })
+  const [form, setForm] = useState({ destinationId: '', driverId: '', truckId: '', })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
@@ -27,6 +28,7 @@ export function NewShipment() {
   const destination = destinations.find((x) => x.id === form.destinationId)
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
+  const item = d.cargo.description ? d.cargo : undefined
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -34,14 +36,11 @@ export function NewShipment() {
     if (!form.destinationId) err.destinationId = 'აირჩიე დასრულების მისამართი'
     if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
     if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
-    if (!form.itemId) err.itemId = 'აირჩიე ტვირთი'
-    const q = Number(form.quantity)
-    if (!form.quantity || !(q > 0) || q > 60) err.quantity = 'შეიყვანე რაოდენობა 0-დან 60 ტ-მდე'
     setErrors(err)
     if (Object.keys(err).length) return
     setBusy(true)
     try {
-      const id = await shipments.create({ carrierId, destinationId: form.destinationId, driverId: form.driverId, truckId: form.truckId, itemId: form.itemId, quantity: q }, user)
+      const id = await shipments.create({ carrierId, destinationId: form.destinationId, driverId: form.driverId, truckId: form.truckId }, user)
       toast('info', 'ზედნადები იტვირთება RS.ge-ზე…')
       nav(`/shipments/${id}`)
     } catch (e) {
@@ -118,19 +117,9 @@ export function NewShipment() {
               </Field>
             </div>
 
-            <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="ტვირთი" error={errors.itemId}>
-                <Select value={form.itemId} onChange={set('itemId')} invalid={!!errors.itemId}>
-                  {d.items.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.description}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
-                <Input type="number" inputMode="decimal" step="0.1" min="0" placeholder="მაგ. 24.5" value={form.quantity} onChange={set('quantity')} invalid={!!errors.quantity} />
-              </Field>
+            <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
+              <span className="text-slate-500">ტვირთი: </span>
+              <span className="font-medium text-slate-900">{item ? `${item.description} · ${formatTonnes(d.cargo.quantity)}` : 'არ არის დაყენებული — მიმართე ადმინისტრატორს'}</span>
             </div>
 
             <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
@@ -155,6 +144,8 @@ export function NewShipment() {
               <Row k="მძღოლის ტელ." v={driver?.phone} />
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}` : undefined} mono />
               <Row k="მისაბმელი" v={truck?.trailerNumber} mono />
+              <Row k="ტვირთი" v={item?.description} />
+              <Row k="დეკლარირებული" v={item ? formatTonnes(d.cargo.quantity) : undefined} />
             </dl>
           </Card>
           <div className="flex gap-3 rounded-2xl bg-brand-50 p-4 text-sm text-brand-900 ring-1 ring-brand-100">

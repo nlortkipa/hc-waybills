@@ -28,7 +28,6 @@ export function ShipmentDetail() {
   const x = L.describe(s)
   const driver = L.driver(s.driverId)
   const truck = L.truck(s.truckId)
-  const item = L.item(s.itemId)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
   const variance = s.scale.weightKg != null ? ((s.scale.weightKg - s.quantity * 1000) / (s.quantity * 1000)) * 100 : null
@@ -174,7 +173,7 @@ export function ShipmentDetail() {
               <Info k="მანქანა" v={truck?.model} />
               <Info k="სახელმწიფო ნომერი" v={truck?.plateNumber} mono />
               <Info k="მისაბმელი" v={truck?.trailerNumber || undefined} mono />
-              <Info k="ტვირთი" v={item ? `${item.description} (${item.code})` : undefined} />
+              <Info k="ტვირთი" v={s.cargo.description ? `${s.cargo.description}${s.cargo.code ? ` (${s.cargo.code})` : ''}` : undefined} />
               <Info k="დეკლარირებული" v={formatTonnes(s.quantity)} />
             </dl>
           </Card>

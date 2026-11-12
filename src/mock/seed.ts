@@ -2,7 +2,7 @@ import { buildScalePayload } from '../api/scalePayload'
 import { formatKg } from '../lib/util'
 import type { Database, Shipment, ShipmentStatus } from '../types'
 
-export const DB_VERSION = 3
+export const DB_VERSION = 5
 
 export function createSeed(): Database {
   const carriers = [
@@ -49,12 +49,7 @@ export function createSeed(): Database {
     { id: 't4', model: 'DAF XF 480', plateNumber: 'RS-221-RS', trailerNumber: 'TR-221-RS' },
     { id: 't5', model: 'Mercedes Actros', plateNumber: 'TB-640-TB', trailerNumber: 'TR-640-TB' },
   ]
-  const items = [
-    { id: 'i1', code: 'CRS-05', description: 'ღორღი 0–5 მმ', whsCode: 'WH-01' },
-    { id: 'i2', code: 'GRV-20', description: 'ხრეში 5–20 მმ', whsCode: 'WH-01' },
-    { id: 'i3', code: 'SND-01', description: 'მდინარის ქვიშა', whsCode: 'WH-02' },
-    { id: 'i4', code: 'CEM-400', description: 'ცემენტი M400 (ნაყარი)', whsCode: 'WH-03' },
-  ]
+  const cargo = { description: 'ღორღი 0–5 მმ', code: 'CRS-05', whsCode: 'WH-01' }
   const users = [
     { id: 'u1', firstName: 'ნინო', lastName: 'ბერიძე', phone: '+995 555 00 00 01', email: 'nino@hc.ge', role: 'admin' as const },
     { id: 'u2', firstName: 'გიორგი', lastName: 'კაპანაძე', phone: '+995 555 00 00 02', email: 'giorgi@kavkasia.ge', role: 'operator' as const, carrierId: 'c1' },
@@ -63,7 +58,7 @@ export function createSeed(): Database {
     { id: 'u5', firstName: 'ლევან', lastName: 'კიკნაძე', phone: '+995 555 00 00 05', email: 'levan@hc.ge', role: 'report' as const },
   ]
 
-  const refs = { carriers, drivers, trucks, items }
+  const refs = { carriers, drivers, trucks }
 
   // Deterministic pseudo-random so the demo looks the same after every reset.
   let seed = 42
@@ -88,7 +83,7 @@ export function createSeed(): Database {
       destinationId: route.destinationId,
       driverId: driver.id,
       truckId: trucks[Math.floor(rnd() * trucks.length)].id,
-      itemId: items[Math.floor(rnd() * items.length)].id,
+      cargo,
       quantity,
       status,
       waybillNumber: waybill,
@@ -134,5 +129,6 @@ export function createSeed(): Database {
       autoWeigh: true,
       autoWeighDelaySec: 15,
     },
+    cargo: { ...cargo, quantity: 25 },
   }
 }

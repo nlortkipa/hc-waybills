@@ -5,7 +5,7 @@
 import { db } from '../mock/db'
 import { formatKg, nowIso, sleep, uid } from '../lib/util'
 import { resolveRoute } from '../lib/route'
-import type { Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
+import type { CargoDefaults, Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
 import { rsge, scale, sms } from './integrations'
 import { buildScalePayload } from './scalePayload'
 
@@ -46,7 +46,7 @@ export const auth = {
 
 /* ------------------------- Reference data ------------------------- */
 
-export type RefCollection = 'carriers' | 'drivers' | 'trucks' | 'items' | 'users'
+export type RefCollection = 'carriers' | 'drivers' | 'trucks' | 'users'
 type RefRecord<K extends RefCollection> = Database[K][number]
 
 export const refs = {
@@ -83,8 +83,6 @@ export const refs = {
         return n('driverId') ? `გამოიყენება ${n('driverId')} რეისში.` : null
       case 'trucks':
         return n('truckId') ? `გამოიყენება ${n('truckId')} რეისში.` : null
-      case 'items':
-        return n('itemId') ? `გამოიყენება ${n('itemId')} რეისში.` : null
       case 'users':
         return n('createdBy') ? `შექმნილი აქვს ${n('createdBy')} რეისი.` : null
     }
@@ -95,6 +93,25 @@ export const refs = {
     const reason = refs.usage(col, id)
     if (reason) throw new Error(`წაშლა შეუძლებელია: ${reason}`)
     db.update((d) => ({ ...d, [col]: (d[col] as { id: string }[]).filter((r) => r.id !== id) }))
+  },
+}
+
+/* ------------------------------ Cargo ------------------------------ */
+
+export const cargo = {
+  /** Sets the cargo and declared quantity used for every new shipment. Admin only. */
+  async save(value: CargoDefaults, user: User) {
+    if (user.role !== 'admin') throw new Error('ფიქსირებული ტვირთის შეცვლა შეუძლია მხოლოდ ადმინისტრატორს')
+    await quick()
+    const next: CargoDefaults = {
+      description: value.description.trim(),
+      code: value.code.trim(),
+      whsCode: value.whsCode.trim(),
+      quantity: value.quantity,
+    }
+    if (!next.description) throw new Error('შეიყვანე ტვირთის დასახელება')
+    if (!(next.quantity > 0) || next.quantity > 60) throw new Error('რაოდენობა უნდა იყოს 0-დან 60 ტ-მდე')
+    db.update((d) => ({ ...d, cargo: next }))
   },
 }
 
@@ -128,8 +145,6 @@ export interface NewShipmentInput {
   destinationId: string
   driverId: string
   truckId: string
-  itemId: string
-  quantity: number
 }
 
 export const shipments = {
@@ -138,12 +153,18 @@ export const shipments = {
     if (user.role === 'report') throw new Error('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა')
     if (user.role === 'operator' && input.carrierId !== user.carrierId) throw new Error('ოპერატორს შეუძლია მხოლოდ საკუთარი კარიერის გამოყენება')
     await quick()
-    if (!resolveRoute(db.get().carriers, input.carrierId, input.destinationId).destination) throw new Error('დასრულების მისამართი ვერ მოიძებნა')
+    const d = db.get()
+    if (!resolveRoute(d.carriers, input.carrierId, input.destinationId).destination) throw new Error('დასრულების მისამართი ვერ მოიძებნა')
+    // Cargo and declared quantity are fixed by the admin, never taken from the request.
+    const { quantity, ...cargo } = d.cargo
+    if (!cargo.description || !(quantity > 0)) throw new Error('ფიქსირებული ტვირთი არ არის დაყენებული — მიმართე ადმინისტრატორს')
     const s: Shipment = {
       id: uid('s'),
       createdAt: nowIso(),
       createdBy: user.id,
       ...input,
+      cargo,
+      quantity,
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
@@ -222,7 +243,6 @@ async function runPipeline(id: string) {
     const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
     const driver = d.drivers.find((x) => x.id === s.driverId)!
     const truck = d.trucks.find((x) => x.id === s.truckId)!
-    const item = d.items.find((x) => x.id === s.itemId)!
     const carrier = d.carriers.find((x) => x.id === s.carrierId)!
     if (s.status === 'rs_failed') patch(id, () => ({}), { level: 'info', message: 'RS.ge-ზე ატვირთვის ხელახალი ცდა' })
     patch(id, () => ({ status: 'uploading', rs: { status: 'running' } }))
@@ -238,7 +258,7 @@ async function runPipeline(id: string) {
           car_number: truck.plateNumber,
           trailer: truck.trailerNumber,
           transport_coast: 0,
-          goods_list: [{ w_name: item.description, unit_id: 2, quantity: s.quantity, bar_code: item.code }],
+          goods_list: [{ w_name: s.cargo.description, unit_id: 2, quantity: s.quantity, bar_code: s.cargo.code }],
         },
         id,
       )

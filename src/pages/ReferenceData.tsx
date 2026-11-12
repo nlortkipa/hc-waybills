@@ -1,11 +1,11 @@
-import { Building2, Package, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
+import { Building2, Lock, Package, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { refs, type RefCollection } from '../api'
+import { cargo, refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx } from '../lib/util'
 import { useDb } from '../mock/db'
-import { roleLabel } from '../session'
+import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
 
 type Rec = Record<string, string | undefined> & { id: string }
@@ -115,24 +115,6 @@ const TABS: TabDef[] = [
     ],
   },
   {
-    key: 'items',
-    label: 'ტვირთი',
-    singular: 'ტვირთის',
-    icon: Package,
-    fields: [
-      { key: 'code', label: 'ტვირთის კოდი', placeholder: 'CRS-05', mono: true },
-      { key: 'description', label: 'აღწერა' },
-      { key: 'whsCode', label: 'საწყობის კოდი', placeholder: 'WH-01', mono: true },
-    ],
-    title: (r) => r.description!,
-    subtitle: (r) => `${r.code} · ${r.whsCode}`,
-    columns: [
-      { label: 'კოდი', render: (r) => <span className="font-mono text-[13px] font-medium text-slate-900">{r.code}</span> },
-      { label: 'აღწერა', render: (r) => r.description },
-      { label: 'საწყობი', render: (r) => <span className="font-mono text-[13px]">{r.whsCode}</span> },
-    ],
-  },
-  {
     key: 'users',
     label: 'მომხმარებლები',
     singular: 'მომხმარებლის',
@@ -165,19 +147,20 @@ const TABS: TabDef[] = [
 export function ReferenceData() {
   const d = useDb()
   const toast = useToast()
-  const [tabKey, setTabKey] = useState<RefCollection>('carriers')
-  const tab = TABS.find((t) => t.key === tabKey)!
+  const [tabKey, setTabKey] = useState<RefCollection | 'cargo'>('carriers')
+  const isCargo = tabKey === 'cargo'
+  const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0]
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Rec | null>(null)
   const [deleting, setDeleting] = useState<Rec | null>(null)
   const [busy, setBusy] = useState(false)
 
   const rows = useMemo(() => {
-    const list = d[tabKey] as unknown as Rec[]
+    const list = d[tab.key] as unknown as Rec[]
     const n = q.trim().toLowerCase()
     const text = (r: Rec) => [...Object.values(r).filter((v) => typeof v === 'string'), ...destsOf(r).flatMap((x) => [x.address, x.scaleId])]
     return n ? list.filter((r) => text(r).some((v) => v.toLowerCase().includes(n))) : list
-  }, [d, tabKey, q])
+  }, [d, tab.key, q])
 
   const blank = (): Rec => {
     const r: Rec = { id: '' }
@@ -190,7 +173,7 @@ export function ReferenceData() {
     if (!deleting) return
     setBusy(true)
     try {
-      await refs.remove(tabKey, deleting.id)
+      await refs.remove(tab.key, deleting.id)
       toast('success', 'ჩანაწერი წაიშალა')
       setDeleting(null)
     } catch (e) {
@@ -204,13 +187,15 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მძღოლები, მანქანები, ტვირთი და მომხმარებლები."
+        subtitle="კარიერები, მძღოლები, მანქანები, მომხმარებლები და ტვირთი."
         actions={
-          <span className="hidden sm:block">
-            <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
-              {tab.singular} დამატება
-            </Button>
-          </span>
+          !isCargo && (
+            <span className="hidden sm:block">
+              <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
+                {tab.singular} დამატება
+              </Button>
+            </span>
+          )
         }
       />
 
@@ -232,9 +217,21 @@ export function ReferenceData() {
             <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] text-slate-600 tabular-nums">{(d[t.key] as unknown[]).length}</span>
           </button>
         ))}
+        <button
+          onClick={() => setTabKey('cargo')}
+          className={cx(
+            'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] transition-all duration-200 sm:h-7 sm:rounded-[7px]',
+            isCargo ? 'bg-brand-600 font-semibold text-white sm:bg-white sm:text-slate-900 sm:shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)] sm:dark:bg-slate-400' : 'bg-surface font-medium text-slate-600 sm:bg-transparent',
+          )}
+        >
+          <Package className="size-4" />
+          ტვირთი
+        </button>
       </div>
 
-      <div className="mb-4 flex gap-2">
+      {isCargo && <CargoDefaultsCard />}
+
+      <div className={cx('mb-4 flex gap-2', isCargo && 'hidden')}>
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ძებნა…" className="pl-9" />
@@ -244,7 +241,7 @@ export function ReferenceData() {
         </span>
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className={cx('overflow-hidden', isCargo && 'hidden')}>
         {rows.length === 0 ? (
           <EmptyState icon={<tab.icon className="size-6" />} title="ჩანაწერები ვერ მოიძებნა" />
         ) : (
@@ -307,12 +304,95 @@ export function ReferenceData() {
           deleting && (
             <>
               <b className="text-slate-900">{tab.title(deleting, d)}</b> სამუდამოდ წაიშლება.
-              {refs.usage(tabKey, deleting.id) && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ყურადღება: {refs.usage(tabKey, deleting.id)} წაშლა დაიბლოკება.</p>}
+              {refs.usage(tab.key, deleting.id) && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ყურადღება: {refs.usage(tab.key, deleting.id)} წაშლა დაიბლოკება.</p>}
             </>
           )
         }
       />
     </>
+  )
+}
+
+/** The cargo and declared quantity stamped on every new shipment. Free text, set by the admin. */
+function CargoDefaultsCard() {
+  const d = useDb()
+  const user = useUser()
+  const toast = useToast()
+  const [form, setForm] = useState({
+    description: d.cargo.description,
+    code: d.cargo.code,
+    whsCode: d.cargo.whsCode,
+    quantity: String(d.cargo.quantity),
+  })
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+  const dirty = form.description.trim() !== d.cargo.description || form.code.trim() !== d.cargo.code || form.whsCode.trim() !== d.cargo.whsCode || Number(form.quantity) !== d.cargo.quantity
+
+  const set = (k: keyof typeof form) => (e: { target: { value: string } }) => {
+    setForm((f) => ({ ...f, [k]: e.target.value }))
+    setErrors((x) => ({ ...x, [k]: '' }))
+  }
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    const errs: Record<string, string> = {}
+    if (!form.description.trim()) errs.description = 'სავალდებულო ველი'
+    const q = Number(form.quantity)
+    if (!form.quantity || !(q > 0) || q > 60) errs.quantity = 'შეიყვანე რაოდენობა 0-დან 60 ტ-მდე'
+    setErrors(errs)
+    if (Object.keys(errs).length) return
+    setBusy(true)
+    try {
+      await cargo.save(
+        {
+          description: form.description,
+          code: form.code,
+          whsCode: form.whsCode,
+          quantity: q,
+        },
+        user,
+      )
+      toast('success', 'ტვირთი შენახულია')
+    } catch (err) {
+      toast('error', (err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="p-5 sm:p-6">
+      <div className="mb-5 flex items-start gap-3">
+        <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600">
+          <Lock className="size-4" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">ტვირთი ყველა რეისისთვის</h3>
+          <p className="text-xs text-slate-500">ავტომატურად ემატება ყველა ახალ რეისს — ოპერატორი ამას ვერ ცვლის. უკვე შექმნილი რეისები არ იცვლება.</p>
+        </div>
+      </div>
+      <form onSubmit={save} className="grid gap-4 sm:grid-cols-2" noValidate>
+        <div className="sm:col-span-2">
+          <Field label="ტვირთის დასახელება" error={errors.description}>
+            <Input value={form.description} placeholder="მაგ. ღორღი 0–5 მმ" invalid={!!errors.description} onChange={set('description')} />
+          </Field>
+        </div>
+        <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
+          <Input type="number" inputMode="decimal" step="0.1" min="0" value={form.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
+        </Field>
+        <Field label="ტვირთის კოდი (არასავალდებულო)">
+          <Input value={form.code} placeholder="CRS-05" className="font-mono" onChange={set('code')} />
+        </Field>
+        <Field label="საწყობის კოდი (არასავალდებულო)">
+          <Input value={form.whsCode} placeholder="WH-01" className="font-mono" onChange={set('whsCode')} />
+        </Field>
+        <div className="flex items-end justify-end sm:col-span-2">
+          <Button type="submit" loading={busy} disabled={!dirty}>
+            შენახვა
+          </Button>
+        </div>
+      </form>
+    </Card>
   )
 }
 

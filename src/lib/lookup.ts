@@ -8,13 +8,11 @@ export function makeLookup(d: Database) {
   const carriers = by(d.carriers)
   const drivers = by(d.drivers)
   const trucks = by(d.trucks)
-  const items = by(d.items)
   const users = by(d.users)
   return {
     carrier: (id: string) => carriers.get(id),
     driver: (id: string) => drivers.get(id),
     truck: (id: string) => trucks.get(id),
-    item: (id: string) => items.get(id),
     user: (id: string) => users.get(id),
     driverName: (id: string) => {
       const x = drivers.get(id)
@@ -28,7 +26,7 @@ export function makeLookup(d: Database) {
         scaleId: r.scaleId || '—',
         driver: this.driverName(s.driverId),
         plate: trucks.get(s.truckId)?.plateNumber ?? '—',
-        item: items.get(s.itemId)?.description ?? '—',
+        item: s.cargo.description || '—',
       }
     },
   }
