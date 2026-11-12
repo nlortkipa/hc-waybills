@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, X } from 'lucide-react'
-import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
+import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cx } from '../lib/util'
+import { inputCls, invalidCls } from './fieldStyles'
 import type { ShipmentStatus, StepStatus } from '../types'
 
 /* ----------------------------- Button ----------------------------- */
@@ -72,20 +73,11 @@ export function Field({ label, error, hint, children }: { label: string; error?:
   )
 }
 
-const inputCls =
-  'block w-full h-11 rounded-[10px] border-0 bg-fill px-3 text-[16px] sm:text-[15px] text-slate-900 ring-inset ring-transparent placeholder:text-slate-400 focus:ring-2 focus:ring-brand-500/50 focus:outline-none transition-shadow disabled:opacity-50'
-
 export function Input({ className, invalid, ...rest }: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
-  return <input {...rest} className={cx(inputCls, invalid && 'ring-2 ring-rose-500/60', className)} />
+  return <input {...rest} className={cx(inputCls, invalid && invalidCls, className)} />
 }
 
-export function Select({ className, invalid, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
-  return (
-    <select {...rest} className={cx(inputCls, 'appearance-none bg-[url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" stroke="%238e8e93" stroke-width="2.25" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>\')] bg-[position:right_0.75rem_center] bg-no-repeat pr-9', invalid && 'ring-2 ring-rose-500/60', className)}>
-      {children}
-    </select>
-  )
-}
+export { DatePicker, Select } from './pickers'
 
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (

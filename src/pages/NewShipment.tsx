@@ -84,8 +84,7 @@ export function NewShipment() {
             </div>
 
             <Field label="დასრულების მისამართი" error={errors.destinationId} hint={destinations.length ? undefined : 'ამ კარიერს დასრულების მისამართი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'}>
-              <Select value={form.destinationId} onChange={set('destinationId')} invalid={!!errors.destinationId}>
-                <option value="">აირჩიე დასრულების მისამართი…</option>
+              <Select value={form.destinationId} onChange={set('destinationId')} placeholder="აირჩიე დასრულების მისამართი…" invalid={!!errors.destinationId}>
                 {destinations.map((x) => (
                   <option key={x.id} value={x.id}>
                     {x.address} · {x.scaleId}
@@ -96,8 +95,7 @@ export function NewShipment() {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="მძღოლი" error={errors.driverId}>
-                <Select value={form.driverId} onChange={set('driverId')} invalid={!!errors.driverId}>
-                  <option value="">აირჩიე მძღოლი…</option>
+                <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId}>
                   {d.drivers.map((x) => (
                     <option key={x.id} value={x.id}>
                       {x.firstName} {x.lastName}
@@ -106,8 +104,7 @@ export function NewShipment() {
                 </Select>
               </Field>
               <Field label="მანქანა" error={errors.truckId}>
-                <Select value={form.truckId} onChange={set('truckId')} invalid={!!errors.truckId}>
-                  <option value="">აირჩიე მანქანა…</option>
+                <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" invalid={!!errors.truckId}>
                   {d.trucks.map((x) => (
                     <option key={x.id} value={x.id}>
                       {x.plateNumber} · {x.model}

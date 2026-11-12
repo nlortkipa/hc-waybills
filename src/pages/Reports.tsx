@@ -1,7 +1,7 @@
 import { Download, FileText, Scale, Truck, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { visibleShipments } from '../api'
-import { Button, Card, Field, Input, PageHeader, Select, Stat, statusMeta } from '../components/ui'
+import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
 import { cx, downloadCsv, formatDay, formatKg, formatNumber, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../mock/db'
@@ -90,10 +90,10 @@ export function Reports() {
       <Card className="mb-6 p-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Field label="დან">
-            <Input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+            <DatePicker value={from} max={to} onChange={setFrom} />
           </Field>
           <Field label="მდე">
-            <Input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} />
+            <DatePicker value={to} min={from} onChange={setTo} />
           </Field>
           <div className="col-span-2 sm:col-span-1">
             <Field label="კარიერი">
