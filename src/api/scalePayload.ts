@@ -4,6 +4,8 @@ import type { Database, ScalePayload, Shipment } from '../types'
 /**
  * Maps a shipment to the payload the client's Scale Service expects.
  * Field mapping is our best interpretation of the client spec — confirm with the client:
+ *   actionFlag    = 'I' insert ('U' update, 'D' delete); anything else is rejected by the API
+ *   processType   = 'S' (the scale DB stores 'S' and 'T' as Operation; meaning to confirm)
  *   docEntry      = RS.ge waybill number (same as the order number)
  *   cardCode/Name = carrier code / name
  *   u_ShipToCodeS = destination scale ID
@@ -17,8 +19,8 @@ export function buildScalePayload(s: Shipment, db: Pick<Database, 'carriers' | '
   const driver = db.drivers.find((d) => d.id === s.driverId)
   const truck = db.trucks.find((t) => t.id === s.truckId)
   return {
-    actionFlag: 's',
-    processType: 's',
+    actionFlag: 'I',
+    processType: 'S',
     docEntry: s.waybillNumber ?? '',
     docDate: s.createdAt,
     cardCode: carrier?.code ?? '',

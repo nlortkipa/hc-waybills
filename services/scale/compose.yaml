@@ -39,6 +39,9 @@ services:
       ASPNETCORE_ENVIRONMENT: ${SCALE_API_ENVIRONMENT:-Development}
       ConnectionStrings__DefaultConnection: Server=scale-db,1433;Database=${SCALE_DB_NAME:-HCG-SCALES};User Id=scale_api;Password=${SCALE_API_DB_PASSWORD};TrustServerCertificate=True;
       Jwt__Key: ${SCALE_JWT_KEY:?set in services/scale/.env}
+      # The vendor appsettings has 000010, which isn't in this DB's Companies table,
+      # so every start request fails "seller company code not found".
+      SAP__StaticData__SellerCompanyCode: ${SCALE_SELLER_COMPANY_CODE:-230866435}
     volumes:
       - ./config/Integration.dll.config:/app/Integration.dll.config:ro
     ports:

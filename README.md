@@ -51,8 +51,8 @@ flowchart LR
 
 ```json
 {
-  "actionFlag": "s",
-  "processType": "s",
+  "actionFlag": "I",
+  "processType": "S",
   "docEntry": "<waybill number>",
   "docDate": "2026-10-28T17:38:12.493Z",
   "cardCode": "", "cardName": "",
@@ -65,7 +65,9 @@ flowchart LR
 }
 ```
 
-Response after weighing: `docEntry` + **actual weight**.
+Sent to `POST /WeighingProcess/SAP_StartWeighingProcess` with a bearer token from `POST /auth/token` (no body; returns the JWT as plain text, valid 1 h). `actionFlag` must be `I` (insert), `U` (update) or `D` (delete). The response is `{ success, error, body }`; validation failures come back as `success: false` with `;`-separated Georgian messages.
+
+Response after weighing: `docEntry` + **actual weight**. The vendor API only pushes the weight to SAP, so the portal reads it from the scale DB (`WeighingProcessFacts.ProductWeigh`, net kg) through the inspector's `GET /api/weighings/:docEntry`, polling every 15 s while a shipment is waiting at the scale.
 
 ## Existing Scale Service (provided by client)
 
@@ -98,7 +100,7 @@ While the stack is running, admins see **სასწორის ბაზა**
 
 The app is a single React + TypeScript codebase (Vite, Tailwind). It runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com).
 
-> **Everything external is mocked.** RS.ge, the SMS provider and the Scale Service are simulated in `src/api/integrations.ts`, and data is stored in the browser's `localStorage` (`src/mock/`). Nothing leaves the device.
+> **RS.ge and SMS are mocked**, and data is stored in the browser's `localStorage` (`src/mock/`). The **Scale Service** has two modes, switched in **სატესტო პანელი**: *სატესტო* (simulated) and *რეალური* (real calls to the Docker stack from `npm run scale up`). In dev, *რეალური* is the default; calls go through Vite's `/scale-api` proxy because the vendor API's CORS policy doesn't allow the `Authorization` header. A production build needs `VITE_SCALE_API_URL` pointing at a same-origin proxy (or a host with proper CORS).
 
 ### Dependencies
 

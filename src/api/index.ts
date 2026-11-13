@@ -6,7 +6,7 @@ import { db } from '../mock/db'
 import { formatKg, nowIso, sleep, uid } from '../lib/util'
 import { resolveRoute } from '../lib/route'
 import type { CargoDefaults, Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
-import { rsge, scale, sms } from './integrations'
+import { rsge, scale, scaleMode, sms } from './integrations'
 import { buildScalePayload } from './scalePayload'
 
 const quick = () => sleep(150 + Math.random() * 150)
@@ -200,12 +200,7 @@ export const shipments = {
     clearTimeout(weighTimers.get(id))
     weighTimers.delete(id)
     const w = weightKg ?? Math.round(s.quantity * 1000 * (0.96 + Math.random() * 0.08))
-    scale.logWeightCallback(s.waybillNumber, w, id)
-    patch(
-      id,
-      (x) => ({ status: 'weighed', scale: { ...x.scale, weightKg: w, weighedAt: nowIso() } }),
-      { level: 'success', message: `აიწონა: ${formatKg(w)} (docEntry ${s.waybillNumber})` },
-    )
+    markWeighed(id, w, nowIso(), 'mock')
   },
 
   /** Re-arms auto-weighing timers after a page reload. */
@@ -213,23 +208,56 @@ export const shipments = {
     db.get().shipments.filter((s) => s.status === 'at_scale').forEach((s) => scheduleAutoWeigh(s.id))
   },
 
-  /** Called once on app start: finishes pipelines interrupted by a reload. */
+  /** Called once on app start: finishes pipelines interrupted by a reload. Returns a cleanup. */
   resumeAll() {
     db.get()
       .shipments.filter((s) => s.status === 'uploading' || s.status === 'uploaded' || s.sms.status === 'running' || s.scale.status === 'running')
       .forEach((s) => void shipments.run(s.id))
     shipments.resumeAutoWeigh()
+    void pollLiveWeights()
+    const t = window.setInterval(() => void pollLiveWeights(), LIVE_POLL_MS)
+    return () => window.clearInterval(t)
   },
 
   isRunning: (id: string) => running.has(id),
 }
 
+function markWeighed(id: string, weightKg: number, weighedAt: string, source: 'mock' | 'live') {
+  const s = get(id)
+  if (s.status !== 'at_scale' || !s.waybillNumber) return
+  scale.logWeightCallback(s.waybillNumber, weightKg, id, source)
+  patch(
+    id,
+    (x) => ({ status: 'weighed', scale: { ...x.scale, weightKg, weighedAt } }),
+    { level: 'success', message: `აიწონა: ${formatKg(weightKg)} (docEntry ${s.waybillNumber})` },
+  )
+}
+
+/* Live scale: the vendor API pushes the weight to SAP, not to us, so we read it
+   from the scale DB for every shipment still waiting at the scale. */
+const LIVE_POLL_MS = 15_000
+let polling = false
+
+async function pollLiveWeights() {
+  if (polling || scaleMode() !== 'live') return
+  polling = true
+  try {
+    const waiting = db.get().shipments.filter((s) => s.status === 'at_scale' && s.waybillNumber)
+    for (const s of waiting) {
+      const w = await scale.pollWeight(s.waybillNumber!)
+      if (w) markWeighed(s.id, w.weightKg, w.weighedAt, 'live')
+    }
+  } finally {
+    polling = false
+  }
+}
+
 function scheduleAutoWeigh(id: string) {
   const { autoWeigh, autoWeighDelaySec } = db.get().settings
-  if (!autoWeigh || weighTimers.has(id)) return
+  if (scaleMode() === 'live' || !autoWeigh || weighTimers.has(id)) return
   const t = window.setTimeout(() => {
     weighTimers.delete(id)
-    if (db.get().settings.autoWeigh) void shipments.simulateWeighing(id)
+    if (db.get().settings.autoWeigh && scaleMode() === 'mock') void shipments.simulateWeighing(id)
   }, autoWeighDelaySec * 1000)
   weighTimers.set(id, t)
 }
@@ -289,7 +317,7 @@ async function runPipeline(id: string) {
       patch(
         id,
         (x) => ({ status: 'at_scale', scale: { ...x.scale, status: 'ok', error: undefined, sentAt: nowIso() } }),
-        { level: 'success', message: 'ზედნადები გაიგზავნა სასწორზე — ელოდება აწონვას' },
+        { level: 'success', message: `ზედნადები გაიგზავნა სასწორზე${scaleMode() === 'live' ? ' (რეალური სერვისი)' : ''} — ელოდება აწონვას` },
       )
       scheduleAutoWeigh(id)
     } catch (e) {
@@ -324,7 +352,12 @@ async function sendSms(id: string) {
 export const mock = {
   updateSettings(p: Partial<Database['settings']>) {
     db.update((d) => ({ ...d, settings: { ...d.settings, ...p } }))
-    if (p.autoWeigh) shipments.resumeAutoWeigh()
+    if (p.scaleMode === 'live') {
+      weighTimers.forEach((t) => clearTimeout(t))
+      weighTimers.clear()
+      void pollLiveWeights()
+    }
+    if (p.autoWeigh || p.scaleMode === 'mock') shipments.resumeAutoWeigh()
   },
   clearLogs() {
     db.update((d) => ({ ...d, logs: [] }))

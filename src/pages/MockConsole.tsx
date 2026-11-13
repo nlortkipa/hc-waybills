@@ -2,6 +2,8 @@ import { ArrowDownLeft, ArrowUpRight, ChevronDown, RotateCcw, Trash2, Waypoints 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { mock } from '../api'
+import { scaleLiveAvailable, scaleMode } from '../api/integrations'
+import { scaleApiUrl } from '../api/scaleInspector'
 import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented, Toggle } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatTime } from '../lib/util'
@@ -17,6 +19,7 @@ export function MockConsole() {
   const user = useUser()
   const toast = useToast()
   const s = d.settings
+  const live = scaleMode() === 'live'
   const [svc, setSvc] = useState<ServiceName | ''>('')
   const [open, setOpen] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -29,7 +32,7 @@ export function MockConsole() {
 
   return (
     <>
-      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge, SMS და სასწორის სერვისები და ნახე ყველა მოთხოვნა." />
+      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge და SMS, აირჩიე სატესტო ან რეალური სასწორი და ნახე ყველა მოთხოვნა." />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="space-y-6">
@@ -39,15 +42,36 @@ export function MockConsole() {
               <Slider label="ქსელის დაყოვნება" value={s.latencyMs} min={100} max={4000} step={100} unit=" მწმ" onChange={(v) => mock.updateSettings({ latencyMs: v })} />
               <Slider label="RS.ge შეცდომების %" value={s.rsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ rsFailRate: v })} />
               <Slider label="SMS შეცდომების %" value={s.smsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ smsFailRate: v })} />
-              <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />
               <div className="border-t border-separator pt-4">
-                <Toggle checked={s.autoWeigh} onChange={(v) => mock.updateSettings({ autoWeigh: v })} label="სასწორი ავტომატურად წონის მანქანებს" />
-                {s.autoWeigh && (
-                  <div className="mt-4">
-                    <Slider label="აწონვის დაყოვნება" value={s.autoWeighDelaySec} min={3} max={120} step={1} unit=" წმ" onChange={(v) => mock.updateSettings({ autoWeighDelaySec: v })} />
+                <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                  <span className="text-slate-700">სასწორის სერვისი</span>
+                  <Segmented
+                    value={live ? 'live' : 'mock'}
+                    onChange={(v) => mock.updateSettings({ scaleMode: v })}
+                    options={[
+                      { value: 'mock', label: 'სატესტო' },
+                      ...(scaleLiveAvailable ? [{ value: 'live' as const, label: 'რეალური' }] : []),
+                    ]}
+                  />
+                </div>
+                {live ? (
+                  <p className="text-xs text-slate-500">
+                    ზედნადები იგზავნება <span className="font-mono">{scaleApiUrl}</span>-ზე. წონა იკითხება სასწორის ბაზიდან ყოველ 15 წამში.
+                  </p>
+                ) : (
+                  <div className="mt-4 space-y-5">
+                    <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />
+                    <div>
+                      <Toggle checked={s.autoWeigh} onChange={(v) => mock.updateSettings({ autoWeigh: v })} label="სასწორი ავტომატურად წონის მანქანებს" />
+                      {s.autoWeigh && (
+                        <div className="mt-4">
+                          <Slider label="აწონვის დაყოვნება" value={s.autoWeighDelaySec} min={3} max={120} step={1} unit=" წმ" onChange={(v) => mock.updateSettings({ autoWeighDelaySec: v })} />
+                        </div>
+                      )}
+                      <p className="mt-2 text-xs text-slate-500">გამორთვისას გამოიყენე „აწონვის სიმულაცია“ რეისის გვერდზე.</p>
+                    </div>
                   </div>
                 )}
-                <p className="mt-2 text-xs text-slate-500">გამორთვისას გამოიყენე „აწონვის სიმულაცია“ რეისის გვერდზე.</p>
               </div>
             </div>
           </Card>

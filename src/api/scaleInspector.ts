@@ -9,6 +9,13 @@ const BASE: string = (import.meta.env.VITE_SCALE_INSPECTOR_URL as string | undef
 
 export const scaleInspectorUrl = BASE
 export const scaleApiUrl: string = (import.meta.env.VITE_SCALE_API_URL as string | undefined) ?? (import.meta.env.DEV ? 'http://localhost:5080' : '')
+/**
+ * Base for API calls from the browser. The vendor API rejects CORS preflights that
+ * carry Authorization, so in dev it goes through Vite's `/scale-api` proxy
+ * (vite.config.ts). In a build, VITE_SCALE_API_URL must point at a same-origin
+ * proxy or a host with proper CORS.
+ */
+export const scaleApiCallUrl: string = import.meta.env.DEV ? '/scale-api' : scaleApiUrl
 
 export interface ScaleStatus {
   api: { up: boolean; status?: number; swagger?: boolean; ms?: number; error?: string }
@@ -43,6 +50,18 @@ export interface ScaleTablePage {
   offset: number
 }
 
+/** Weighing state of one waybill (docEntry) as recorded by the scale. */
+export interface ScaleWeighing {
+  found: boolean
+  statusId?: number
+  statusName?: string
+  createdAt?: string
+  /** Net cargo weight in kg; null until the loaded truck is weighed. */
+  weightKg?: number | null
+  grossKg?: number | null
+  weighedAt?: string | null
+}
+
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   if (!BASE) throw new Error('VITE_SCALE_INSPECTOR_URL is not set')
   const res = await fetch(BASE + path, { signal })
@@ -53,6 +72,7 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 export const scaleInspector = {
   status: (signal?: AbortSignal) => get<ScaleStatus>('/api/status', signal),
+  weighing: (docEntry: string, signal?: AbortSignal) => get<ScaleWeighing>(`/api/weighings/${encodeURIComponent(docEntry)}`, signal),
   tables: (signal?: AbortSignal) => get<ScaleTable[]>('/api/tables', signal),
   table: (schema: string, table: string, opts: { limit: number; offset: number; sort?: string; dir?: 'asc' | 'desc'; q?: string }, signal?: AbortSignal) => {
     const p = new URLSearchParams({ limit: String(opts.limit), offset: String(opts.offset) })

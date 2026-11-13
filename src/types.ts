@@ -130,6 +130,8 @@ export interface IntegrationLog {
 }
 
 export interface MockSettings {
+  /** 'live' sends waybills to the real Scale Service (VITE_SCALE_API_URL). Missing in older saved data. */
+  scaleMode?: 'mock' | 'live'
   latencyMs: number
   rsFailRate: number
   smsFailRate: number

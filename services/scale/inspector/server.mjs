@@ -5,6 +5,7 @@
 //   GET /api/status                       scale API + database reachability
 //   GET /api/tables                       every user table with row counts
 //   GET /api/tables/:schema/:table?limit&offset&sort&dir&q
+//   GET /api/weighings/:docEntry          process status + net weight for one waybill
 import http from 'node:http'
 import sql from 'mssql'
 
@@ -134,6 +135,37 @@ async function readTable(schema, table, params) {
   return { schema, table, columns, rows, total: Number(count.recordset[0].total), limit, offset }
 }
 
+// docEntry sent to SAP_StartWeighingProcess is stored as WeighingProcesses.Barcode.
+// The truck is weighed empty and loaded; the loaded fact carries the net cargo
+// weight in ProductWeigh (kg). The vendor API only pushes it to SAP, so the
+// portal reads it from here.
+async function readWeighing(docEntry) {
+  const p = await pool()
+  const r = await p.request().input('barcode', sql.NVarChar, docEntry).query(`
+    SELECT TOP 1 WP.StatusID AS statusId, ST.Name AS statusName, WP.CreateTime AS createdAt,
+           F.ProductWeigh AS weightKg, F.Weigh AS grossKg, F.CreateTime AS weighedAt
+    FROM WeighingProcesses WP
+    LEFT JOIN WeighingProcessStatuses ST ON ST.ID = WP.StatusID
+    OUTER APPLY (
+      SELECT TOP 1 ProductWeigh, Weigh, CreateTime FROM WeighingProcessFacts
+      WHERE WeighingProcessID = WP.ID AND ProductWeigh > 0
+      ORDER BY CreateTime DESC
+    ) F
+    WHERE WP.Barcode = @barcode
+    ORDER BY WP.CreateTime DESC`)
+  const row = r.recordset[0]
+  if (!row) return { found: false }
+  return {
+    found: true,
+    statusId: row.statusId,
+    statusName: row.statusName,
+    createdAt: cell(row.createdAt),
+    weightKg: row.weightKg == null ? null : Number(row.weightKg),
+    grossKg: row.grossKg == null ? null : Number(row.grossKg),
+    weighedAt: row.weighedAt == null ? null : cell(row.weighedAt),
+  }
+}
+
 function send(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -157,6 +189,8 @@ http
         return send(res, 200, { api, db })
       }
       if (url.pathname === '/api/tables') return send(res, 200, await listTables())
+      const w = url.pathname.match(/^\/api\/weighings\/([^/]+)$/)
+      if (w) return send(res, 200, await readWeighing(decodeURIComponent(w[1])))
       const m = url.pathname.match(/^\/api\/tables\/([^/]+)\/([^/]+)$/)
       if (m) {
         const data = await readTable(decodeURIComponent(m[1]), decodeURIComponent(m[2]), url.searchParams)
