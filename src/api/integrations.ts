@@ -118,6 +118,18 @@ export function scaleMode(): ScaleMode {
   return m === 'live' && scaleLiveAvailable ? 'live' : 'mock'
 }
 
+/**
+ * For now the weighing result is always simulated, even with the live scale:
+ * the waybill is really sent, but we don't wait for the truck to be weighed.
+ * Set to true to read real weights from the scale DB again.
+ */
+const LIVE_WEIGHT_POLLING = false
+
+/** True when the "truck weighed" step is simulated (auto-weigh timer / manual button). */
+export function weighingMocked(): boolean {
+  return scaleMode() === 'mock' || !LIVE_WEIGHT_POLLING
+}
+
 let mockToken: string | null = null
 let liveToken: { value: string; expiresAt: number } | null = null
 

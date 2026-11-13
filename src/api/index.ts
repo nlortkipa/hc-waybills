@@ -6,7 +6,7 @@ import { db } from '../mock/db'
 import { formatKg, nowIso, sleep, uid } from '../lib/util'
 import { resolveRoute } from '../lib/route'
 import type { CargoDefaults, Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
-import { rsge, scale, scaleMode, sms } from './integrations'
+import { rsge, scale, scaleMode, sms, weighingMocked } from './integrations'
 import { buildScalePayload } from './scalePayload'
 
 const quick = () => sleep(150 + Math.random() * 150)
@@ -239,7 +239,7 @@ const LIVE_POLL_MS = 15_000
 let polling = false
 
 async function pollLiveWeights() {
-  if (polling || scaleMode() !== 'live') return
+  if (polling || weighingMocked()) return
   polling = true
   try {
     const waiting = db.get().shipments.filter((s) => s.status === 'at_scale' && s.waybillNumber)
@@ -254,10 +254,10 @@ async function pollLiveWeights() {
 
 function scheduleAutoWeigh(id: string) {
   const { autoWeigh, autoWeighDelaySec } = db.get().settings
-  if (scaleMode() === 'live' || !autoWeigh || weighTimers.has(id)) return
+  if (!weighingMocked() || !autoWeigh || weighTimers.has(id)) return
   const t = window.setTimeout(() => {
     weighTimers.delete(id)
-    if (db.get().settings.autoWeigh && scaleMode() === 'mock') void shipments.simulateWeighing(id)
+    if (db.get().settings.autoWeigh && weighingMocked()) void shipments.simulateWeighing(id)
   }, autoWeighDelaySec * 1000)
   weighTimers.set(id, t)
 }
@@ -352,12 +352,12 @@ async function sendSms(id: string) {
 export const mock = {
   updateSettings(p: Partial<Database['settings']>) {
     db.update((d) => ({ ...d, settings: { ...d.settings, ...p } }))
-    if (p.scaleMode === 'live') {
+    if (!weighingMocked()) {
       weighTimers.forEach((t) => clearTimeout(t))
       weighTimers.clear()
       void pollLiveWeights()
     }
-    if (p.autoWeigh || p.scaleMode === 'mock') shipments.resumeAutoWeigh()
+    if (p.autoWeigh || p.scaleMode) shipments.resumeAutoWeigh()
   },
   clearLogs() {
     db.update((d) => ({ ...d, logs: [] }))

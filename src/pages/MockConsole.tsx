@@ -2,7 +2,7 @@ import { ArrowDownLeft, ArrowUpRight, ChevronDown, RotateCcw, Trash2, Waypoints 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { mock } from '../api'
-import { scaleLiveAvailable, scaleMode } from '../api/integrations'
+import { scaleLiveAvailable, scaleMode, weighingMocked } from '../api/integrations'
 import { scaleApiUrl } from '../api/scaleInspector'
 import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented, Toggle } from '../components/ui'
 import { useToast } from '../components/toast'
@@ -54,13 +54,15 @@ export function MockConsole() {
                     ]}
                   />
                 </div>
-                {live ? (
+                {live && (
                   <p className="text-xs text-slate-500">
-                    ზედნადები იგზავნება <span className="font-mono">{scaleApiUrl}</span>-ზე. წონა იკითხება სასწორის ბაზიდან ყოველ 15 წამში.
+                    ზედნადები იგზავნება <span className="font-mono">{scaleApiUrl}</span>-ზე.{' '}
+                    {weighingMocked() ? 'აწონვა ჯერჯერობით სიმულირებულია — სასწორს არ ველოდებით.' : 'წონა იკითხება სასწორის ბაზიდან ყოველ 15 წამში.'}
                   </p>
-                ) : (
+                )}
+                {(!live || weighingMocked()) && (
                   <div className="mt-4 space-y-5">
-                    <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />
+                    {!live && <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />}
                     <div>
                       <Toggle checked={s.autoWeigh} onChange={(v) => mock.updateSettings({ autoWeigh: v })} label="სასწორი ავტომატურად წონის მანქანებს" />
                       {s.autoWeigh && (

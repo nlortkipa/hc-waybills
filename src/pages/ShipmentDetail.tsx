@@ -2,7 +2,7 @@ import { ArrowLeft, Copy, FileText, MessageSquare, RotateCw, Scale as ScaleIcon,
 import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { scaleMode } from '../api/integrations'
+import { weighingMocked } from '../api/integrations'
 import { Badge, Button, Card, EmptyState, Field, Input, JsonBlock, Modal, StatusBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatDateTime, formatKg, formatNumber, formatTime, formatTonnes } from '../lib/util'
@@ -72,8 +72,8 @@ export function ShipmentDetail() {
       title: 'მანქანა აიწონა',
       icon: <Weight className="size-4" />,
       status: s.status === 'rs_failed' ? 'skipped' : weighStep,
-      detail: s.status === 'weighed' ? <><b>{formatKg(s.scale.weightKg)}</b> · {formatTime(s.scale.weighedAt)}</> : s.status === 'at_scale' ? (scaleMode() === 'live' ? 'ელოდება სასწორს (წონა წაიკითხება სასწორის ბაზიდან)' : d.settings.autoWeigh ? `ელოდება სასწორს (სატესტო სასწორი აწონის ~${d.settings.autoWeighDelaySec} წამში)` : 'ელოდება სასწორს') : 'მოლოდინში',
-      action: canAct && s.status === 'at_scale' && scaleMode() === 'mock' && (
+      detail: s.status === 'weighed' ? <><b>{formatKg(s.scale.weightKg)}</b> · {formatTime(s.scale.weighedAt)}</> : s.status === 'at_scale' ? (!weighingMocked() ? 'ელოდება სასწორს (წონა წაიკითხება სასწორის ბაზიდან)' : d.settings.autoWeigh ? `ელოდება სასწორს (სატესტო სასწორი აწონის ~${d.settings.autoWeighDelaySec} წამში)` : 'ელოდება სასწორს') : 'მოლოდინში',
+      action: canAct && s.status === 'at_scale' && weighingMocked() && (
         <Button size="sm" variant="secondary" icon={<Weight className="size-3.5" />} onClick={() => { setWeight(String(Math.round(s.quantity * 1000))); setWeighOpen(true) }}>
           აწონვის სიმულაცია
         </Button>
