@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { shipments } from '../api'
 import { Button, Card, Field, PageHeader, Select } from '../components/ui'
-import { formatTonnes } from '../lib/util'
+import { active, formatTonnes } from '../lib/util'
 import { useToast } from '../components/toast'
 import { useDb } from '../mock/db'
 import { useUser } from '../session'
@@ -13,13 +13,13 @@ export function NewShipment() {
   const d = useDb()
   const nav = useNavigate()
   const toast = useToast()
-  const [carrierId, setCarrierId] = useState(user.carrierId ?? d.carriers[0]?.id ?? '')
+  const [carrierId, setCarrierId] = useState(user.carrierId ?? active(d.carriers)[0]?.id ?? '')
   const [form, setForm] = useState({ destinationId: '', driverId: '', truckId: '', })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
   const carrier = d.carriers.find((c) => c.id === carrierId)
-  const destinations = carrier?.destinations ?? []
+  const destinations = carrier && !carrier.deletedAt ? active(carrier.destinations) : []
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => {
     setForm((f) => ({ ...f, [k]: e.target.value }))
     setErrors((x) => ({ ...x, [k]: '' }))
@@ -64,7 +64,7 @@ export function NewShipment() {
                     setForm((f) => ({ ...f, destinationId: '' }))
                   }}
                 >
-                  {d.carriers.map((c) => (
+                  {active(d.carriers).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -83,7 +83,7 @@ export function NewShipment() {
               <span className="font-medium text-slate-900">{carrier?.startAddress || '—'}</span>
             </div>
 
-            <Field label="დასრულების მისამართი" error={errors.destinationId} hint={destinations.length ? undefined : 'ამ კარიერს დასრულების მისამართი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'}>
+            <Field label="დასრულების მისამართი" error={errors.destinationId} hint={carrier?.deletedAt ? 'შენი კარიერი წაშლილია — სთხოვე ადმინისტრატორს ახალი კარიერის მინიჭება.' : destinations.length ? undefined : 'ამ კარიერს დასრულების მისამართი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'}>
               <Select value={form.destinationId} onChange={set('destinationId')} placeholder="აირჩიე დასრულების მისამართი…" invalid={!!errors.destinationId}>
                 {destinations.map((x) => (
                   <option key={x.id} value={x.id}>
@@ -96,7 +96,7 @@ export function NewShipment() {
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field label="მძღოლი" error={errors.driverId}>
                 <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId}>
-                  {d.drivers.map((x) => (
+                  {active(d.drivers).map((x) => (
                     <option key={x.id} value={x.id}>
                       {x.firstName} {x.lastName}
                     </option>
@@ -105,7 +105,7 @@ export function NewShipment() {
               </Field>
               <Field label="მანქანა" error={errors.truckId}>
                 <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" invalid={!!errors.truckId}>
-                  {d.trucks.map((x) => (
+                  {active(d.trucks).map((x) => (
                     <option key={x.id} value={x.id}>
                       {x.plateNumber} · {x.model}
                     </option>

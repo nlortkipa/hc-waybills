@@ -3,7 +3,7 @@
  * becomes a fetch() to the real backend with the same signature.
  */
 import { db } from '../mock/db'
-import { formatKg, nowIso, sleep, uid } from '../lib/util'
+import { active, formatKg, nowIso, sleep, uid } from '../lib/util'
 import { resolveRoute } from '../lib/route'
 import type { CargoDefaults, Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
 import { rsge, scale, scaleMode, sms, weighingMocked } from './integrations'
@@ -19,7 +19,7 @@ export const auth = {
   current(): User | null {
     try {
       const id = localStorage.getItem(SESSION_KEY)
-      return db.get().users.find((u) => u.id === id) ?? null
+      return db.get().users.find((u) => u.id === id && !u.deletedAt) ?? null
     } catch {
       return null
     }
@@ -27,7 +27,7 @@ export const auth = {
   async loginAs(userId: string): Promise<User> {
     await quick()
     const user = db.get().users.find((u) => u.id === userId)
-    if (!user) throw new Error('მომხმარებელი ვერ მოიძებნა')
+    if (!user || user.deletedAt) throw new Error('მომხმარებელი ვერ მოიძებნა')
     try {
       localStorage.setItem(SESSION_KEY, user.id)
     } catch {
@@ -53,46 +53,60 @@ export const refs = {
   async save<K extends RefCollection>(col: K, record: Omit<RefRecord<K>, 'id'> & { id?: string }) {
     await quick()
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord<K>
+    const prev = (db.get()[col] as RefRecord<K>[]).find((r) => r.id === rec.id)
+    if (prev?.deletedAt) throw new Error('ჩანაწერი წაშლილია')
     if (col === 'carriers') {
       const c = rec as Carrier
       if (!c.destinations?.length) throw new Error('კარიერს უნდა ჰქონდეს მინიმუმ ერთი დასრულების მისამართი')
       c.destinations = c.destinations.map((x) => ({ ...x, id: x.id || uid('e') }))
+      // Removed destinations that shipments still point at stay as soft-deleted so history resolves.
       const kept = new Set(c.destinations.map((x) => x.id))
-      const used = db.get().shipments.filter((s) => s.carrierId === c.id && !kept.has(s.destinationId)).length
-      if (used) throw new Error(`წაშლილი დასრულების მისამართი გამოიყენება ${used} რეისში.`)
+      const used = new Set(db.get().shipments.filter((s) => s.carrierId === c.id).map((s) => s.destinationId))
+      const at = nowIso()
+      const gone = ((prev as Carrier | undefined)?.destinations ?? [])
+        .filter((x) => !kept.has(x.id) && used.has(x.id))
+        .map((x) => ({ ...x, deletedAt: x.deletedAt ?? at }))
+      c.destinations = [...c.destinations, ...gone]
     }
     db.update((d) => {
       const list = d[col] as RefRecord<K>[]
-      const exists = list.some((r) => r.id === rec.id)
-      return { ...d, [col]: exists ? list.map((r) => (r.id === rec.id ? rec : r)) : [...list, rec] }
+      return { ...d, [col]: prev ? list.map((r) => (r.id === rec.id ? rec : r)) : [...list, rec] }
     })
     return rec
   },
 
-  /** Returns why a record cannot be deleted, or null if it can. */
-  usage(col: RefCollection, id: string): string | null {
-    const d = db.get()
-    const n = (k: keyof Shipment) => d.shipments.filter((s) => s[k] === id).length
-    switch (col) {
-      case 'carriers': {
-        const u = d.users.filter((x) => x.carrierId === id).length
-        if (u) return `მიბმულია ${u} მომხმარებელთან.`
-        return n('carrierId') ? `გამოიყენება ${n('carrierId')} რეისში.` : null
-      }
-      case 'drivers':
-        return n('driverId') ? `გამოიყენება ${n('driverId')} რეისში.` : null
-      case 'trucks':
-        return n('truckId') ? `გამოიყენება ${n('truckId')} რეისში.` : null
-      case 'users':
-        return n('createdBy') ? `შექმნილი აქვს ${n('createdBy')} რეისი.` : null
-    }
+  /** Number of shipments that reference the record (they keep showing it after deletion). */
+  shipmentCount(col: RefCollection, id: string): number {
+    const k = ({ carriers: 'carrierId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
+    return db.get().shipments.filter((s) => s[k] === id).length
   },
 
-  async remove(col: RefCollection, id: string) {
+  /** Returns why a record cannot be deleted, or null if it can. */
+  blocker(col: RefCollection, id: string, by?: User): string | null {
+    if (col === 'users' && by?.id === id) return 'საკუთარი ანგარიშის წაშლა შეუძლებელია.'
+    if (col === 'carriers') {
+      const u = refs.boundOperators(id)
+      if (u) return `მიბმულია ${u} ოპერატორთან — ჯერ შეცვალე ან წაშალე ისინი.`
+    }
+    return null
+  },
+
+  /** Active operators bound to a carrier — they can no longer create shipments once it is deleted. */
+  boundOperators(carrierId: string): number {
+    return active(db.get().users).filter((x) => x.role === 'operator' && x.carrierId === carrierId).length
+  },
+
+  /** Deletes a record. If shipments reference it, it is soft-deleted so reports keep showing it. */
+  async remove(col: RefCollection, id: string, by?: User) {
     await quick()
-    const reason = refs.usage(col, id)
+    const reason = refs.blocker(col, id, by)
     if (reason) throw new Error(`წაშლა შეუძლებელია: ${reason}`)
-    db.update((d) => ({ ...d, [col]: (d[col] as { id: string }[]).filter((r) => r.id !== id) }))
+    const soft = refs.shipmentCount(col, id) > 0
+    const at = nowIso()
+    db.update((d) => {
+      const list = d[col] as { id: string; deletedAt?: string }[]
+      return { ...d, [col]: soft ? list.map((r) => (r.id === id ? { ...r, deletedAt: at } : r)) : list.filter((r) => r.id !== id) }
+    })
   },
 }
 
@@ -154,7 +168,11 @@ export const shipments = {
     if (user.role === 'operator' && input.carrierId !== user.carrierId) throw new Error('ოპერატორს შეუძლია მხოლოდ საკუთარი კარიერის გამოყენება')
     await quick()
     const d = db.get()
-    if (!resolveRoute(d.carriers, input.carrierId, input.destinationId).destination) throw new Error('დასრულების მისამართი ვერ მოიძებნა')
+    const route = resolveRoute(d.carriers, input.carrierId, input.destinationId)
+    if (!route.carrier || route.carrier.deletedAt) throw new Error('კარიერი ვერ მოიძებნა ან წაშლილია')
+    if (!route.destination || route.destination.deletedAt) throw new Error('დასრულების მისამართი ვერ მოიძებნა')
+    if (!active(d.drivers).some((x) => x.id === input.driverId)) throw new Error('მძღოლი ვერ მოიძებნა ან წაშლილია')
+    if (!active(d.trucks).some((x) => x.id === input.truckId)) throw new Error('მანქანა ვერ მოიძებნა ან წაშლილია')
     // Cargo and declared quantity are fixed by the admin, never taken from the request.
     const { quantity, ...cargo } = d.cargo
     if (!cargo.description || !(quantity > 0)) throw new Error('ფიქსირებული ტვირთი არ არის დაყენებული — მიმართე ადმინისტრატორს')

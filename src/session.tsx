@@ -15,7 +15,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(() => auth.current()?.id ?? null)
   const d = useDb()
   // Always read the user from the DB so admin edits (e.g. carrier change) apply live.
-  const user = d.users.find((u) => u.id === userId) ?? null
+  const user = d.users.find((u) => u.id === userId && !u.deletedAt) ?? null
 
   const login = useCallback(async (id: string) => {
     const u = await auth.loginAs(id)

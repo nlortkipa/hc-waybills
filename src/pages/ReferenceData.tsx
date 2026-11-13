@@ -3,7 +3,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { cargo, refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { cx } from '../lib/util'
+import { active, cx } from '../lib/util'
 import { useDb } from '../mock/db'
 import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
@@ -41,10 +41,10 @@ const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
 /** Carrier records carry a destinations array next to their string fields. */
-const destsOf = (r: Rec) => ((r as unknown as { destinations?: Destination[] }).destinations ?? [])
+const destsOf = (r: Rec) => active((r as unknown as { destinations?: Destination[] }).destinations ?? [])
 
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
-const carrierOptions = (d: Database) => d.carriers.map((c) => ({ value: c.id, label: c.name }))
+const carrierOptions = (d: Database) => active(d.carriers).map((c) => ({ value: c.id, label: c.name }))
 
 const TABS: TabDef[] = [
   {
@@ -147,6 +147,7 @@ const TABS: TabDef[] = [
 export function ReferenceData() {
   const d = useDb()
   const toast = useToast()
+  const user = useUser()
   const [tabKey, setTabKey] = useState<RefCollection | 'cargo'>('carriers')
   const isCargo = tabKey === 'cargo'
   const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0]
@@ -156,7 +157,7 @@ export function ReferenceData() {
   const [busy, setBusy] = useState(false)
 
   const rows = useMemo(() => {
-    const list = d[tab.key] as unknown as Rec[]
+    const list = active(d[tab.key] as unknown as (Rec & { deletedAt?: string })[])
     const n = q.trim().toLowerCase()
     const text = (r: Rec) => [...Object.values(r).filter((v) => typeof v === 'string'), ...destsOf(r).flatMap((x) => [x.address, x.scaleId])]
     return n ? list.filter((r) => text(r).some((v) => v.toLowerCase().includes(n))) : list
@@ -173,7 +174,7 @@ export function ReferenceData() {
     if (!deleting) return
     setBusy(true)
     try {
-      await refs.remove(tab.key, deleting.id)
+      await refs.remove(tab.key, deleting.id, user)
       toast('success', 'ჩანაწერი წაიშალა')
       setDeleting(null)
     } catch (e) {
@@ -214,7 +215,7 @@ export function ReferenceData() {
           >
             <t.icon className="size-4" />
             {t.label}
-            <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] text-slate-600 tabular-nums">{(d[t.key] as unknown[]).length}</span>
+            <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] text-slate-600 tabular-nums">{active(d[t.key] as { deletedAt?: string }[]).length}</span>
           </button>
         ))}
         <button
@@ -298,13 +299,13 @@ export function ReferenceData() {
         open={!!deleting}
         onClose={() => setDeleting(null)}
         onConfirm={doDelete}
+        disabled={!!deleting && !!refs.blocker(tab.key, deleting.id, user)}
         busy={busy}
         title={`${tab.singular} წაშლა?`}
         message={
           deleting && (
             <>
-              <b className="text-slate-900">{tab.title(deleting, d)}</b> სამუდამოდ წაიშლება.
-              {refs.usage(tab.key, deleting.id) && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ყურადღება: {refs.usage(tab.key, deleting.id)} წაშლა დაიბლოკება.</p>}
+              <DeleteMessage col={tab.key} id={deleting.id} name={tab.title(deleting, d)} />
             </>
           )
         }
@@ -393,6 +394,22 @@ function CargoDefaultsCard() {
         </div>
       </form>
     </Card>
+  )
+}
+
+function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name: string }) {
+  const user = useUser()
+  const blocker = refs.blocker(col, id, user)
+  const used = refs.shipmentCount(col, id)
+  return (
+    <>
+      <b className="text-slate-900">{name}</b> წაიშლება სიიდან და ახალ რეისებში ვეღარ აირჩევა.
+      {blocker ? (
+        <p className="mt-2 rounded-lg bg-rose-50 p-2 text-rose-700">წაშლა შეუძლებელია: {blocker}</p>
+      ) : used ? (
+        <p className="mt-2 rounded-lg bg-slate-100 p-2 text-slate-600">გამოიყენება {used} რეისში — ეს რეისები და რეპორტები კვლავ აჩვენებს ამ ჩანაწერს.</p>
+      ) : null}
+    </>
   )
 }
 

@@ -189,7 +189,7 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
   )
 }
 
-export function ConfirmModal({ open, title, message, confirmLabel = 'წაშლა', onConfirm, onClose, busy }: { open: boolean; title: string; message: ReactNode; confirmLabel?: string; onConfirm: () => void; onClose: () => void; busy?: boolean }) {
+export function ConfirmModal({ open, title, message, confirmLabel = 'წაშლა', onConfirm, onClose, busy, disabled }: { open: boolean; title: string; message: ReactNode; confirmLabel?: string; onConfirm: () => void; onClose: () => void; busy?: boolean; disabled?: boolean }) {
   return (
     <Modal
       open={open}
@@ -200,7 +200,7 @@ export function ConfirmModal({ open, title, message, confirmLabel = 'წაშ�
           <Button variant="secondary" onClick={onClose}>
             გაუქმება
           </Button>
-          <Button variant="danger" onClick={onConfirm} loading={busy}>
+          <Button variant="danger" onClick={onConfirm} loading={busy} disabled={disabled}>
             {confirmLabel}
           </Button>
         </>

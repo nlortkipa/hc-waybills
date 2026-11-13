@@ -18,7 +18,7 @@ export function Login() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  const users = [...d.users].sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role))
+  const users = d.users.filter((u) => !u.deletedAt).sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role))
 
   const enter = async (id: string, key = id) => {
     setBusy(key)
@@ -33,7 +33,7 @@ export function Login() {
   const submit = (e: FormEvent) => {
     e.preventDefault()
     setError(null)
-    const u = d.users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
+    const u = d.users.find((x) => !x.deletedAt && x.email.toLowerCase() === email.trim().toLowerCase())
     if (!u || !password) {
       setError('ელ-ფოსტა ან პაროლი არასწორია')
       return

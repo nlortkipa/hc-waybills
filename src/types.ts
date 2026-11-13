@@ -1,14 +1,22 @@
 export type Role = 'admin' | 'operator' | 'report'
 
+/**
+ * Reference records referenced by shipments are never hard-deleted: they get a
+ * deletedAt stamp, disappear from lists and pickers, but still resolve in history.
+ */
+export interface SoftDeletable {
+  deletedAt?: string
+}
+
 /** A delivery point of a carrier. Each one is weighed on its own scale. */
-export interface Destination {
+export interface Destination extends SoftDeletable {
   id: string
   address: string
   /** Scale ID (per client spec, formerly the route name). */
   scaleId: string
 }
 
-export interface Carrier {
+export interface Carrier extends SoftDeletable {
   id: string
   code: string
   name: string
@@ -18,7 +26,7 @@ export interface Carrier {
   destinations: Destination[]
 }
 
-export interface Driver {
+export interface Driver extends SoftDeletable {
   id: string
   firstName: string
   lastName: string
@@ -26,7 +34,7 @@ export interface Driver {
   phone: string
 }
 
-export interface Truck {
+export interface Truck extends SoftDeletable {
   id: string
   model: string
   plateNumber: string
@@ -40,7 +48,7 @@ export interface Cargo {
   whsCode: string
 }
 
-export interface User {
+export interface User extends SoftDeletable {
   id: string
   firstName: string
   lastName: string
