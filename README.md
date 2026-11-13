@@ -74,6 +74,26 @@ Response after weighing: `docEntry` + **actual weight**.
 - `WeighingProcessController` — start / finish weighing, get truck number
 - Pushes final weight to SAP (`updateWeight`)
 
+### Running it locally in Docker
+
+The vendor binaries and database are **not** in this repo. `services/scale/` holds only the container setup and builds the image from the folder the client sent.
+
+```sh
+npm run scale up        # first run creates services/scale/.env — set SCALE_VENDOR_DIR + passwords, then run again
+npm run scale logs      # follow logs     ·  npm run scale down  # stop
+npm run scale reset     # drop the DB volume; the next `up` re-attaches the vendor .mdf
+```
+
+| Container | Port (localhost only) | What it is |
+| --- | --- | --- |
+| `scale-db` | 14330 | SQL Server 2022; attaches `DBi/*.mdf` on first start, creates `scale_api` (owner) and `inspector` (read-only) logins |
+| `scale-api` | 5080 | Vendor `Web.API.dll` on `dotnet/aspnet:6.0`; Swagger at `/swagger` in Development |
+| `scale-inspector` | 5081 | Small read-only JSON API over the database (`services/scale/inspector`) |
+
+Credentials come from `services/scale/.env` and `services/scale/config/Integration.dll.config` (both git-ignored; examples are committed). The vendor `appsettings.json` and `Integration.dll.config` are stripped from the image.
+
+While the stack is running, admins see **სასწორის ბაზა** in the sidebar (`/#/scale-db`): every table with row counts, paged/sortable/searchable rows, and a detail view per row. Override the URLs with `VITE_SCALE_INSPECTOR_URL` / `VITE_SCALE_API_URL`.
+
 ## Running the app
 
 The app is a single React + TypeScript codebase (Vite, Tailwind). It runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com).

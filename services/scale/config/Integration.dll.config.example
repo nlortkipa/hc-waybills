@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  Copy to Integration.dll.config (git-ignored) and fill in the real values.
+  It is mounted read-only into the scale-api container.
+-->
+<configuration>
+  <appSettings>
+    <add key="GPSControl:API:Auth:User" value="" />
+    <add key="GPSControl:API:Auth:Pass" value="" />
+    <add key="GPSControl:API:URL:Get" value="http://localhost/GPS/index.aspx" />
+    <add key="GPSControl:API:URL:Create" value="http://localhost/GPS/index.aspx" />
+    <add key="GPSControl:API:URL:Edit" value="http://localhost/GPS/index.aspx" />
+    <add key="GPSControl:API:URL:Delete" value="http://localhost/GPS/index.aspx" />
+    <add key="SAP:API:Auth:User" value="" />
+    <add key="SAP:API:Auth:Pass" value="" />
+    <add key="SAP:API:URL:Output" value="" />
+    <add key="SAP:API:Secret" value="" />
+  </appSettings>
+</configuration>

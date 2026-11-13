@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "android:apk": "node scripts/android-apk.mjs"
+    "android:apk": "node scripts/android-apk.mjs",
+    "scale": "sh services/scale/scale.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",

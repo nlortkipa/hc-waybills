@@ -1,6 +1,7 @@
-import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
+import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Scale, Truck, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { useScaleStatus } from '../api/scaleInspector'
 import { useDb } from '../mock/db'
 import { cx, initials } from '../lib/util'
 import { roleLabel, useSession, useUser } from '../session'
@@ -26,6 +27,8 @@ export const NAV: NavItem[] = [
   { to: '/reports', tint: 'bg-violet-500', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
   { to: '/refs', tint: 'bg-slate-500', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
   { to: '/mock', tint: 'bg-rose-500', label: 'სატესტო პანელი', short: 'ტესტი', icon: FlaskConical, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
+  // Only listed while the local Scale Service stack (npm run scale up) answers.
+  { to: '/scale-db', tint: 'bg-teal-500', label: 'სასწორის ბაზა', short: 'სასწორი', icon: Scale, roles: ['admin'], mobile: [] },
 ]
 
 function AppIcon({ className }: { className?: string }) {
@@ -101,10 +104,11 @@ function SheetRow({ icon: Icon, tint, label, onClick, to, destructive, last }: {
 export function Layout({ children }: { children: ReactNode }) {
   const { user, sub } = useAccount()
   const { logout } = useSession()
-  const items = NAV.filter((n) => n.roles.includes(user.role))
+  const loc = useLocation()
+  const scale = useScaleStatus()
+  const items = NAV.filter((n) => n.roles.includes(user.role) && (n.to !== '/scale-db' || scale.online || loc.pathname === '/scale-db'))
   const mobileItems = items.filter((n) => n.mobile.includes(user.role))
   const [menuOpen, setMenuOpen] = useState(false)
-  const loc = useLocation()
   const current = items.find((n) => (n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to)))
 
   // Nav bar picks up its hairline + material only once content scrolls under it (iOS behavior).
@@ -140,7 +144,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <>
                   <n.icon className={cx('size-[19px]', isActive ? 'text-white' : 'text-brand-600')} />
                   {n.label}
-                  {n.to === '/mock' && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
+                  {(n.to === '/mock' || n.to === '/scale-db') && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
                 </>
               )}
             </NavLink>

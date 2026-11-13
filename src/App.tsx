@@ -9,6 +9,7 @@ import { MockConsole } from './pages/MockConsole'
 import { NewShipment } from './pages/NewShipment'
 import { ReferenceData } from './pages/ReferenceData'
 import { Reports } from './pages/Reports'
+import { ScaleDb } from './pages/ScaleDb'
 import { ShipmentDetail } from './pages/ShipmentDetail'
 import { Shipments } from './pages/Shipments'
 import { SessionProvider, useSession } from './session'
@@ -35,6 +36,7 @@ function AppRoutes() {
         <Route path="/reports" element={<Guard roles={['admin', 'report']}><Reports /></Guard>} />
         <Route path="/refs" element={<Guard roles={['admin']}><ReferenceData /></Guard>} />
         <Route path="/mock" element={<MockConsole />} />
+        <Route path="/scale-db" element={<Guard roles={['admin']}><ScaleDb /></Guard>} />
         <Route path="*" element={<Navigate to={home[user.role]} replace />} />
       </Routes>
     </Layout>
