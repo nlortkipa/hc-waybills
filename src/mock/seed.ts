@@ -1,15 +1,11 @@
 import type { Database } from '../types'
 
-export const DB_VERSION = 6
+export const DB_VERSION = 7
 
-/** Empty database: only the login users exist; everything else is added through the app. */
+/** Empty database: only the admin exists; everything else (including other users) is added through the app. */
 export function createSeed(): Database {
   const users = [
     { id: 'u1', firstName: 'ნინო', lastName: 'ბერიძე', phone: '+995 555 00 00 01', email: 'nino@hc.ge', role: 'admin' as const },
-    { id: 'u2', firstName: 'გიორგი', lastName: 'კაპანაძე', phone: '+995 555 00 00 02', email: 'giorgi@kavkasia.ge', role: 'operator' as const, carrierId: 'c1' },
-    { id: 'u3', firstName: 'თამარ', lastName: 'ლომიძე', phone: '+995 555 00 00 03', email: 'tamar@rustavitrans.ge', role: 'operator' as const, carrierId: 'c2' },
-    { id: 'u4', firstName: 'ანა', lastName: 'გელაშვილი', phone: '+995 555 00 00 04', email: 'ana@imereticargo.ge', role: 'operator' as const, carrierId: 'c3' },
-    { id: 'u5', firstName: 'ლევან', lastName: 'კიკნაძე', phone: '+995 555 00 00 05', email: 'levan@hc.ge', role: 'report' as const },
   ]
 
   return {

@@ -55,6 +55,12 @@ export const refs = {
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord<K>
     const prev = (db.get()[col] as RefRecord<K>[]).find((r) => r.id === rec.id)
     if (prev?.deletedAt) throw new Error('ჩანაწერი წაშლილია')
+    if (col === 'users') {
+      const u = rec as User
+      if (u.role === 'operator') {
+        if (!u.carrierId || !active(db.get().carriers).some((c) => c.id === u.carrierId)) throw new Error('ოპერატორს უნდა ჰქონდეს მიბმული კარიერი')
+      } else delete u.carrierId
+    }
     if (col === 'carriers') {
       const c = rec as Carrier
       if (!c.destinations?.length) throw new Error('კარიერს უნდა ჰქონდეს მინიმუმ ერთი დასრულების მისამართი')

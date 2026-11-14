@@ -443,7 +443,8 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       if (f.showIf && !f.showIf(r)) continue
       const v = (r[f.key] ?? '').trim()
       if (!v) {
-        if (!f.optional) errs[f.key] = 'სავალდებულო ველი'
+        if (f.key === 'carrierId' && !active(d.carriers).length) errs[f.key] = 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
+        else if (!f.optional) errs[f.key] = 'სავალდებულო ველი'
         continue
       }
       const msg = f.validate?.(v, r)
