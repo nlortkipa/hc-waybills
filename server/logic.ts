@@ -4,9 +4,11 @@
  */
 import { randomBytes } from 'node:crypto'
 import { resolveRoute } from '../src/lib/route.ts'
+import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
-import type { CargoDefaults, Carrier, Database, MockSettings, Shipment, ShipmentEvent, User } from '../src/types.ts'
-import { rsge, sms } from './integrations.ts'
+import type { CargoDefaults, Carrier, Database, Driver, MockSettings, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
+import { sms } from './integrations.ts'
+import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { store as db } from './store.ts'
 
 export class HttpError extends Error {
@@ -41,9 +43,10 @@ export const auth = {
   },
 }
 
-/** What a user is allowed to see: operators only get their own carrier's shipments. */
+/** What a user is allowed to see: operators only get their own carrier's shipments. The RS.ge password never leaves the server. */
 export function viewFor(user: User): Database {
-  const d = db.get()
+  const raw = db.get()
+  const d: Database = { ...raw, rs: { ...raw.rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' } }
   if (user.role !== 'operator') return d
   const mine = new Set(d.shipments.filter((s) => s.carrierId === user.carrierId).map((s) => s.id))
   return { ...d, shipments: d.shipments.filter((s) => mine.has(s.id)), logs: d.logs.filter((l) => l.shipmentId && mine.has(l.shipmentId)) }
@@ -75,6 +78,12 @@ export const refs = {
       if (u.role === 'operator') {
         if (!u.carrierId || !active(db.get().carriers).some((c) => c.id === u.carrierId)) fail('ოპერატორს უნდა ჰქონდეს მიბმული კარიერი')
       } else delete u.carrierId
+    }
+    if (col === 'drivers') {
+      const x = rec as Driver
+      x.citizenship = x.citizenship === 'foreign' ? 'foreign' : 'GE'
+      if (x.citizenship === 'GE' && !/^\d{11}$/.test(String(x.personalId ?? '').trim())) fail('პირადი ნომერი უნდა იყოს 11 ციფრი')
+      if (!String(x.personalId ?? '').trim()) fail('შეიყვანე პირადი ნომერი')
     }
     if (col === 'carriers') {
       const c = rec as Carrier
@@ -128,6 +137,141 @@ export function saveCargo(value: CargoDefaults, user: User) {
   db.update((d) => ({ ...d, cargo: next }))
 }
 
+/* ------------------------------ RS.ge ------------------------------ */
+
+const str = (v: unknown) => String(v ?? '').trim()
+const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
+
+/** Saves the admin's RS.ge settings. An empty password keeps the stored one. */
+export function saveRsSettings(v: Partial<RsSettings>, user: User) {
+  requireAdmin(user)
+  const prev = db.get().rs
+  const su = str(v.su)
+  const sp = str(v.sp) || (su === prev.su ? prev.sp : '')
+  const credsChanged = su !== prev.su || sp !== prev.sp
+  const next: RsSettings = {
+    ...prev,
+    su,
+    sp,
+    buyerTin: str(v.buyerTin),
+    buyerName: str(v.buyerName),
+    buyerForeign: !!v.buyerForeign,
+    transporterTin: str(v.transporterTin),
+    transId: num(v.transId, 1),
+    transTxt: str(v.transTxt),
+    tranCostPayer: Number(v.tranCostPayer) === 1 ? 1 : 2,
+    transportCost: num(v.transportCost),
+    unitId: num(v.unitId, RS_UNIT_OTHER),
+    unitTxt: str(v.unitTxt),
+    price: num(v.price),
+    vatType: ([0, 1, 2] as const).find((x) => x === Number(v.vatType)) ?? 0,
+    receptionInfo: str(v.receptionInfo),
+    receiverInfo: str(v.receiverInfo),
+    comment: str(v.comment),
+  }
+  delete next.spSet
+  // New service user → the seller found by the last check no longer applies.
+  if (credsChanged) Object.assign(next, { sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined })
+  if (next.buyerTin && !/^\d{9}$|^\d{11}$/.test(next.buyerTin) && !next.buyerForeign) fail('მყიდველის ს/ნ უნდა იყოს 9 (კომპანია) ან 11 (ფიზიკური პირი) ციფრი')
+  if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
+  if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
+  if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
+  if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
+  if (credsChanged) resetRsCache()
+  db.update((d) => ({ ...d, rs: next }))
+}
+
+/** Credentials typed on the admin screen, else the stored ones. */
+function credsFrom(body: { su?: string; sp?: string } | undefined): RsCreds {
+  const rs = db.get().rs
+  const su = str(body?.su)
+  if (su && su !== rs.su) {
+    if (!str(body?.sp)) fail('შეიყვანე სერვისის პაროლი')
+    return { su, sp: str(body?.sp) }
+  }
+  if (str(body?.sp)) return { su: su || rs.su, sp: str(body?.sp) }
+  return storedCreds() ?? fail('შეიყვანე სერვისის მომხმარებელი და პაროლი')
+}
+
+const sameAsStored = (c: RsCreds) => {
+  const s = storedCreds()
+  return !!s && s.su === c.su && s.sp === c.sp
+}
+
+/** Checks the service user on RS.ge. For the stored user it also saves the seller and reference lists. */
+export async function checkRs(body: { su?: string; sp?: string } | undefined, user: User) {
+  requireAdmin(user)
+  const c = credsFrom(body)
+  const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
+  // A service user that passed the check is stored right away, so it survives a reload even if
+  // the rest of the form isn't saved yet.
+  if (!sameAsStored(c)) resetRsCache()
+  db.update((d) => ({
+    ...d,
+    rs: {
+      ...d.rs,
+      su: c.su,
+      sp: c.sp,
+      sellerUnId: r.unId,
+      sellerUserId: r.userId,
+      sellerTin: r.tin,
+      sellerName: r.name,
+      checkedAt: nowIso(),
+      units: r.units.length ? r.units : d.rs.units,
+      transTypes: r.transTypes.length ? r.transTypes : d.rs.transTypes,
+    },
+  }))
+  return { tin: r.tin, name: r.name, unId: r.unId, saved: true }
+}
+
+/** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
+export async function rsNameFromTin(body: { tin?: string; su?: string; sp?: string } | undefined, user: User) {
+  requireAdmin(user)
+  const tin = str(body?.tin)
+  if (!tin) fail('შეიყვანე საიდენტიფიკაციო ნომერი')
+  const name = await rsge.nameFromTin(credsFrom(body), tin).catch((e: Error) => fail(e.message, 502))
+  if (!name) fail('ამ ნომრით გადამხდელი ვერ მოიძებნა')
+  return { name }
+}
+
+/** Builds the waybill for a shipment from the admin's settings and the chosen route, driver and truck. */
+function buildWaybill(d: Database, s: Pick<Shipment, 'carrierId' | 'destinationId' | 'driverId' | 'truckId' | 'cargo' | 'quantity'>): RsWaybillPayload {
+  const rs = d.rs
+  const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
+  const driver = d.drivers.find((x) => x.id === s.driverId)!
+  const truck = d.trucks.find((x) => x.id === s.truckId)!
+  const unitTxt = rs.unitId === RS_UNIT_OTHER ? rs.unitTxt : (rs.units.find((u) => u.id === rs.unitId)?.name ?? '')
+  const amount = Math.round(s.quantity * rs.price * 100) / 100
+  return {
+    type: 2, // მიწოდება ტრანსპორტირებით
+    buyerTin: rs.buyerTin,
+    buyerForeign: rs.buyerForeign,
+    buyerName: rs.buyerName,
+    startAddress: route.start,
+    endAddress: route.end,
+    driverTin: driver.personalId.trim(),
+    driverForeign: driver.citizenship === 'foreign',
+    driverName: `${driver.firstName} ${driver.lastName}`,
+    // RS.ge stores plates without dashes: AA-123-BB → AA123BB.
+    carNumber: truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+    transId: rs.transId,
+    transTxt: rs.transId === RS_TRANS_OTHER ? rs.transTxt : '',
+    tranCostPayer: rs.tranCostPayer,
+    transportCost: rs.transportCost,
+    transporterTin: rs.transporterTin,
+    receptionInfo: rs.receptionInfo,
+    receiverInfo: rs.receiverInfo,
+    // RS.ge has no trailer field, so the trailer goes into the comment.
+    comment: [truck.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, rs.comment].filter(Boolean).join('; '),
+    goods: [{ name: s.cargo.description, unitId: rs.unitId, unitTxt, quantity: s.quantity, price: rs.price, amount, barCode: s.cargo.code, vatType: rs.vatType }],
+  }
+}
+
+const rsNotReady = (d: Database) => {
+  const missing = rsMissing(d.rs, { hasCreds: !!storedCreds() })
+  return missing.length ? `RS.ge პარამეტრები არ არის შევსებული (${missing.join(', ')}) — მიმართე ადმინისტრატორს` : null
+}
+
 /* ---------------------------- Shipments ---------------------------- */
 
 function patch(id: string, fn: (s: Shipment) => Partial<Shipment>, event?: Omit<ShipmentEvent, 'at'>) {
@@ -168,6 +312,8 @@ export const shipments = {
     // Cargo and declared quantity are fixed by the admin, never taken from the request.
     const { quantity, ...cargo } = d.cargo
     if (!cargo.description || !(quantity > 0)) fail('ფიქსირებული ტვირთი არ არის დაყენებული — მიმართე ადმინისტრატორს')
+    const notReady = rsNotReady(d)
+    if (notReady) fail(notReady)
     const s: Shipment = {
       id: uid('s'),
       createdAt: nowIso(),
@@ -178,6 +324,7 @@ export const shipments = {
       truckId: input.truckId,
       cargo,
       quantity,
+      rsWaybill: buildWaybill(d, { ...input, cargo, quantity }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
@@ -213,6 +360,30 @@ export const shipments = {
     }
   },
 
+  /** Completes (close_waybill) or cancels (ref_waybill) an uploaded waybill on RS.ge. */
+  async finish(id: string, action: 'close' | 'cancel', user: User) {
+    const s = get(id, user)
+    if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
+    if (s.status !== 'uploaded' || s.waybillState) fail('ზედნადები არ არის აქტიური')
+    if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია — დაასრულე ან გააუქმე RS.ge-ს პორტალიდან')
+    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    running.add(id)
+    try {
+      if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id)
+      else await rsge.cancelWaybill(s.rsWaybillId!, id)
+    } catch (e) {
+      const msg = (e as Error).message
+      patch(id, () => ({}), { level: 'error', message: msg })
+      fail(msg, 502)
+    } finally {
+      running.delete(id)
+    }
+    patch(id, () => ({ waybillState: action === 'close' ? 'closed' : 'cancelled' }), {
+      level: 'success',
+      message: action === 'close' ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე` : `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`,
+    })
+  },
+
   /** On server start: finish pipelines interrupted by a restart. */
   resumeAll() {
     db.get()
@@ -225,34 +396,25 @@ async function runPipeline(id: string) {
   let s = get(id)
   const d = db.get()
 
-  // 1. RS.ge — create waybill
+  // 1. RS.ge — save the waybill (→ ID), then activate it (→ number)
   if (s.rs.status !== 'ok') {
-    const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
-    const driver = d.drivers.find((x) => x.id === s.driverId)!
-    const truck = d.trucks.find((x) => x.id === s.truckId)!
-    const carrier = d.carriers.find((x) => x.id === s.carrierId)!
     if (s.status === 'rs_failed') patch(id, () => ({}), { level: 'info', message: 'RS.ge-ზე ატვირთვის ხელახალი ცდა' })
     patch(id, () => ({ status: 'uploading', rs: { status: 'running' } }))
     try {
-      const res = await rsge.createWaybill(
-        {
-          waybill_type: 2,
-          seller_un_id: carrier.id,
-          start_address: route.start,
-          end_address: route.end,
-          driver_tin: driver.personalId,
-          driver_name: `${driver.firstName} ${driver.lastName}`,
-          car_number: truck.plateNumber,
-          trailer: truck.trailerNumber,
-          transport_coast: 0,
-          goods_list: [{ w_name: s.cargo.description, unit_id: 2, quantity: s.quantity, bar_code: s.cargo.code }],
-        },
-        id,
-      )
+      const notReady = rsNotReady(d)
+      if (notReady) throw new Error(notReady)
+      // Shipments from before RS.ge settings existed get their waybill built now.
+      const payload = s.rsWaybill ?? buildWaybill(d, s)
+      let waybillId = s.rsWaybillId
+      if (!waybillId) {
+        waybillId = await rsge.saveWaybill(payload, id)
+        patch(id, () => ({ rsWaybill: payload, rsWaybillId: waybillId }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+      }
+      const number = await rsge.sendWaybill(waybillId, id)
       patch(
         id,
-        () => ({ status: 'uploaded', waybillNumber: res.waybill_number, rs: { status: 'ok', at: nowIso() } }),
-        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${res.waybill_number}` },
+        () => ({ status: 'uploaded', waybillNumber: number, rs: { status: 'ok', at: nowIso() } }),
+        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}` },
       )
     } catch (e) {
       const msg = (e as Error).message
@@ -291,7 +453,7 @@ async function sendSms(id: string) {
 export const mock = {
   updateSettings(p: Partial<MockSettings>) {
     const next: Partial<MockSettings> = {}
-    for (const k of ['latencyMs', 'rsFailRate', 'smsFailRate'] as const) if (k in p && Number.isFinite(Number(p[k]))) next[k] = Number(p[k])
+    for (const k of ['latencyMs', 'smsFailRate'] as const) if (k in p && Number.isFinite(Number(p[k]))) next[k] = Number(p[k])
     db.update((d) => ({ ...d, settings: { ...d.settings, ...next } }))
   },
   clearLogs() {

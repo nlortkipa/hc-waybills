@@ -1,12 +1,13 @@
-import { Building2, Lock, Package, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
+import { Building2, FileText, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { cargo, refs, type RefCollection } from '../api'
+import { refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
+import { RsSettingsCard } from './RsSettingsCard'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -37,7 +38,8 @@ interface TabDef {
 const vPhone = (v: string) => (/^5\d{8}$/.test(phoneKey(v)) ? null : 'ფორმატი: 5XX XX XX XX')
 /** '+995 575780323' → '575 78 03 23' */
 const fmtPhone = (v: string) => phoneKey(v).replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4')
-const vPid = (v: string) => (/^\d{11}$/.test(v.trim()) ? null : 'პირადი ნომერი უნდა იყოს 11 ციფრი')
+/** Georgian citizens: 11-digit personal number. Foreigners: passport / ID number as issued. */
+const vPid = (v: string, r: Rec) => (r.citizenship === 'foreign' || /^\d{11}$/.test(v.trim()) ? null : 'პირადი ნომერი უნდა იყოს 11 ციფრი')
 const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-ფოსტა არასწორია')
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
@@ -86,12 +88,21 @@ const TABS: TabDef[] = [
       { key: 'lastName', label: 'გვარი' },
       { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true },
       { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
+      {
+        key: 'citizenship',
+        label: 'მოქალაქეობა',
+        type: 'select',
+        options: () => [
+          { value: 'GE', label: 'საქართველოს მოქალაქე' },
+          { value: 'foreign', label: 'უცხოელი' },
+        ],
+      },
     ],
     title: (r) => `${r.firstName} ${r.lastName}`,
-    subtitle: (r) => `${fmtPhone(r.phone!)} · ${r.personalId}`,
+    subtitle: (r) => `${fmtPhone(r.phone!)} · ${r.personalId}${r.citizenship === 'foreign' ? ' · უცხოელი' : ''}`,
     columns: [
       { label: 'სახელი', render: (r) => <span className="font-medium text-slate-900">{r.firstName} {r.lastName}</span> },
-      { label: 'პირადი ნომერი', render: (r) => <span className="font-mono text-[13px]">{r.personalId}</span> },
+      { label: 'პირადი ნომერი', render: (r) => <span className="font-mono text-[13px]">{r.personalId}{r.citizenship === 'foreign' && <span className="ml-1.5 font-sans text-xs text-slate-500">უცხოელი</span>}</span> },
       { label: 'ტელეფონი', render: (r) => fmtPhone(r.phone!) },
     ],
   },
@@ -147,8 +158,9 @@ export function ReferenceData() {
   const d = useDb()
   const toast = useToast()
   const user = useUser()
-  const [tabKey, setTabKey] = useState<RefCollection | 'cargo'>('carriers')
-  const isCargo = tabKey === 'cargo'
+  const [tabKey, setTabKey] = useState<RefCollection | 'rs'>('carriers')
+  /** The RS.ge tab is one settings form (cargo + waybill fields), not a list. */
+  const isCargo = tabKey === 'rs'
   const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0]
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Rec | null>(null)
@@ -187,7 +199,7 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მძღოლები, მანქანები, მომხმარებლები და ტვირთი."
+        subtitle="კარიერები, მძღოლები, მანქანები, მომხმარებლები და RS.ge (ტვირთი, მყიდველი, ზედნადები)."
         actions={
           !isCargo && (
             <span className="hidden sm:block">
@@ -218,18 +230,18 @@ export function ReferenceData() {
           </button>
         ))}
         <button
-          onClick={() => setTabKey('cargo')}
+          onClick={() => setTabKey('rs')}
           className={cx(
             'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] transition-all duration-200 sm:h-7 sm:rounded-[7px]',
             isCargo ? 'bg-brand-600 font-semibold text-white sm:bg-white sm:text-slate-900 sm:shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)] sm:dark:bg-slate-400' : 'bg-surface font-medium text-slate-600 sm:bg-transparent',
           )}
         >
-          <Package className="size-4" />
-          ტვირთი
+          <FileText className="size-4" />
+          RS.ge
         </button>
       </div>
 
-      {isCargo && <CargoDefaultsCard />}
+      {tabKey === 'rs' && <RsSettingsCard />}
 
       <div className={cx('mb-4 flex gap-2', isCargo && 'hidden')}>
         <div className="relative flex-1">
@@ -313,85 +325,6 @@ export function ReferenceData() {
   )
 }
 
-/** The cargo and declared quantity stamped on every new shipment. Free text, set by the admin. */
-function CargoDefaultsCard() {
-  const d = useDb()
-  const user = useUser()
-  const toast = useToast()
-  const [form, setForm] = useState({
-    description: d.cargo.description,
-    code: d.cargo.code,
-    quantity: String(d.cargo.quantity),
-  })
-  const [errors, setErrors] = useState<Record<string, string>>({})
-  const [busy, setBusy] = useState(false)
-  const dirty = form.description.trim() !== d.cargo.description || form.code.trim() !== d.cargo.code || Number(form.quantity) !== d.cargo.quantity
-
-  const set = (k: keyof typeof form) => (e: { target: { value: string } }) => {
-    setForm((f) => ({ ...f, [k]: e.target.value }))
-    setErrors((x) => ({ ...x, [k]: '' }))
-  }
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault()
-    const errs: Record<string, string> = {}
-    if (!form.description.trim()) errs.description = 'სავალდებულო ველი'
-    const q = Number(form.quantity)
-    if (!form.code.trim()) errs.code = 'სავალდებულო ველი'
-    if (!form.quantity || !(q > 0)) errs.quantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
-    setErrors(errs)
-    if (Object.keys(errs).length) return
-    setBusy(true)
-    try {
-      await cargo.save(
-        {
-          description: form.description,
-          code: form.code,
-          quantity: q,
-        },
-        user,
-      )
-      toast('success', 'ტვირთი შენახულია')
-    } catch (err) {
-      toast('error', (err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Card className="p-5 sm:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600">
-          <Lock className="size-4" />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">ტვირთი ყველა რეისისთვის</h3>
-          <p className="text-xs text-slate-500">ავტომატურად ემატება ყველა ახალ რეისს — ოპერატორი ამას ვერ ცვლის. უკვე შექმნილი რეისები არ იცვლება.</p>
-        </div>
-      </div>
-      <form onSubmit={save} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
-        <div className="sm:col-span-2">
-          <Field label="ტვირთის დასახელება" error={errors.description}>
-            <Input value={form.description} placeholder="მაგ. ღორღი 0–5 მმ" invalid={!!errors.description} onChange={set('description')} />
-          </Field>
-        </div>
-        <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
-          <Input type="number" inputMode="decimal" step="0.1" min="0" value={form.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
-        </Field>
-        <Field label="ტვირთის კოდი" error={errors.code}>
-          <Input value={form.code} placeholder="CRS-05" className="font-mono" invalid={!!errors.code} onChange={set('code')} />
-        </Field>
-        <div className="flex items-end justify-end sm:col-span-2">
-          <Button type="submit" loading={busy} disabled={!dirty}>
-            შენახვა
-          </Button>
-        </div>
-      </form>
-    </Card>
-  )
-}
-
 function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name: string }) {
   const user = useUser()
   const blocker = refs.blocker(col, id, user)
@@ -424,7 +357,8 @@ function RowActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => 
 function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () => void }) {
   const d = useDb()
   const toast = useToast()
-  const [r, setR] = useState<Rec>(rec)
+  // Drivers saved before citizenship existed are Georgian citizens.
+  const [r, setR] = useState<Rec>(() => (tab.key === 'drivers' && !rec.citizenship ? { ...rec, citizenship: 'GE' } : rec))
   const hasDests = tab.key === 'carriers'
   const [dests, setDests] = useState<Destination[]>(() => destsOf(rec).map((x) => ({ ...x })))
   const [errors, setErrors] = useState<Record<string, string>>({})

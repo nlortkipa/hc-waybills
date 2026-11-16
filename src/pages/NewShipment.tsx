@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { shipments } from '../api'
 import { Button, Card, Field, PageHeader, Select } from '../components/ui'
 import { active, formatTonnes } from '../lib/util'
+import { rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -29,6 +30,8 @@ export function NewShipment() {
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
   const item = d.cargo.description ? d.cargo : undefined
+  // Operators don't see the service user, so only check what they can see; the server checks the rest.
+  const rsNotReady = rsMissing(d.rs, { hasCreds: true }).length > 0
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -118,6 +121,10 @@ export function NewShipment() {
               <span className="text-slate-500">ტვირთი: </span>
               <span className="font-medium text-slate-900">{item ? `${item.description} · ${formatTonnes(d.cargo.quantity)}` : 'არ არის დაყენებული — მიმართე ადმინისტრატორს'}</span>
             </div>
+
+            {rsNotReady && (
+              <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge პარამეტრები (მყიდველი, ერთეული, ფასი) არ არის შევსებული — მიმართე ადმინისტრატორს.</div>
+            )}
 
             <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
               <Button type="button" variant="secondary" onClick={() => nav(-1)}>

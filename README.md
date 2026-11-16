@@ -44,7 +44,7 @@ flowchart LR
 
 The app is a React + TypeScript front end (Vite, Tailwind) plus a small Node API server (`server/`, no dependencies). The front end runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com). Browsers and the Android app all talk to the same server, which owns the data, enforces roles and runs the RS.ge → SMS pipeline.
 
-> **RS.ge and SMS are mocked** (`server/integrations.ts`). Data is stored by the server in `server/data/db.json` (override with `HC_DB_FILE`). Delete that file to start over with only the admin.
+> **SMS is mocked** (`server/integrations.ts`). **RS.ge** is called for real (`server/rsge.ts`) with the service user the admin enters. There is no simulator. Data is stored by the server in `server/data/db.json` (override with `HC_DB_FILE`). Delete that file to start over with only the admin.
 
 ### Dependencies
 
@@ -88,7 +88,28 @@ The interface is in Georgian.
 
 1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. As admin, add carriers, drivers, trucks and other users (each with their own phone number) in **ცნობარები**. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
 2. As an operator, open **ახალი რეისი** (new shipment), pick the end address, driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
-3. In **სატესტო პანელი** (mock console): watch every request and response, change latency, force RS.ge or SMS failures (to test retries), and reset the demo data.
+3. In **სატესტო პანელი** (mock console): watch every request and response, change SMS latency, force SMS failures (to test retries), and reset the demo data.
+
+### RS.ge waybills
+
+Protocol: [`docs/rs-ge/waybill_protocol.pdf`](docs/rs-ge/waybill_protocol.pdf) (official, v4.0.4, from eservices.rs.ge → სერვისების დოკუმენტაცია). SOAP endpoint `https://services.rs.ge/WayBillService/WayBillService.asmx` (override with `RS_WAYBILL_URL`).
+
+RS.ge has no separate sandbox host: everything goes to the normal endpoint, and waybills belong to whoever owns the service user. The test users in the protocol (`tbilisi` / `satesto2`, password `123456`) are rejected as of Nov 2026, so use a service user from RS.ge (for testing, cancel each waybill right after with **გაუქმება**).
+
+Setup (admin, **ცნობარები → RS.ge**):
+
+1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and enter its user name (`su`) and password (`sp`). The password is stored only on the server and never sent to browsers. If none is entered, `RS_SU` / `RS_SP` from the server's environment are used.
+2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
+3. Fill in the buyer (tax ID, name; **მოძებნა** looks the name up on RS.ge), unit, price, VAT type and transport fields. They apply to every shipment.
+
+Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry never creates a duplicate) and then `send_waybill` (activates it and returns the waybill number). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. Every call appears in the mock console with the password masked.
+
+Mapping notes:
+- RS.ge has no trailer field: the trailer number is written into `COMMENT`.
+- Plate numbers are sent without dashes (`AA-123-BB` → `AA123BB`).
+- Quantity is in tonnes; pick a tonne unit, or "other" (99) with the name ტონა (the default).
+- Drivers have a citizenship (Georgian / foreign) → `CHEK_DRIVER_TIN`; foreigners can have a non-11-digit ID.
+- `TRANSPORTER_TIN` is sent only when filled in. RS.ge then expects the transport company to activate the waybill, so leave it empty unless that's how you work.
 
 ### Mock assumptions to confirm with the client
 

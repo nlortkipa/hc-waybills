@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { defaultRsSettings } from '../lib/rs'
 import type { Database } from '../types'
 import { api, getToken, onAuthLost } from './client'
 
@@ -15,8 +16,9 @@ const EMPTY: Database = {
   users: [],
   shipments: [],
   logs: [],
-  settings: { latencyMs: 0, rsFailRate: 0, smsFailRate: 0 },
+  settings: { latencyMs: 0, smsFailRate: 0 },
   cargo: { description: '', code: '', quantity: 0 },
+  rs: defaultRsSettings(),
 }
 
 let state: Database = EMPTY

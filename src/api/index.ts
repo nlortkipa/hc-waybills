@@ -3,7 +3,7 @@
  * and enforces the rules; reads come from the synced copy in ./store.
  */
 import { active } from '../lib/util'
-import type { CargoDefaults, Database, MockSettings, Shipment, User } from '../types'
+import type { CargoDefaults, Database, MockSettings, RsSettings, Shipment, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -81,8 +81,25 @@ export const refs = {
 
 export const cargo = {
   /** Sets the cargo and declared quantity used for every new shipment. Admin only. */
-  async save(value: CargoDefaults, _user: User) {
+  async save(value: CargoDefaults, _user?: User) {
     await call('PUT', '/api/cargo', value)
+  },
+}
+
+/* ------------------------------ RS.ge ------------------------------ */
+
+export const rsSettings = {
+  /** Saves the RS.ge settings. Leave `sp` empty to keep the stored password. Admin only. */
+  async save(value: Partial<RsSettings>) {
+    await call('PUT', '/api/rs', value)
+  },
+  /** Tests a service user on RS.ge (typed values, or the stored ones when empty). */
+  check(creds: { su?: string; sp?: string }) {
+    return call<{ tin: string; name: string; unId: number; saved: boolean }>('POST', '/api/rs/check', creds)
+  },
+  /** Taxpayer name for a tax ID / personal number, from RS.ge. */
+  nameFromTin(tin: string, creds: { su?: string; sp?: string }) {
+    return api<{ name: string }>('POST', '/api/rs/name', { tin, ...creds })
   },
 }
 
@@ -114,6 +131,11 @@ export const shipments = {
 
   async retrySms(id: string) {
     await call('POST', `/api/shipments/${encodeURIComponent(id)}/retry-sms`)
+  },
+
+  /** Completes (goods delivered) or cancels the shipment's waybill on RS.ge. */
+  async finish(id: string, action: 'close' | 'cancel') {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/${action}`)
   },
 
   isRunning: (id: string) => {

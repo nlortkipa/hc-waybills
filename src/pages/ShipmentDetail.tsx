@@ -1,8 +1,8 @@
-import { ArrowLeft, Copy, FileText, MessageSquare, RotateCw } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ArrowLeft, Ban, CheckCheck, Copy, FileText, MessageSquare, RotateCw } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { Badge, Button, Card, EmptyState, StatusBadge, StepIcon } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, EmptyState, StatusBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
@@ -17,6 +17,8 @@ export function ShipmentDetail() {
   const L = useLookup()
   const toast = useToast()
   const s = d.shipments.find((x) => x.id === id)
+  const [confirm, setConfirm] = useState<'close' | 'cancel' | null>(null)
+  const [busy, setBusy] = useState(false)
 
   if (!s || (user.role === 'operator' && s.carrierId !== user.carrierId)) {
     return <EmptyState icon={<FileText className="size-6" />} title="რეისი ვერ მოიძებნა" action={<Link to="/shipments" className="text-sm font-medium text-brand-600">რეისებზე დაბრუნება</Link>} />
@@ -27,6 +29,23 @@ export function ShipmentDetail() {
   const truck = L.truck(s.truckId)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
+  const canFinish = canAct && s.status === 'uploaded' && !s.waybillState && !!s.rsWaybillId
+  const w = s.rsWaybill
+  const good = w?.goods[0]
+
+  const finish = async () => {
+    if (!confirm) return
+    setBusy(true)
+    try {
+      await shipments.finish(s.id, confirm)
+      toast('success', confirm === 'close' ? 'ზედნადები დასრულდა' : 'ზედნადები გაუქმდა')
+      setConfirm(null)
+    } catch (e) {
+      toast('error', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const steps: { title: string; icon: ReactNode; status: StepStatus; detail: ReactNode; action?: ReactNode }[] = [
     {
@@ -64,11 +83,24 @@ export function ShipmentDetail() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="font-mono text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{s.waybillNumber ? `№ ${s.waybillNumber}` : 'ზედნადები მოლოდინშია'}</h1>
             <StatusBadge status={s.status} />
+            {s.waybillState === 'closed' && <Badge tone="gray">დასრულებული</Badge>}
+            {s.waybillState === 'cancelled' && <Badge tone="red">გაუქმებული</Badge>}
           </div>
           <p className="mt-1 text-sm text-slate-500">
             შექმნა {creator ? `${creator.firstName} ${creator.lastName}` : '—'} · {formatDateTime(s.createdAt)} · {x.carrier}
           </p>
         </div>
+        <div className="flex flex-wrap gap-2">
+        {canFinish && (
+          <>
+            <Button variant="secondary" size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setConfirm('close')}>
+              დასრულება
+            </Button>
+            <Button variant="secondary" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setConfirm('cancel')}>
+              გაუქმება
+            </Button>
+          </>
+        )}
         {s.waybillNumber && (
           <Button
             variant="secondary"
@@ -81,6 +113,7 @@ export function ShipmentDetail() {
             № კოპირება
           </Button>
         )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -142,6 +175,22 @@ export function ShipmentDetail() {
             </dl>
           </Card>
 
+          {w && (
+            <Card className="p-5">
+              <h2 className="mb-3 text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
+              <dl className="divide-y divide-separator text-sm">
+                <Info k="მყიდველი" v={w.buyerName} />
+                <Info k="მყიდველის ს/ნ" v={w.buyerTin} mono />
+                {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
+                <Info k="ერთეული" v={good && (good.unitTxt || String(good.unitId))} />
+                <Info k="ფასი" v={good && `${good.price.toFixed(2)} ₾`} />
+                <Info k="თანხა" v={good && `${good.amount.toFixed(2)} ₾`} />
+                {w.comment && <Info k="კომენტარი" v={w.comment} />}
+                {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+              </dl>
+            </Card>
+          )}
+
           {s.sms.text && (
             <Card className="p-5">
               <div className="mb-3 flex items-center justify-between">
@@ -154,6 +203,20 @@ export function ShipmentDetail() {
           )}
         </div>
       </div>
+
+      <ConfirmModal
+        open={!!confirm}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => void finish()}
+        busy={busy}
+        title={confirm === 'close' ? 'დასრულდეს ზედნადები?' : 'გაუქმდეს ზედნადები?'}
+        confirmLabel={confirm === 'close' ? 'დასრულება' : 'გაუქმება'}
+        message={
+          confirm === 'close'
+            ? `ზედნადები №${s.waybillNumber} RS.ge-ზე მოინიშნება მიწოდებულად. ამის შემდეგ მისი შეცვლა აღარ იქნება შესაძლებელი.`
+            : `ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება. ეს მოქმედება შეუქცევადია.`
+        }
+      />
     </>
   )
 }

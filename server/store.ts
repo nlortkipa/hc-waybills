@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createSeed, DB_VERSION } from './seed.ts'
+import { createSeed, migrate } from './seed.ts'
 import type { Database } from '../src/types.ts'
 
 const FILE = process.env.HC_DB_FILE ?? join(import.meta.dirname, 'data', 'db.json')
@@ -23,15 +23,20 @@ function load(): Stored {
   try {
     if (!existsSync(FILE) && existsSync(LEGACY)) {
       const legacy = JSON.parse(readFileSync(LEGACY, 'utf8')) as Database
-      if (legacy.version === DB_VERSION) {
+      const db = migrate(legacy)
+      if (db) {
         console.log(`[db] imported existing data from ${LEGACY}`)
-        return { db: legacy, sessions: {} }
+        return { db, sessions: {} }
       }
     }
     if (existsSync(FILE)) {
       const s = JSON.parse(readFileSync(FILE, 'utf8')) as Stored
-      if (s.db?.version === DB_VERSION) return { db: s.db, sessions: s.sessions ?? {} }
-      console.warn(`[db] ${FILE} has schema v${s.db?.version}, expected v${DB_VERSION} — starting fresh`)
+      const db = s.db && migrate(s.db)
+      if (db) {
+        if (db.version !== s.db.version) console.log(`[db] upgraded ${FILE} from schema v${s.db.version} to v${db.version}`)
+        return { db, sessions: s.sessions ?? {} }
+      }
+      console.warn(`[db] ${FILE} has schema v${s.db?.version}, which can't be upgraded — starting fresh`)
     }
   } catch (e) {
     console.error(`[db] could not read ${FILE}:`, e)

@@ -25,7 +25,7 @@ export function Reports() {
       }),
     [d, user, from, to, carrier],
   )
-  const uploaded = useMemo(() => rows.filter((s) => s.status === 'uploaded'), [rows])
+  const uploaded = useMemo(() => rows.filter((s) => s.status === 'uploaded' && s.waybillState !== 'cancelled'), [rows])
   const declaredT = uploaded.reduce((a, s) => a + s.quantity, 0)
   const smsSent = rows.filter((s) => s.sms.status === 'ok').length
   const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed').length
@@ -55,7 +55,7 @@ export function Reports() {
     for (const s of rows) {
       const e = m.get(s.carrierId) ?? { n: 0, uploaded: 0, t: 0, failed: 0 }
       e.n++
-      if (s.status === 'uploaded') {
+      if (s.status === 'uploaded' && s.waybillState !== 'cancelled') {
         e.uploaded++
         e.t += s.quantity
       }
@@ -70,7 +70,7 @@ export function Reports() {
       ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
       ...rows.map((s) => {
         const x = L.describe(s)
-        return [s.waybillNumber ?? '', s.createdAt, x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', statusMeta[s.status].label]
+        return [s.waybillNumber ?? '', s.createdAt, x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
       }),
     ])
   }

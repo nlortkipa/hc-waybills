@@ -29,7 +29,7 @@ export function MockConsole() {
 
   return (
     <>
-      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge და SMS და ნახე ყველა მოთხოვნა." />
+      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული SMS და ნახე ყველა მოთხოვნა (RS.ge — სატესტო მომხმარებლით)." />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="space-y-6">
@@ -37,7 +37,6 @@ export function MockConsole() {
             <h2 className="text-sm font-semibold text-slate-900">სიმულაცია</h2>
             <div className="mt-4 space-y-5">
               <Slider label="ქსელის დაყოვნება" value={s.latencyMs} min={100} max={4000} step={100} unit=" მწმ" onChange={(v) => mock.updateSettings({ latencyMs: v })} />
-              <Slider label="RS.ge შეცდომების %" value={s.rsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ rsFailRate: v })} />
               <Slider label="SMS შეცდომების %" value={s.smsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ smsFailRate: v })} />
             </div>
           </Card>

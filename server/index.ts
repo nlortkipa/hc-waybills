@@ -10,7 +10,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, HttpError, mock, REF_COLLECTIONS, refs, saveCargo, shipments, viewFor, type RefCollection } from './logic.ts'
+import { auth, checkRs, HttpError, mock, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -37,9 +37,13 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['PUT', /^\/api\/refs\/(\w+)$/, ({ params, body, user }) => refs.save(refCol(params[0]), body, user)],
   ['DELETE', /^\/api\/refs\/(\w+)\/([\w-]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), params[1], user)],
   ['PUT', /^\/api\/cargo$/, ({ body, user }) => saveCargo(body, user)],
+  ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
+  ['POST', /^\/api\/rs\/check$/, ({ body, user }) => checkRs(body, user)],
+  ['POST', /^\/api\/rs\/name$/, ({ body, user }) => rsNameFromTin(body, user)],
   ['POST', /^\/api\/shipments$/, ({ body, user }) => ({ id: shipments.create(body ?? {}, user) })],
   ['POST', /^\/api\/shipments\/([\w-]+)\/run$/, ({ params, user }) => void shipments.run(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/retry-sms$/, ({ params, user }) => void shipments.retrySms(params[0], user).catch(() => {})],
+  ['POST', /^\/api\/shipments\/([\w-]+)\/(close|cancel)$/, ({ params, user }) => shipments.finish(params[0], params[1] as 'close' | 'cancel', user)],
   ['PATCH', /^\/api\/mock\/settings$/, ({ body }) => mock.updateSettings(body ?? {})],
   ['DELETE', /^\/api\/mock\/logs$/, () => mock.clearLogs()],
   ['POST', /^\/api\/mock\/reset$/, ({ user }) => mock.reset(user)],

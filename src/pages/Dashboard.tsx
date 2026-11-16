@@ -17,7 +17,7 @@ export function Dashboard() {
   const todays = rows.filter((s) => new Date(s.createdAt).toDateString() === today)
   const waiting = rows.filter((s) => s.status === 'uploading' || s.sms.status === 'running')
   const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed')
-  const uploadedToday = todays.filter((s) => s.status === 'uploaded')
+  const uploadedToday = todays.filter((s) => s.status === 'uploaded' && s.waybillState !== 'cancelled')
 
   return (
     <>
