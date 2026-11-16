@@ -1,4 +1,4 @@
-import type { Carrier, Destination } from '../types'
+import type { Carrier, Destination } from '../types.ts'
 
 export interface ResolvedRoute {
   carrier?: Carrier

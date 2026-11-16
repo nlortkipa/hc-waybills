@@ -1,10 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { auth } from './api'
-import { useDb } from './mock/db'
+import { getToken, onAuthLost } from './api/client'
+import { useDb, useDbLoaded } from './api/store'
 import type { User } from './types'
 
 interface Session {
   user: User | null
+  /** True while a saved login is being restored from the server. */
+  restoring: boolean
   login: (phone: string) => Promise<void>
   logout: () => void
 }
@@ -12,21 +15,35 @@ interface Session {
 const Ctx = createContext<Session | null>(null)
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [userId, setUserId] = useState<string | null>(() => auth.current()?.id ?? null)
+  const [userId, setUserId] = useState<string | null>(null)
+  const [restoring, setRestoring] = useState(() => !!getToken())
   const d = useDb()
-  // Always read the user from the DB so admin edits (e.g. carrier change) apply live.
-  const user = d.users.find((u) => u.id === userId && !u.deletedAt) ?? null
+  const loaded = useDbLoaded()
+  // Always read the user from the synced data so admin edits (e.g. carrier change) apply live.
+  const user = (loaded && d.users.find((u) => u.id === userId && !u.deletedAt)) || null
+
+  useEffect(() => {
+    if (!getToken()) return
+    auth.current().then((u) => {
+      setUserId(u?.id ?? null)
+      setRestoring(false)
+    })
+  }, [])
+  useEffect(() => {
+    const off = onAuthLost(() => setUserId(null))
+    return () => void off()
+  }, [])
 
   const login = useCallback(async (phone: string) => {
     const u = await auth.loginByPhone(phone)
     setUserId(u.id)
   }, [])
   const logout = useCallback(() => {
-    auth.logout()
+    void auth.logout()
     setUserId(null)
   }, [])
 
-  const value = useMemo(() => ({ user, login, logout }), [user, login, logout])
+  const value = useMemo(() => ({ user, restoring: restoring || (!!userId && !loaded), login, logout }), [user, restoring, userId, loaded, login, logout])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

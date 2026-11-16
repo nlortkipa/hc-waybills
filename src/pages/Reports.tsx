@@ -4,7 +4,7 @@ import { visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
 import { cx, downloadCsv, formatDay, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10)

@@ -4,7 +4,7 @@ import { cargo, refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
 

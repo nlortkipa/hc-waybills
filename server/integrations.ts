@@ -1,11 +1,11 @@
 /**
  * External services: RS.ge and SMS are MOCKED. Every call is written to the
  * integration log so the flow can be inspected in the Mock console.
- * To go live, replace the bodies with real HTTP calls (server-side).
+ * To go live, replace the bodies with real HTTP calls.
  */
-import { db } from '../mock/db'
-import { nowIso, sleep, uid } from '../lib/util'
-import type { IntegrationLog, ServiceName } from '../types'
+import { nowIso, sleep, uid } from '../src/lib/util.ts'
+import type { IntegrationLog, ServiceName } from '../src/types.ts'
+import { store as db } from './store.ts'
 
 export class IntegrationError extends Error {
   readonly service: ServiceName

@@ -6,7 +6,7 @@ import { Badge, Button, Card, EmptyState, StatusBadge, StepIcon } from '../compo
 import { useToast } from '../components/toast'
 import { cx, formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { StepStatus } from '../types'
 
@@ -35,7 +35,7 @@ export function ShipmentDetail() {
       status: s.rs.status,
       detail: s.rs.status === 'ok' ? <>ზედნადები <b className="font-mono">№{s.waybillNumber}</b></> : s.rs.error ?? (s.rs.status === 'running' ? 'იტვირთება…' : 'მოლოდინში'),
       action: canAct && s.status === 'rs_failed' && (
-        <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => void shipments.run(s.id)}>
+        <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.run(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა ცდა
         </Button>
       ),
@@ -46,7 +46,7 @@ export function ShipmentDetail() {
       status: s.sms.status,
       detail: s.sms.status === 'ok' ? `გაეგზავნა ${s.sms.to}` : s.sms.error ?? (s.sms.status === 'running' ? 'იგზავნება…' : s.sms.status === 'skipped' ? 'გამოტოვებულია' : 'მოლოდინში'),
       action: canAct && s.sms.status === 'failed' && (
-        <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => void shipments.retrySms(s.id)}>
+        <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.retrySms(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა გაგზავნა
         </Button>
       ),

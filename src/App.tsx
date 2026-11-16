@@ -1,6 +1,5 @@
-import { useEffect, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { shipments } from './api'
 import { Layout } from './components/Layout'
 import { ToastProvider } from './components/toast'
 import { Dashboard } from './pages/Dashboard'
@@ -23,7 +22,8 @@ function Guard({ roles, children }: { roles: Role[]; children: ReactNode }) {
 }
 
 function AppRoutes() {
-  const { user } = useSession()
+  const { user, restoring } = useSession()
+  if (restoring) return null
   if (!user) return <Login />
   return (
     <Layout>
@@ -42,7 +42,6 @@ function AppRoutes() {
 }
 
 export default function App() {
-  useEffect(() => shipments.resumeAll(), [])
   return (
     <HashRouter>
       <ToastProvider>

@@ -1,7 +1,7 @@
 import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { cx, initials } from '../lib/util'
 import { roleLabel, useSession, useUser } from '../session'
 import type { Role } from '../types'

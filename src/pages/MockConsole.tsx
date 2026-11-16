@@ -5,7 +5,7 @@ import { mock } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatTime } from '../lib/util'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { ServiceName } from '../types'
 
@@ -42,13 +42,13 @@ export function MockConsole() {
             </div>
           </Card>
 
-          <Card className="p-5">
+          {user.role === 'admin' && <Card className="p-5">
             <h2 className="text-sm font-semibold text-slate-900">სადემო მონაცემები</h2>
-            <p className="mt-1 text-sm text-slate-500">ინახება მხოლოდ ამ ბრაუზერში. განულება აღადგენს საწყის კარიერებს, მძღოლებს, მანქანებს, მომხმარებლებს და სანიმუშო რეისებს.</p>
+            <p className="mt-1 text-sm text-slate-500">ინახება სერვერზე და ყველა მოწყობილობისთვის საერთოა. განულება წაშლის ყველაფერს და დატოვებს მხოლოდ ადმინისტრატორს.</p>
             <Button variant="secondary" className="mt-4 w-full" icon={<RotateCcw className="size-4" />} onClick={() => setConfirmReset(true)}>
               მონაცემების განულება
             </Button>
-          </Card>
+          </Card>}
         </div>
 
         <Card className="min-w-0 overflow-hidden">
@@ -56,7 +56,7 @@ export function MockConsole() {
             <h2 className="text-sm font-semibold text-slate-900">ინტეგრაციების ლოგი</h2>
             <div className="flex items-center gap-1">
               <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
-              <button onClick={() => mock.clearLogs()} className="ml-1 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="ლოგის გასუფთავება" aria-label="ლოგის გასუფთავება">
+              <button onClick={() => mock.clearLogs().catch((e: Error) => toast('error', e.message))} className="ml-1 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="ლოგის გასუფთავება" aria-label="ლოგის გასუფთავება">
                 <Trash2 className="size-4" />
               </button>
             </div>
@@ -115,12 +115,14 @@ export function MockConsole() {
         open={confirmReset}
         onClose={() => setConfirmReset(false)}
         title="განულდეს მონაცემები?"
-        message="ამ ბრაუზერში არსებული ყველა რეისი, ცნობარების ცვლილება და ლოგი ჩანაცვლდება საწყისი მონაცემებით."
+        message="სერვერზე წაიშლება ყველა რეისი, ცნობარი, მომხმარებელი და ლოგი — ყველა მოწყობილობაზე. დარჩება მხოლოდ ადმინისტრატორი."
         confirmLabel="განულება"
         onConfirm={() => {
-          mock.reset()
           setConfirmReset(false)
-          toast('success', 'მონაცემები განულდა')
+          mock.reset().then(
+            () => toast('success', 'მონაცემები განულდა'),
+            (e: Error) => toast('error', e.message),
+          )
         }}
       />
     </>

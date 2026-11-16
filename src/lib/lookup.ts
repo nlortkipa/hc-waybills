@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import type { Database, Shipment } from '../types'
 import { resolveRoute, routeText } from './route'
 

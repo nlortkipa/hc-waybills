@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { spawn } from 'node:child_process'
 import { copyFileSync, createReadStream, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
@@ -32,11 +33,32 @@ function serveApk(): Plugin {
   }
 }
 
+const API_PORT = Number(process.env.API_PORT ?? 8787)
+
+/** `npm run dev` also runs the API server (restarting on changes); /api is proxied to it. */
+function apiServer(): Plugin {
+  return {
+    name: 'hc-api-server',
+    apply: 'serve',
+    configureServer(server) {
+      if (process.env.HC_NO_API) return
+      const child = spawn(process.execPath, ['--watch', join(import.meta.dirname, 'server', 'index.ts')], {
+        env: { ...process.env, PORT: String(API_PORT) },
+        stdio: 'inherit',
+      })
+      const stop = () => child.kill()
+      server.httpServer?.on('close', stop)
+      process.once('exit', stop)
+    },
+  }
+}
+
 export default defineConfig({
   // Relative base so the build works inside the Android WebView (Capacitor).
   base: './',
-  plugins: [react(), tailwindcss(), serveApk()],
+  plugins: [react(), tailwindcss(), serveApk(), apiServer()],
   server: {
     host: true,
+    proxy: { '/api': `http://localhost:${API_PORT}` },
   },
 })

@@ -6,7 +6,7 @@ import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, Input, PageHeader, Select, statusMeta } from '../components/ui'
 import { cx } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { ShipmentStatus } from '../types'
 

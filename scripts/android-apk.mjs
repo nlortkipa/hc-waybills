@@ -6,7 +6,7 @@
 // Run from the same machine every time so phones accept it as an update.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
@@ -39,8 +39,21 @@ function run(cmd, args, cwd = root, env = process.env) {
   if (r.error || r.status !== 0) process.exit(r.status ?? 1)
 }
 
+// The app has no server of its own: it calls the HC API server at this address.
+// Default: this machine on the local network, port 8787 (what `npm run dev` / `npm run server` listen on).
+function lanAddress() {
+  const ips = Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address)
+  return ips.find((ip) => /^192\.168\./.test(ip)) ?? ips.find((ip) => /^10\./.test(ip)) ?? ips[0]
+}
+const apiUrl = process.env.VITE_API_URL ?? (lanAddress() && `http://${lanAddress()}:8787`)
+if (!apiUrl) {
+  console.error('Could not detect this machine\'s network address. Set VITE_API_URL, e.g. VITE_API_URL=http://192.168.1.10:8787')
+  process.exit(1)
+}
+console.log(`API server for this APK: ${apiUrl}  (override with VITE_API_URL)`)
+
 // HC_NATIVE_BUILD keeps the previous APK out of dist/, which goes inside this APK.
-run('npm', ['run', 'build'], root, { ...process.env, HC_NATIVE_BUILD: '1' })
+run('npm', ['run', 'build'], root, { ...process.env, HC_NATIVE_BUILD: '1', VITE_API_URL: apiUrl })
 run('npx', ['cap', 'sync', 'android'])
 run(isWin ? 'gradlew.bat' : './gradlew', ['assembleDebug'], androidDir)
 
@@ -53,6 +66,6 @@ mkdirSync(join(root, 'release'), { recursive: true })
 const out = join(root, 'release', `hc-portal-v${version}.apk`)
 copyFileSync(apk, out)
 copyFileSync(apk, join(root, 'release', 'hc-portal.apk'))
-// Make the dist/ just built deployable as-is, with the download included.
-copyFileSync(apk, join(root, 'dist', 'hc-portal.apk'))
-console.log(`\n✔ APK ready: ${out}`)
+// dist/ now has VITE_API_URL baked in; rebuild it for the web so the site keeps using its own origin.
+run('npm', ['run', 'build'])
+console.log(`\n✔ APK ready: ${out}\n  It talks to ${apiUrl} — keep \`npm run dev\` or \`npm run server\` running there.`)

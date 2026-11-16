@@ -1,4 +1,4 @@
-import type { Database } from '../types'
+import type { Database } from '../src/types.ts'
 
 export const DB_VERSION = 9
 

@@ -42,9 +42,9 @@ flowchart LR
 
 ## Running the app
 
-The app is a single React + TypeScript codebase (Vite, Tailwind). It runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com).
+The app is a React + TypeScript front end (Vite, Tailwind) plus a small Node API server (`server/`, no dependencies). The front end runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com). Browsers and the Android app all talk to the same server, which owns the data, enforces roles and runs the RS.ge → SMS pipeline.
 
-> **RS.ge and SMS are mocked** (`src/api/integrations.ts`), and data is stored in the browser's `localStorage` (`src/mock/`).
+> **RS.ge and SMS are mocked** (`server/integrations.ts`). Data is stored by the server in `server/data/db.json` (override with `HC_DB_FILE`). Delete that file to start over with only the admin.
 
 ### Dependencies
 
@@ -63,8 +63,9 @@ npm install
 
 ```bash
 npm run dev          # http://localhost:5173 (also printed with your LAN IP, so you can open it on a phone)
+                     # also starts the API server on port 8787 (restarts on changes); /api is proxied to it
 npm run build        # production build → dist/
-npm run preview      # serve the production build locally
+npm run server       # API server on port 8787 (PORT / HOST to change); also serves dist/ if built
 ```
 
 ### Android (APK)
@@ -73,7 +74,7 @@ npm run preview      # serve the production build locally
 npm run android:apk
 ```
 
-This builds the web app, copies it into the Android project and builds the APK with Gradle. The file is written to `release/hc-portal-v<version>.apk`. Send it to the user; they open it on the phone and allow "install from unknown sources" when asked.
+This builds the web app, copies it into the Android project and builds the APK with Gradle. The app calls the API server at the address baked in at build time: by default this machine's LAN address on port 8787 (e.g. `http://192.168.1.10:8787`). Set `VITE_API_URL` to point it elsewhere, e.g. `VITE_API_URL=https://hc.example.ge npm run android:apk`. The phone must be able to reach that address, and the server (`npm run dev` or `npm run server`) must be running. The file is written to `release/hc-portal-v<version>.apk`. Send it to the user; they open it on the phone and allow "install from unknown sources" when asked.
 
 The latest build is also saved as `release/hc-portal.apk` and copied into `dist/`, so the website serves it at `/hc-portal.apk`. Phones and tablets opening the site in a browser (not the installed app) see a **ჩამოტვირთე აპლიკაცია** (download the app) button on the login screen and in the account menu. The button only appears when that file exists. If your web server doesn't recognise `.apk`, set its content type to `application/vnd.android.package-archive`.
 

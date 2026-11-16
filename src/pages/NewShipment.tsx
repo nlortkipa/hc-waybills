@@ -5,7 +5,7 @@ import { shipments } from '../api'
 import { Button, Card, Field, PageHeader, Select } from '../components/ui'
 import { active, formatTonnes } from '../lib/util'
 import { useToast } from '../components/toast'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 
 export function NewShipment() {

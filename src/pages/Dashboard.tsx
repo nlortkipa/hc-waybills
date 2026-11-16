@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, PageHeader, Stat } from '../components/ui'
-import { useDb } from '../mock/db'
+import { useDb } from '../api/store'
 import { useUser } from '../session'
 
 export function Dashboard() {
