@@ -8,12 +8,10 @@ export interface SoftDeletable {
   deletedAt?: string
 }
 
-/** A delivery point of a carrier. Each one is weighed on its own scale. */
+/** A delivery point of a carrier. */
 export interface Destination extends SoftDeletable {
   id: string
   address: string
-  /** Scale ID (per client spec, formerly the route name). */
-  scaleId: string
 }
 
 export interface Carrier extends SoftDeletable {
@@ -45,7 +43,6 @@ export interface Truck extends SoftDeletable {
 export interface Cargo {
   description: string
   code: string
-  whsCode: string
 }
 
 export interface User extends SoftDeletable {
@@ -63,9 +60,6 @@ export type ShipmentStatus =
   | 'uploading' // sending to RS.ge
   | 'rs_failed' // RS.ge rejected / unreachable
   | 'uploaded' // waybill number received
-  | 'scale_failed' // could not hand over to scale service
-  | 'at_scale' // scale service has the waybill, waiting for weighing
-  | 'weighed' // real weight received
 
 export type StepStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
 
@@ -73,25 +67,6 @@ export interface ShipmentEvent {
   at: string
   level: 'info' | 'success' | 'error'
   message: string
-}
-
-export interface ScalePayload {
-  actionFlag: string
-  processType: string
-  docEntry: string
-  docDate: string
-  cardCode: string
-  cardName: string
-  u_ShipToCodeS: string
-  shipToCode: string
-  u_DriverName: string
-  u_TruckNum: string
-  u_TruckNum2: string
-  u_Truck: string
-  itemCode: string
-  description: string
-  quantity: number
-  whsCode: string
 }
 
 export interface Shipment {
@@ -110,19 +85,10 @@ export interface Shipment {
   waybillNumber?: string
   rs: { status: StepStatus; error?: string; at?: string }
   sms: { status: StepStatus; error?: string; at?: string; to?: string; text?: string }
-  scale: {
-    status: StepStatus
-    error?: string
-    sentAt?: string
-    payload?: ScalePayload
-    /** Real weight in kg as returned by the scale. */
-    weightKg?: number
-    weighedAt?: string
-  }
   events: ShipmentEvent[]
 }
 
-export type ServiceName = 'RS.ge' | 'SMS' | 'Scale'
+export type ServiceName = 'RS.ge' | 'SMS'
 
 export interface IntegrationLog {
   id: string
@@ -138,14 +104,9 @@ export interface IntegrationLog {
 }
 
 export interface MockSettings {
-  /** 'live' sends waybills to the real Scale Service (VITE_SCALE_API_URL). Missing in older saved data. */
-  scaleMode?: 'mock' | 'live'
   latencyMs: number
   rsFailRate: number
   smsFailRate: number
-  scaleFailRate: number
-  autoWeigh: boolean
-  autoWeighDelaySec: number
 }
 
 /** Cargo and declared quantity applied to every new shipment. Set by an admin. */

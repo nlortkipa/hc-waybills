@@ -1,8 +1,8 @@
-import { Download, FileText, Scale, Truck, TrendingUp } from 'lucide-react'
+import { AlertTriangle, Download, FileText, MessageSquare, Truck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
-import { cx, downloadCsv, formatDay, formatKg, formatNumber, formatTonnes } from '../lib/util'
+import { cx, downloadCsv, formatDay, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../mock/db'
 import { useUser } from '../session'
@@ -25,12 +25,12 @@ export function Reports() {
       }),
     [d, user, from, to, carrier],
   )
-  const weighed = useMemo(() => rows.filter((s) => s.status === 'weighed'), [rows])
-  const totalKg = weighed.reduce((a, s) => a + (s.scale.weightKg ?? 0), 0)
-  const declaredT = weighed.reduce((a, s) => a + s.quantity, 0)
-  const variance = declaredT ? ((totalKg - declaredT * 1000) / (declaredT * 1000)) * 100 : 0
+  const uploaded = useMemo(() => rows.filter((s) => s.status === 'uploaded'), [rows])
+  const declaredT = uploaded.reduce((a, s) => a + s.quantity, 0)
+  const smsSent = rows.filter((s) => s.sms.status === 'ok').length
+  const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed').length
 
-  // Daily weighed tonnage
+  // Daily declared tonnage of uploaded waybills
   const days = useMemo(() => {
     const out: { key: string; label: string; t: number; n: number }[] = []
     const start = new Date(from + 'T00:00:00Z')
@@ -39,38 +39,38 @@ export function Reports() {
       const dt = new Date(t)
       out.push({ key: dayKey(dt), label: formatDay(dt, true), t: 0, n: 0 })
     }
-    for (const s of weighed) {
+    for (const s of uploaded) {
       const b = out.find((x) => x.key === s.createdAt.slice(0, 10))
       if (b) {
-        b.t += (s.scale.weightKg ?? 0) / 1000
+        b.t += s.quantity
         b.n++
       }
     }
     return out
-  }, [from, to, weighed])
+  }, [from, to, uploaded])
   const max = Math.max(1, ...days.map((x) => x.t))
 
   const byCarrier = useMemo(() => {
-    const m = new Map<string, { n: number; weighed: number; kg: number; failed: number }>()
+    const m = new Map<string, { n: number; uploaded: number; t: number; failed: number }>()
     for (const s of rows) {
-      const e = m.get(s.carrierId) ?? { n: 0, weighed: 0, kg: 0, failed: 0 }
+      const e = m.get(s.carrierId) ?? { n: 0, uploaded: 0, t: 0, failed: 0 }
       e.n++
-      if (s.status === 'weighed') {
-        e.weighed++
-        e.kg += s.scale.weightKg ?? 0
+      if (s.status === 'uploaded') {
+        e.uploaded++
+        e.t += s.quantity
       }
-      if (s.status === 'rs_failed' || s.status === 'scale_failed') e.failed++
+      if (s.status === 'rs_failed') e.failed++
       m.set(s.carrierId, e)
     }
-    return [...m.entries()].sort((a, b) => b[1].kg - a[1].kg)
+    return [...m.entries()].sort((a, b) => b[1].t - a[1].t)
   }, [rows])
 
   const exportCsv = () => {
     downloadCsv(`hc-report-${from}_${to}.csv`, [
-      ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'სასწორის ID', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'წონა (კგ)', 'სტატუსი'],
+      ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
       ...rows.map((s) => {
         const x = L.describe(s)
-        return [s.waybillNumber ?? '', s.createdAt, x.carrier, x.scaleId, x.route, x.driver, x.plate, x.item, s.quantity, s.scale.weightKg ?? '', statusMeta[s.status].label]
+        return [s.waybillNumber ?? '', s.createdAt, x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', statusMeta[s.status].label]
       }),
     ])
   }
@@ -79,7 +79,7 @@ export function Reports() {
     <>
       <PageHeader
         title="რეპორტები"
-        subtitle="რეისები და აწონილი ტონაჟი არჩეული პერიოდისთვის."
+        subtitle="რეისები და ატვირთული ზედნადებები არჩეული პერიოდისთვის."
         actions={
           <Button variant="secondary" icon={<Download className="size-4" />} onClick={exportCsv} disabled={!rows.length}>
             CSV<span className="hidden sm:inline"> ექსპორტი</span>
@@ -112,17 +112,17 @@ export function Reports() {
       </Card>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        <Stat label="რეისები" value={rows.length} sub={`${weighed.length} აწონილი`} icon={<Truck className="size-5" />} />
-        <Stat label="აწონილი" value={formatTonnes(totalKg / 1000)} sub={formatKg(totalKg)} icon={<Scale className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
-        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub="აწონილი მანქანებისთვის" icon={<FileText className="size-5" />} accent="bg-slate-100 text-slate-600" />
-        <Stat label="სხვაობა" value={`${variance > 0 ? '+' : ''}${formatNumber(variance, 1)}%`} sub="რეალური vs დეკლარირებული" icon={<TrendingUp className="size-5" />} accent="bg-amber-50 text-amber-600" />
+        <Stat label="რეისები" value={rows.length} sub={`${uploaded.length} ატვირთული`} icon={<Truck className="size-5" />} />
+        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub="ატვირთული ზედნადებებით" icon={<FileText className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
+        <Stat label="SMS" value={smsSent} sub="გაეგზავნა მძღოლს" icon={<MessageSquare className="size-5" />} accent="bg-slate-100 text-slate-600" />
+        <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent="bg-amber-50 text-amber-600" />
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <Card className="p-5">
-          <h2 className="text-sm font-semibold text-slate-900">აწონილი ტონაჟი დღეების მიხედვით</h2>
+          <h2 className="text-sm font-semibold text-slate-900">დეკლარირებული ტონაჟი დღეების მიხედვით</h2>
           <p className="text-xs text-slate-500">ტონა, რეისის შექმნის თარიღით</p>
-          <div className="mt-5 flex h-48 items-end gap-[2px]" role="img" aria-label="აწონილი ტონაჟი დღეების მიხედვით">
+          <div className="mt-5 flex h-48 items-end gap-[2px]" role="img" aria-label="დეკლარირებული ტონაჟი დღეების მიხედვით">
             {days.map((x) => (
               <div key={x.key} className="group relative flex h-full min-w-0 flex-1 flex-col justify-end">
                 <div
@@ -154,7 +154,7 @@ export function Reports() {
               <tr className="text-left text-xs text-slate-500">
                 <th className="px-5 py-2 font-medium">კარიერი</th>
                 <th className="px-2 py-2 text-right font-medium">მანქანა</th>
-                <th className="px-5 py-2 text-right font-medium">აწონილი</th>
+                <th className="px-5 py-2 text-right font-medium">ტონაჟი</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-separator">
@@ -165,9 +165,9 @@ export function Reports() {
                     {e.failed > 0 && <p className="text-xs text-rose-600">{e.failed} შეცდომით</p>}
                   </td>
                   <td className="px-2 py-2.5 text-right tabular-nums text-slate-600">
-                    {e.weighed}/{e.n}
+                    {e.uploaded}/{e.n}
                   </td>
-                  <td className="px-5 py-2.5 text-right font-medium tabular-nums text-slate-900">{formatTonnes(e.kg / 1000)}</td>
+                  <td className="px-5 py-2.5 text-right font-medium tabular-nums text-slate-900">{formatTonnes(e.t)}</td>
                 </tr>
               ))}
               {!byCarrier.length && (

@@ -1,11 +1,11 @@
 import type { Database } from '../types'
 
-export const DB_VERSION = 7
+export const DB_VERSION = 9
 
-/** Empty database: only the admin exists; everything else (including other users) is added through the app. */
+/** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
   const users = [
-    { id: 'u1', firstName: 'ნინო', lastName: 'ბერიძე', phone: '+995 555 00 00 01', email: 'nino@hc.ge', role: 'admin' as const },
+    { id: 'u1', firstName: 'ადმინი', lastName: 'HC', phone: '+995 575 78 03 23', email: 'admin@hc.ge', role: 'admin' as const },
   ]
 
   return {
@@ -20,10 +20,7 @@ export function createSeed(): Database {
       latencyMs: 900,
       rsFailRate: 0,
       smsFailRate: 0,
-      scaleFailRate: 0,
-      autoWeigh: true,
-      autoWeighDelaySec: 15,
     },
-    cargo: { description: 'ღორღი 0–5 მმ', code: 'CRS-05', whsCode: 'WH-01', quantity: 25 },
+    cargo: { description: 'ღორღი 0–5 მმ', code: 'CRS-05', quantity: 25 },
   }
 }

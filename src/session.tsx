@@ -5,7 +5,7 @@ import type { User } from './types'
 
 interface Session {
   user: User | null
-  login: (id: string) => Promise<void>
+  login: (phone: string) => Promise<void>
   logout: () => void
 }
 
@@ -17,8 +17,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Always read the user from the DB so admin edits (e.g. carrier change) apply live.
   const user = d.users.find((u) => u.id === userId && !u.deletedAt) ?? null
 
-  const login = useCallback(async (id: string) => {
-    const u = await auth.loginAs(id)
+  const login = useCallback(async (phone: string) => {
+    const u = await auth.loginByPhone(phone)
     setUserId(u.id)
   }, [])
   const logout = useCallback(() => {

@@ -116,10 +116,7 @@ export function Badge({ tone: t = 'gray', children, dot, pulse }: { tone?: Tone;
 export const statusMeta: Record<ShipmentStatus, { label: string; tone: Tone; pulse?: boolean }> = {
   uploading: { label: 'იტვირთება', tone: 'blue', pulse: true },
   rs_failed: { label: 'RS.ge შეცდომა', tone: 'red' },
-  uploaded: { label: 'ატვირთულია', tone: 'blue', pulse: true },
-  scale_failed: { label: 'სასწორის შეცდომა', tone: 'red' },
-  at_scale: { label: 'ელოდება აწონვას', tone: 'amber', pulse: true },
-  weighed: { label: 'აწონილია', tone: 'green' },
+  uploaded: { label: 'ატვირთულია', tone: 'green' },
 }
 
 export function StatusBadge({ status }: { status: ShipmentStatus }) {

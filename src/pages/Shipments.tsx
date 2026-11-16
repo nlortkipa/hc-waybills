@@ -13,7 +13,7 @@ import type { ShipmentStatus } from '../types'
 const filters: { key: 'all' | 'active' | 'failed' | ShipmentStatus; label: string }[] = [
   { key: 'all', label: 'ყველა' },
   { key: 'active', label: 'მიმდინარე' },
-  { key: 'weighed', label: 'აწონილი' },
+  { key: 'uploaded', label: 'ატვირთული' },
   { key: 'failed', label: 'შეცდომით' },
 ]
 
@@ -30,12 +30,12 @@ export function Shipments() {
     const needle = q.trim().toLowerCase()
     return all.filter((s) => {
       if (carrier && s.carrierId !== carrier) return false
-      if (f === 'active' && !['uploading', 'uploaded', 'at_scale'].includes(s.status)) return false
-      if (f === 'failed' && !['rs_failed', 'scale_failed'].includes(s.status) && s.sms.status !== 'failed') return false
+      if (f === 'active' && s.status !== 'uploading' && s.sms.status !== 'running') return false
+      if (f === 'failed' && s.status !== 'rs_failed' && s.sms.status !== 'failed') return false
       if (f !== 'all' && f !== 'active' && f !== 'failed' && s.status !== f) return false
       if (!needle) return true
       const x = L.describe(s)
-      return [s.waybillNumber, x.carrier, x.route, x.driver, x.plate, x.scaleId, statusMeta[s.status].label].some((v) => v?.toLowerCase().includes(needle))
+      return [s.waybillNumber, x.carrier, x.route, x.driver, x.plate, statusMeta[s.status].label].some((v) => v?.toLowerCase().includes(needle))
     })
   }, [all, q, f, carrier, L])
 

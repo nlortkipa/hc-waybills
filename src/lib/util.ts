@@ -13,6 +13,9 @@ export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export const nowIso = () => new Date().toISOString()
 
+/** Georgian mobile number reduced to its 9 local digits ('+995 575 78 03 23' → '575780323'). */
+export const phoneKey = (v: string) => v.replace(/\D/g, '').replace(/^995(?=\d{9}$)/, '')
+
 /*
  * Georgian formatting done by hand: some WebViews / headless browsers ship without
  * full locale data, so Intl('ka-GE') can silently fall back to English.

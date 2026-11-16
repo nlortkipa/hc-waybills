@@ -2,24 +2,21 @@ import { ArrowDownLeft, ArrowUpRight, ChevronDown, RotateCcw, Trash2, Waypoints 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { mock } from '../api'
-import { scaleLiveAvailable, scaleMode, weighingMocked } from '../api/integrations'
-import { scaleApiUrl } from '../api/scaleInspector'
-import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented, Toggle } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatTime } from '../lib/util'
 import { useDb } from '../mock/db'
 import { useUser } from '../session'
 import type { ServiceName } from '../types'
 
-const serviceTone: Record<ServiceName, 'blue' | 'violet' | 'amber'> = { 'RS.ge': 'blue', SMS: 'violet', Scale: 'amber' }
-const serviceLabel: Record<ServiceName, string> = { 'RS.ge': 'RS.ge', SMS: 'SMS', Scale: 'სასწორი' }
+const serviceTone: Record<ServiceName, 'blue' | 'violet'> = { 'RS.ge': 'blue', SMS: 'violet' }
+const serviceLabel: Record<ServiceName, string> = { 'RS.ge': 'RS.ge', SMS: 'SMS' }
 
 export function MockConsole() {
   const d = useDb()
   const user = useUser()
   const toast = useToast()
   const s = d.settings
-  const live = scaleMode() === 'live'
   const [svc, setSvc] = useState<ServiceName | ''>('')
   const [open, setOpen] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -32,7 +29,7 @@ export function MockConsole() {
 
   return (
     <>
-      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge და SMS, აირჩიე სატესტო ან რეალური სასწორი და ნახე ყველა მოთხოვნა." />
+      <PageHeader title="სატესტო პანელი" subtitle="მართე იმიტირებული RS.ge და SMS და ნახე ყველა მოთხოვნა." />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="space-y-6">
@@ -42,39 +39,6 @@ export function MockConsole() {
               <Slider label="ქსელის დაყოვნება" value={s.latencyMs} min={100} max={4000} step={100} unit=" მწმ" onChange={(v) => mock.updateSettings({ latencyMs: v })} />
               <Slider label="RS.ge შეცდომების %" value={s.rsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ rsFailRate: v })} />
               <Slider label="SMS შეცდომების %" value={s.smsFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ smsFailRate: v })} />
-              <div className="border-t border-separator pt-4">
-                <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                  <span className="text-slate-700">სასწორის სერვისი</span>
-                  <Segmented
-                    value={live ? 'live' : 'mock'}
-                    onChange={(v) => mock.updateSettings({ scaleMode: v })}
-                    options={[
-                      { value: 'mock', label: 'სატესტო' },
-                      ...(scaleLiveAvailable ? [{ value: 'live' as const, label: 'რეალური' }] : []),
-                    ]}
-                  />
-                </div>
-                {live && (
-                  <p className="text-xs text-slate-500">
-                    ზედნადები იგზავნება <span className="font-mono">{scaleApiUrl}</span>-ზე.{' '}
-                    {weighingMocked() ? 'აწონვა ჯერჯერობით სიმულირებულია — სასწორს არ ველოდებით.' : 'წონა იკითხება სასწორის ბაზიდან ყოველ 15 წამში.'}
-                  </p>
-                )}
-                {(!live || weighingMocked()) && (
-                  <div className="mt-4 space-y-5">
-                    {!live && <Slider label="სასწორის შეცდომების %" value={s.scaleFailRate} min={0} max={100} step={5} unit="%" onChange={(v) => mock.updateSettings({ scaleFailRate: v })} />}
-                    <div>
-                      <Toggle checked={s.autoWeigh} onChange={(v) => mock.updateSettings({ autoWeigh: v })} label="სასწორი ავტომატურად წონის მანქანებს" />
-                      {s.autoWeigh && (
-                        <div className="mt-4">
-                          <Slider label="აწონვის დაყოვნება" value={s.autoWeighDelaySec} min={3} max={120} step={1} unit=" წმ" onChange={(v) => mock.updateSettings({ autoWeighDelaySec: v })} />
-                        </div>
-                      )}
-                      <p className="mt-2 text-xs text-slate-500">გამორთვისას გამოიყენე „აწონვის სიმულაცია“ რეისის გვერდზე.</p>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </Card>
 
@@ -91,14 +55,14 @@ export function MockConsole() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator px-5 py-3">
             <h2 className="text-sm font-semibold text-slate-900">ინტეგრაციების ლოგი</h2>
             <div className="flex items-center gap-1">
-              <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS', 'Scale'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
+              <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
               <button onClick={() => mock.clearLogs()} className="ml-1 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="ლოგის გასუფთავება" aria-label="ლოგის გასუფთავება">
                 <Trash2 className="size-4" />
               </button>
             </div>
           </div>
           {logs.length === 0 ? (
-            <EmptyState icon={<Waypoints className="size-6" />} title="მოთხოვნები ჯერ არ არის" text="შექმენი რეისი და ყველა RS.ge, SMS და სასწორის მოთხოვნა აქ გამოჩნდება." />
+            <EmptyState icon={<Waypoints className="size-6" />} title="მოთხოვნები ჯერ არ არის" text="შექმენი რეისი და ყველა RS.ge და SMS მოთხოვნა აქ გამოჩნდება." />
           ) : (
             <ul className="divide-y divide-separator">
               {logs.map((l) => {

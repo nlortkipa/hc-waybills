@@ -87,7 +87,7 @@ export function NewShipment() {
               <Select value={form.destinationId} onChange={set('destinationId')} placeholder="აირჩიე დასრულების მისამართი…" invalid={!!errors.destinationId}>
                 {destinations.map((x) => (
                   <option key={x.id} value={x.id}>
-                    {x.address} · {x.scaleId}
+                    {x.address}
                   </option>
                 ))}
               </Select>
@@ -136,7 +136,6 @@ export function NewShipment() {
             <h3 className="text-sm font-semibold text-slate-900">შეჯამება</h3>
             <dl className="mt-3 space-y-2.5 text-sm">
               <Row k="მარშრუტი" v={destination ? `${carrier?.startAddress} → ${destination.address}` : undefined} />
-              <Row k="სასწორის ID" v={destination?.scaleId} mono />
               <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
               <Row k="მძღოლის ტელ." v={driver?.phone} />
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}` : undefined} mono />
@@ -150,7 +149,7 @@ export function NewShipment() {
             <div>
               <p className="font-medium">რა მოხდება შემდეგ</p>
               <p className="mt-1 flex flex-wrap items-center gap-1 text-brand-800">
-                RS.ge <ArrowRight className="size-3" /> SMS მძღოლს <ArrowRight className="size-3" /> სასწორი <ArrowRight className="size-3" /> რეალური წონა
+                RS.ge <ArrowRight className="size-3" /> SMS მძღოლს
               </p>
             </div>
           </div>

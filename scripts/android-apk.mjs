@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Builds the web app, syncs it into the Android project and produces an installable
 // APK at release/hc-portal-v<version>.apk (debug build, signed with this machine's debug key).
+// release/hc-portal.apk always holds the latest one: the website offers it to Android
+// phones as /hc-portal.apk (served by `npm run dev`, copied into dist/ by `npm run build`).
 // Run from the same machine every time so phones accept it as an update.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -31,13 +33,14 @@ if (!existsSync(localProps) && !process.env.ANDROID_HOME && !process.env.ANDROID
   console.log(`Using Android SDK at ${sdk} (saved to android/local.properties)`)
 }
 
-function run(cmd, args, cwd = root) {
+function run(cmd, args, cwd = root, env = process.env) {
   console.log(`\n> ${cmd} ${args.join(' ')}`)
-  const r = spawnSync(cmd, args, { cwd, stdio: 'inherit', shell: isWin })
+  const r = spawnSync(cmd, args, { cwd, env, stdio: 'inherit', shell: isWin })
   if (r.error || r.status !== 0) process.exit(r.status ?? 1)
 }
 
-run('npm', ['run', 'build'])
+// HC_NATIVE_BUILD keeps the previous APK out of dist/, which goes inside this APK.
+run('npm', ['run', 'build'], root, { ...process.env, HC_NATIVE_BUILD: '1' })
 run('npx', ['cap', 'sync', 'android'])
 run(isWin ? 'gradlew.bat' : './gradlew', ['assembleDebug'], androidDir)
 
@@ -49,4 +52,7 @@ if (!existsSync(apk)) {
 mkdirSync(join(root, 'release'), { recursive: true })
 const out = join(root, 'release', `hc-portal-v${version}.apk`)
 copyFileSync(apk, out)
+copyFileSync(apk, join(root, 'release', 'hc-portal.apk'))
+// Make the dist/ just built deployable as-is, with the download included.
+copyFileSync(apk, join(root, 'dist', 'hc-portal.apk'))
 console.log(`\n✔ APK ready: ${out}`)

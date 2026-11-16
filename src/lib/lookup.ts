@@ -23,7 +23,6 @@ export function makeLookup(d: Database) {
       return {
         carrier: carriers.get(s.carrierId)?.name ?? '—',
         route: routeText(r),
-        scaleId: r.scaleId || '—',
         driver: this.driverName(s.driverId),
         plate: trucks.get(s.truckId)?.plateNumber ?? '—',
         item: s.cargo.description || '—',

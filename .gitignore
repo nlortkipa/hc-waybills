@@ -24,6 +24,3 @@ dist-ssr
 *.sln
 *.sw?
 
-# Scale Service: secrets and local config (vendor binaries live outside the repo)
-services/scale/.env
-services/scale/config/Integration.dll.config

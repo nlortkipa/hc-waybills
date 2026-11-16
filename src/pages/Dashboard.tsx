@@ -1,10 +1,9 @@
-import { AlertTriangle, CheckCircle2, Clock, Plus, Scale, Truck } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock, FileCheck2, Plus, Truck } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, PageHeader, Stat } from '../components/ui'
-import { formatKg } from '../lib/util'
 import { useDb } from '../mock/db'
 import { useUser } from '../session'
 
@@ -16,9 +15,9 @@ export function Dashboard() {
 
   const today = new Date().toDateString()
   const todays = rows.filter((s) => new Date(s.createdAt).toDateString() === today)
-  const waiting = rows.filter((s) => s.status === 'at_scale' || s.status === 'uploading' || s.status === 'uploaded')
-  const failed = rows.filter((s) => s.status === 'rs_failed' || s.status === 'scale_failed' || s.sms.status === 'failed')
-  const weighedToday = todays.reduce((a, s) => a + (s.scale.weightKg ?? 0), 0)
+  const waiting = rows.filter((s) => s.status === 'uploading' || s.sms.status === 'running')
+  const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed')
+  const uploadedToday = todays.filter((s) => s.status === 'uploaded')
 
   return (
     <>
@@ -34,8 +33,8 @@ export function Dashboard() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat label="დღეს" value={todays.length} sub="შექმნილი რეისი" icon={<Truck className="size-5" />} />
-        <Stat label="მიმდინარე" value={waiting.length} sub="ელოდება სასწორს" icon={<Clock className="size-5" />} accent="bg-amber-500" />
-        <Stat label="დღეს აიწონა" value={formatKg(weighedToday)} sub={`${todays.filter((s) => s.status === 'weighed').length} მანქანა`} icon={<Scale className="size-5" />} accent="bg-emerald-500" />
+        <Stat label="მიმდინარე" value={waiting.length} sub="მუშავდება" icon={<Clock className="size-5" />} accent="bg-amber-500" />
+        <Stat label="დღეს ატვირთული" value={uploadedToday.length} sub="ზედნადები" icon={<FileCheck2 className="size-5" />} accent="bg-emerald-500" />
         <Stat label="საჭიროებს ყურადღებას" value={failed.length} sub="შეცდომით" icon={failed.length ? <AlertTriangle className="size-5" /> : <CheckCircle2 className="size-5" />} accent={failed.length ? 'bg-rose-500' : 'bg-slate-400'} />
       </div>
 

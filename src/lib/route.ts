@@ -5,10 +5,9 @@ export interface ResolvedRoute {
   destination?: Destination
   start: string
   end: string
-  scaleId: string
 }
 
-/** Resolves a shipment's start/end addresses and scale ID from its carrier. */
+/** Resolves a shipment's start/end addresses from its carrier. */
 export function resolveRoute(carriers: Carrier[], carrierId: string, destinationId: string): ResolvedRoute {
   const carrier = carriers.find((c) => c.id === carrierId)
   const destination = carrier?.destinations.find((x) => x.id === destinationId)
@@ -17,7 +16,6 @@ export function resolveRoute(carriers: Carrier[], carrierId: string, destination
     destination,
     start: carrier?.startAddress ?? '',
     end: destination?.address ?? '',
-    scaleId: destination?.scaleId ?? '',
   }
 }
 

@@ -1,11 +1,11 @@
-import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Scale, Truck, X, type LucideIcon } from 'lucide-react'
+import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { useScaleStatus } from '../api/scaleInspector'
 import { useDb } from '../mock/db'
 import { cx, initials } from '../lib/util'
 import { roleLabel, useSession, useUser } from '../session'
 import type { Role } from '../types'
+import { AppDownloadButton } from './AppDownload'
 import { Avatar } from './ui'
 
 interface NavItem {
@@ -27,8 +27,6 @@ export const NAV: NavItem[] = [
   { to: '/reports', tint: 'bg-violet-500', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
   { to: '/refs', tint: 'bg-slate-500', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
   { to: '/mock', tint: 'bg-rose-500', label: 'სატესტო პანელი', short: 'ტესტი', icon: FlaskConical, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
-  // Only listed while the local Scale Service stack (npm run scale up) answers.
-  { to: '/scale-db', tint: 'bg-teal-500', label: 'სასწორის ბაზა', short: 'სასწორი', icon: Scale, roles: ['admin'], mobile: [] },
 ]
 
 function AppIcon({ className }: { className?: string }) {
@@ -105,8 +103,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user, sub } = useAccount()
   const { logout } = useSession()
   const loc = useLocation()
-  const scale = useScaleStatus()
-  const items = NAV.filter((n) => n.roles.includes(user.role) && (n.to !== '/scale-db' || scale.online || loc.pathname === '/scale-db'))
+  const items = NAV.filter((n) => n.roles.includes(user.role))
   const mobileItems = items.filter((n) => n.mobile.includes(user.role))
   const [menuOpen, setMenuOpen] = useState(false)
   const current = items.find((n) => (n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to)))
@@ -144,7 +141,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <>
                   <n.icon className={cx('size-[19px]', isActive ? 'text-white' : 'text-brand-600')} />
                   {n.label}
-                  {(n.to === '/mock' || n.to === '/scale-db') && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
+                  {n.to === '/mock' && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
                 </>
               )}
             </NavLink>
@@ -220,6 +217,8 @@ export function Layout({ children }: { children: ReactNode }) {
                 <SheetRow key={n.to} to={n.to} icon={n.icon} tint={n.tint} label={n.label} last={i === items.length - 1} onClick={() => setMenuOpen(false)} />
               ))}
             </div>
+
+            <AppDownloadButton className="mb-6" />
 
             <div className="overflow-hidden rounded-xl bg-surface">
               <SheetRow

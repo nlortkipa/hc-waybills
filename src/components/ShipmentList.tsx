@@ -1,6 +1,6 @@
 import { ChevronRight, MapPin, Truck as TruckIcon, User as UserIcon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { formatDateTime, formatKg, formatTonnes } from '../lib/util'
+import { formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import type { Shipment } from '../types'
 import { StatusBadge } from './ui'
@@ -23,7 +23,6 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
               <th className="px-3 py-3">მარშრუტი</th>
               <th className="px-3 py-3">მძღოლი / მანქანა</th>
               <th className="px-3 py-3 text-right">დეკლარ.</th>
-              <th className="px-3 py-3 text-right">აწონილი</th>
               <th className="px-3 py-3">სტატუსი</th>
               <th className="w-8" />
             </tr>
@@ -38,14 +37,12 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                   {showCarrier && <td className="px-3 py-3 text-slate-700">{x.carrier}</td>}
                   <td className="px-3 py-3">
                     <p className="text-slate-800">{x.route}</p>
-                    <p className="text-xs text-slate-400">{x.scaleId}</p>
                   </td>
                   <td className="px-3 py-3">
                     <p className="text-slate-800">{x.driver}</p>
                     <p className="font-mono text-xs text-slate-400">{x.plate}</p>
                   </td>
                   <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{formatTonnes(s.quantity)}</td>
-                  <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums font-medium text-slate-900">{formatKg(s.scale.weightKg)}</td>
                   <td className="px-3 py-3">
                     <StatusBadge status={s.status} />
                   </td>
@@ -91,9 +88,6 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                 <div className="mt-2.5 flex gap-4 text-xs">
                   <span className="text-slate-500">
                     დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{formatTonnes(s.quantity)}</b>
-                  </span>
-                  <span className="text-slate-500">
-                    აწონილი <b className="font-medium text-slate-800 tabular-nums">{formatKg(s.scale.weightKg)}</b>
                   </span>
                 </div>
               </button>

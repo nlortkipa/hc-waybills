@@ -3,11 +3,10 @@
  * becomes a fetch() to the real backend with the same signature.
  */
 import { db } from '../mock/db'
-import { active, formatKg, nowIso, sleep, uid } from '../lib/util'
+import { active, nowIso, phoneKey, sleep, uid } from '../lib/util'
 import { resolveRoute } from '../lib/route'
 import type { CargoDefaults, Carrier, Database, Shipment, ShipmentEvent, User } from '../types'
-import { rsge, scale, scaleMode, sms, weighingMocked } from './integrations'
-import { buildScalePayload } from './scalePayload'
+import { rsge, sms } from './integrations'
 
 const quick = () => sleep(150 + Math.random() * 150)
 
@@ -24,10 +23,15 @@ export const auth = {
       return null
     }
   },
-  async loginAs(userId: string): Promise<User> {
+  /**
+   * Logs in by phone number. For now there is no verification: a known number logs
+   * in straight away. Later this sends an SMS code and a second step checks it.
+   */
+  async loginByPhone(phone: string): Promise<User> {
     await quick()
-    const user = db.get().users.find((u) => u.id === userId)
-    if (!user || user.deletedAt) throw new Error('მომხმარებელი ვერ მოიძებნა')
+    const key = phoneKey(phone)
+    const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
+    if (!key || !user) throw new Error('ამ ნომრით მომხმარებელი ვერ მოიძებნა')
     try {
       localStorage.setItem(SESSION_KEY, user.id)
     } catch {
@@ -57,6 +61,7 @@ export const refs = {
     if (prev?.deletedAt) throw new Error('ჩანაწერი წაშლილია')
     if (col === 'users') {
       const u = rec as User
+      if (active(db.get().users).some((x) => x.id !== u.id && phoneKey(x.phone) === phoneKey(u.phone))) throw new Error('ამ ტელეფონის ნომრით მომხმარებელი უკვე არსებობს')
       if (u.role === 'operator') {
         if (!u.carrierId || !active(db.get().carriers).some((c) => c.id === u.carrierId)) throw new Error('ოპერატორს უნდა ჰქონდეს მიბმული კარიერი')
       } else delete u.carrierId
@@ -126,7 +131,6 @@ export const cargo = {
     const next: CargoDefaults = {
       description: value.description.trim(),
       code: value.code.trim(),
-      whsCode: value.whsCode.trim(),
       quantity: value.quantity,
     }
     if (!next.description) throw new Error('შეიყვანე ტვირთის დასახელება')
@@ -158,7 +162,6 @@ const get = (id: string) => {
 }
 
 const running = new Set<string>()
-const weighTimers = new Map<string, number>()
 
 export interface NewShipmentInput {
   carrierId: string
@@ -192,7 +195,6 @@ export const shipments = {
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
-      scale: { status: 'pending' },
       events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
     }
     db.update((d) => ({ ...d, shipments: [s, ...d.shipments] }))
@@ -200,7 +202,7 @@ export const shipments = {
     return s.id
   },
 
-  /** Runs (or resumes) the pipeline: RS.ge → SMS → Scale. Safe to call again for retries. */
+  /** Runs (or resumes) the pipeline: RS.ge → SMS. Safe to call again for retries. */
   async run(id: string) {
     if (running.has(id)) return
     running.add(id)
@@ -217,73 +219,14 @@ export const shipments = {
     await sendSms(id)
   },
 
-  /** Simulates the truck being weighed: the scale calls us back with docEntry + weight. */
-  async simulateWeighing(id: string, weightKg?: number) {
-    const s = get(id)
-    if (s.status !== 'at_scale' || !s.waybillNumber) return
-    clearTimeout(weighTimers.get(id))
-    weighTimers.delete(id)
-    const w = weightKg ?? Math.round(s.quantity * 1000 * (0.96 + Math.random() * 0.08))
-    markWeighed(id, w, nowIso(), 'mock')
-  },
-
-  /** Re-arms auto-weighing timers after a page reload. */
-  resumeAutoWeigh() {
-    db.get().shipments.filter((s) => s.status === 'at_scale').forEach((s) => scheduleAutoWeigh(s.id))
-  },
-
-  /** Called once on app start: finishes pipelines interrupted by a reload. Returns a cleanup. */
+  /** Called once on app start: finishes pipelines interrupted by a reload. */
   resumeAll() {
     db.get()
-      .shipments.filter((s) => s.status === 'uploading' || s.status === 'uploaded' || s.sms.status === 'running' || s.scale.status === 'running')
+      .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
       .forEach((s) => void shipments.run(s.id))
-    shipments.resumeAutoWeigh()
-    void pollLiveWeights()
-    const t = window.setInterval(() => void pollLiveWeights(), LIVE_POLL_MS)
-    return () => window.clearInterval(t)
   },
 
   isRunning: (id: string) => running.has(id),
-}
-
-function markWeighed(id: string, weightKg: number, weighedAt: string, source: 'mock' | 'live') {
-  const s = get(id)
-  if (s.status !== 'at_scale' || !s.waybillNumber) return
-  scale.logWeightCallback(s.waybillNumber, weightKg, id, source)
-  patch(
-    id,
-    (x) => ({ status: 'weighed', scale: { ...x.scale, weightKg, weighedAt } }),
-    { level: 'success', message: `აიწონა: ${formatKg(weightKg)} (docEntry ${s.waybillNumber})` },
-  )
-}
-
-/* Live scale: the vendor API pushes the weight to SAP, not to us, so we read it
-   from the scale DB for every shipment still waiting at the scale. */
-const LIVE_POLL_MS = 15_000
-let polling = false
-
-async function pollLiveWeights() {
-  if (polling || weighingMocked()) return
-  polling = true
-  try {
-    const waiting = db.get().shipments.filter((s) => s.status === 'at_scale' && s.waybillNumber)
-    for (const s of waiting) {
-      const w = await scale.pollWeight(s.waybillNumber!)
-      if (w) markWeighed(s.id, w.weightKg, w.weighedAt, 'live')
-    }
-  } finally {
-    polling = false
-  }
-}
-
-function scheduleAutoWeigh(id: string) {
-  const { autoWeigh, autoWeighDelaySec } = db.get().settings
-  if (!weighingMocked() || !autoWeigh || weighTimers.has(id)) return
-  const t = window.setTimeout(() => {
-    weighTimers.delete(id)
-    if (db.get().settings.autoWeigh && weighingMocked()) void shipments.simulateWeighing(id)
-  }, autoWeighDelaySec * 1000)
-  weighTimers.set(id, t)
 }
 
 async function runPipeline(id: string) {
@@ -326,29 +269,9 @@ async function runPipeline(id: string) {
     }
   }
 
-  // 2. SMS to driver — failure does not block the scale hand-off
+  // 2. SMS to driver
   s = get(id)
   if (s.sms.status !== 'ok') await sendSms(id)
-
-  // 3. Scale Service — hand over the waybill
-  s = get(id)
-  if (s.scale.status !== 'ok') {
-    const payload = buildScalePayload(s, db.get())
-    if (s.status === 'scale_failed') patch(id, () => ({}), { level: 'info', message: 'სასწორზე გაგზავნის ხელახალი ცდა' })
-    patch(id, (x) => ({ scale: { ...x.scale, status: 'running', payload } }))
-    try {
-      await scale.sendWaybill(payload, id)
-      patch(
-        id,
-        (x) => ({ status: 'at_scale', scale: { ...x.scale, status: 'ok', error: undefined, sentAt: nowIso() } }),
-        { level: 'success', message: `ზედნადები გაიგზავნა სასწორზე${scaleMode() === 'live' ? ' (რეალური სერვისი)' : ''} — ელოდება აწონვას` },
-      )
-      scheduleAutoWeigh(id)
-    } catch (e) {
-      const msg = (e as Error).message
-      patch(id, (x) => ({ status: 'scale_failed', scale: { ...x.scale, status: 'failed', error: msg } }), { level: 'error', message: msg })
-    }
-  }
 }
 
 async function sendSms(id: string) {
@@ -376,19 +299,11 @@ async function sendSms(id: string) {
 export const mock = {
   updateSettings(p: Partial<Database['settings']>) {
     db.update((d) => ({ ...d, settings: { ...d.settings, ...p } }))
-    if (!weighingMocked()) {
-      weighTimers.forEach((t) => clearTimeout(t))
-      weighTimers.clear()
-      void pollLiveWeights()
-    }
-    if (p.autoWeigh || p.scaleMode) shipments.resumeAutoWeigh()
   },
   clearLogs() {
     db.update((d) => ({ ...d, logs: [] }))
   },
   reset() {
-    weighTimers.forEach((t) => clearTimeout(t))
-    weighTimers.clear()
     db.reset()
   },
 }
