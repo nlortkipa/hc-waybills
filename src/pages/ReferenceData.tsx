@@ -337,7 +337,8 @@ function CargoDefaultsCard() {
     const errs: Record<string, string> = {}
     if (!form.description.trim()) errs.description = 'სავალდებულო ველი'
     const q = Number(form.quantity)
-    if (!form.quantity || !(q > 0) || q > 60) errs.quantity = 'შეიყვანე რაოდენობა 0-დან 60 ტ-მდე'
+    if (!form.code.trim()) errs.code = 'სავალდებულო ველი'
+    if (!form.quantity || !(q > 0)) errs.quantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
     setErrors(errs)
     if (Object.keys(errs).length) return
     setBusy(true)
@@ -378,8 +379,8 @@ function CargoDefaultsCard() {
         <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
           <Input type="number" inputMode="decimal" step="0.1" min="0" value={form.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
         </Field>
-        <Field label="ტვირთის კოდი (არასავალდებულო)">
-          <Input value={form.code} placeholder="CRS-05" className="font-mono" onChange={set('code')} />
+        <Field label="ტვირთის კოდი" error={errors.code}>
+          <Input value={form.code} placeholder="CRS-05" className="font-mono" invalid={!!errors.code} onChange={set('code')} />
         </Field>
         <div className="flex items-end justify-end sm:col-span-2">
           <Button type="submit" loading={busy} disabled={!dirty}>

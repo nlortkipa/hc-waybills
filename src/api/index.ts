@@ -134,7 +134,8 @@ export const cargo = {
       quantity: value.quantity,
     }
     if (!next.description) throw new Error('შეიყვანე ტვირთის დასახელება')
-    if (!(next.quantity > 0) || next.quantity > 60) throw new Error('რაოდენობა უნდა იყოს 0-დან 60 ტ-მდე')
+    if (!next.code) throw new Error('შეიყვანე ტვირთის კოდი')
+    if (!(next.quantity > 0)) throw new Error('რაოდენობა უნდა იყოს 0-ზე მეტი')
     db.update((d) => ({ ...d, cargo: next }))
   },
 }
