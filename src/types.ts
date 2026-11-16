@@ -12,11 +12,12 @@ export interface SoftDeletable {
 export interface Destination extends SoftDeletable {
   id: string
   address: string
+  /** ID of the scale at this end address. */
+  scaleId: string
 }
 
 export interface Carrier extends SoftDeletable {
   id: string
-  code: string
   name: string
   /** The single place every shipment of this carrier starts from. */
   startAddress: string

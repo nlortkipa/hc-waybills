@@ -46,7 +46,6 @@ export function Login() {
 
         <form onSubmit={submit} className="mt-8" noValidate>
           <div className={`flex items-center overflow-hidden rounded-xl bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.06)] transition-shadow ${error ? 'ring-2 ring-rose-500/50' : ''}`}>
-            <span className="pl-4 text-[16px] text-slate-500 sm:text-[15px]">+995</span>
             <input
               type="tel"
               inputMode="tel"
@@ -58,7 +57,7 @@ export function Login() {
                 setPhone(e.target.value)
                 setError(null)
               }}
-              className="block h-12 w-full bg-transparent px-3 text-[16px] tabular-nums text-slate-900 placeholder:text-slate-400 focus:outline-none sm:text-[15px]"
+              className="block h-12 w-full bg-transparent px-4 text-[16px] tabular-nums text-slate-900 placeholder:text-slate-400 focus:outline-none sm:text-[15px]"
             />
           </div>
           <p className={`mt-2 ml-1 min-h-[18px] text-[13px] text-rose-600 transition-opacity ${error ? 'opacity-100' : 'opacity-0'}`} role="alert">

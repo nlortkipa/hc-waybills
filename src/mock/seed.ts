@@ -5,7 +5,7 @@ export const DB_VERSION = 9
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
   const users = [
-    { id: 'u1', firstName: 'ადმინი', lastName: 'HC', phone: '+995 575 78 03 23', email: 'admin@hc.ge', role: 'admin' as const },
+    { id: 'u1', firstName: 'ადმინი', lastName: 'HC', phone: '575 78 03 23', email: 'admin@hc.ge', role: 'admin' as const },
   ]
 
   return {

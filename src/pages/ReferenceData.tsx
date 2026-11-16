@@ -3,7 +3,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { cargo, refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx } from '../lib/util'
+import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../mock/db'
 import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
@@ -34,8 +34,9 @@ interface TabDef {
   columns: { label: string; render: (r: Rec, d: Database) => ReactNode }[]
 }
 
-const phoneRe = /^\+?995\s?5\d{2}(\s?\d{2}){3}$/
-const vPhone = (v: string) => (phoneRe.test(v.trim()) ? null : 'ფორმატი: +995 5XX XX XX XX')
+const vPhone = (v: string) => (/^5\d{8}$/.test(phoneKey(v)) ? null : 'ფორმატი: 5XX XX XX XX')
+/** '+995 575780323' → '575 78 03 23' */
+const fmtPhone = (v: string) => phoneKey(v).replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4')
 const vPid = (v: string) => (/^\d{11}$/.test(v.trim()) ? null : 'პირადი ნომერი უნდა იყოს 11 ციფრი')
 const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-ფოსტა არასწორია')
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
@@ -54,14 +55,12 @@ const TABS: TabDef[] = [
     icon: Building2,
     fields: [
       { key: 'name', label: 'დასახელება', placeholder: 'კავკასია ლოჯისტიკი' },
-      { key: 'code', label: 'კოდი', placeholder: 'C-1004', mono: true },
       { key: 'startAddress', label: 'დაწყების მისამართი', placeholder: 'დატვირთვის პუნქტი' },
     ],
     title: (r) => r.name!,
     subtitle: (r) => `${r.startAddress} → ${destsOf(r).map((x) => x.address).join(', ') || '—'}`,
     columns: [
       { label: 'სახელი', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
-      { label: 'კოდი', render: (r) => <span className="font-mono text-[13px]">{r.code}</span> },
       { label: 'დაწყების მისამართი', render: (r) => r.startAddress },
       {
         label: 'დასრულების მისამართები',
@@ -69,7 +68,7 @@ const TABS: TabDef[] = [
           <ul className="space-y-0.5">
             {destsOf(r).map((x) => (
               <li key={x.id}>
-                {x.address}
+                {x.address} <span className="font-mono text-[12px] text-slate-500">· {x.scaleId}</span>
               </li>
             ))}
           </ul>
@@ -86,14 +85,14 @@ const TABS: TabDef[] = [
       { key: 'firstName', label: 'სახელი' },
       { key: 'lastName', label: 'გვარი' },
       { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true },
-      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '+995 5XX XX XX XX', validate: vPhone },
+      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
     ],
     title: (r) => `${r.firstName} ${r.lastName}`,
-    subtitle: (r) => `${r.phone} · ${r.personalId}`,
+    subtitle: (r) => `${fmtPhone(r.phone!)} · ${r.personalId}`,
     columns: [
       { label: 'სახელი', render: (r) => <span className="font-medium text-slate-900">{r.firstName} {r.lastName}</span> },
       { label: 'პირადი ნომერი', render: (r) => <span className="font-mono text-[13px]">{r.personalId}</span> },
-      { label: 'ტელეფონი', render: (r) => r.phone },
+      { label: 'ტელეფონი', render: (r) => fmtPhone(r.phone!) },
     ],
   },
   {
@@ -104,7 +103,7 @@ const TABS: TabDef[] = [
     fields: [
       { key: 'model', label: 'მოდელი', placeholder: 'Volvo FH16' },
       { key: 'plateNumber', label: 'სახელმწიფო ნომერი', placeholder: 'AA-123-BB', validate: vPlate, mono: true },
-      { key: 'trailerNumber', label: 'მისაბმელის ნომერი', placeholder: 'TR-123-AA', optional: true, mono: true },
+      { key: 'trailerNumber', label: 'მისაბმელის ნომერი', placeholder: 'AA-123-BB', validate: vPlate, mono: true },
     ],
     title: (r) => r.plateNumber!,
     subtitle: (r) => `${r.model}${r.trailerNumber ? ` · მისაბმელი ${r.trailerNumber}` : ''}`,
@@ -122,7 +121,7 @@ const TABS: TabDef[] = [
     fields: [
       { key: 'firstName', label: 'სახელი' },
       { key: 'lastName', label: 'გვარი' },
-      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '+995 5XX XX XX XX', validate: vPhone },
+      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       { key: 'email', label: 'ელ-ფოსტა', type: 'email', validate: vEmail },
       {
         key: 'role',
@@ -139,7 +138,7 @@ const TABS: TabDef[] = [
       { label: 'როლი', render: (r) => <Badge tone={r.role === 'admin' ? 'violet' : r.role === 'operator' ? 'blue' : 'green'}>{roleLabel[r.role as 'admin']}</Badge> },
       { label: 'კარიერი', render: (r, d) => (r.carrierId ? carrierName(d, r.carrierId) : '—') },
       { label: 'ელ-ფოსტა', render: (r) => r.email },
-      { label: 'ტელეფონი', render: (r) => r.phone },
+      { label: 'ტელეფონი', render: (r) => fmtPhone(r.phone!) },
     ],
   },
 ]
@@ -166,7 +165,7 @@ export function ReferenceData() {
   const blank = (): Rec => {
     const r: Rec = { id: '' }
     tab.fields.forEach((f) => (r[f.key] = f.type === 'select' ? (f.options!(d)[0]?.value ?? '') : ''))
-    if (tab.key === 'carriers') Object.assign(r, { destinations: [{ id: '', address: '' }] })
+    if (tab.key === 'carriers') Object.assign(r, { destinations: [{ id: '', address: '', scaleId: '' }] })
     return r
   }
 
@@ -453,6 +452,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         if (!addr) errs[`dest.${i}.address`] = 'სავალდებულო ველი'
         else if (seen.has(addr)) errs[`dest.${i}.address`] = 'მისამართი მეორდება'
         seen.add(addr)
+        if (!(x.scaleId ?? '').trim()) errs[`dest.${i}.scaleId`] = 'სავალდებულო ველი'
       })
     }
     setErrors(errs)
@@ -464,9 +464,10 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         if (f.showIf && !f.showIf(r)) continue
         let v = (r[f.key] ?? '').trim()
         if (f.key === 'plateNumber' || f.key === 'trailerNumber') v = v.toUpperCase()
+        if (f.key === 'phone') v = fmtPhone(v)
         clean[f.key] = v
       }
-      if (hasDests) Object.assign(clean, { destinations: dests.map((x) => ({ id: x.id, address: x.address.trim() })) })
+      if (hasDests) Object.assign(clean, { destinations: dests.map((x) => ({ id: x.id, address: x.address.trim(), scaleId: (x.scaleId ?? '').trim() })) })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -497,7 +498,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
           .filter((f) => !f.showIf || f.showIf(r))
           .map((f) => (
             <div key={f.key} className={cx(tab.fields.length % 2 === 1 && f === tab.fields[0] && 'sm:col-span-2')}>
-              <Field label={f.label + (f.optional ? ' (არასავალდებულო)' : '')} error={errors[f.key]}>
+              <Field label={f.label} error={errors[f.key]}>
                 {f.type === 'select' ? (
                   <Select value={r[f.key] ?? ''} onChange={(e) => setR((x) => ({ ...x, [f.key]: e.target.value, ...(f.key === 'role' && e.target.value === 'operator' && !x.carrierId ? { carrierId: d.carriers[0]?.id } : {}) }))} invalid={!!errors[f.key]}>
                     {f.options!(d).map((o) => (
@@ -527,22 +528,25 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
           <div className="sm:col-span-2">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-medium text-slate-700">დასრულების მისამართები</span>
-              <Button type="button" variant="secondary" size="sm" icon={<Plus className="size-4" />} onClick={() => setDests((xs) => [...xs, { id: '', address: '' }])}>
+              <Button type="button" variant="secondary" size="sm" icon={<Plus className="size-4" />} onClick={() => setDests((xs) => [...xs, { id: '', address: '', scaleId: '' }])}>
                 დამატება
               </Button>
             </div>
             {errors.destinations && <p className="mb-2 text-xs text-rose-600">{errors.destinations}</p>}
             <div className="space-y-3">
               {dests.map((x, i) => {
-                const upd = (k: 'address', v: string) => {
+                const upd = (k: 'address' | 'scaleId', v: string) => {
                   setDests((xs) => xs.map((y, j) => (j === i ? { ...y, [k]: v } : y)))
                   setErrors((e) => ({ ...e, [`dest.${i}.${k}`]: '', destinations: '' }))
                 }
                 return (
                   <div key={i} className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
+                    <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[1fr_10rem]">
                       <Field label={`მისამართი ${i + 1}`} error={errors[`dest.${i}.address`]}>
                         <Input value={x.address} placeholder="ჩაბარების პუნქტი" invalid={!!errors[`dest.${i}.address`]} onChange={(e) => upd('address', e.target.value)} />
+                      </Field>
+                      <Field label="სასწორის ID" error={errors[`dest.${i}.scaleId`]}>
+                        <Input value={x.scaleId ?? ''} placeholder="SC-01" className="font-mono" invalid={!!errors[`dest.${i}.scaleId`]} onChange={(e) => upd('scaleId', e.target.value)} />
                       </Field>
                     </div>
                     <button

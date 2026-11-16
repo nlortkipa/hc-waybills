@@ -245,7 +245,7 @@ async function runPipeline(id: string) {
       const res = await rsge.createWaybill(
         {
           waybill_type: 2,
-          seller_un_id: carrier.code,
+          seller_un_id: carrier.id,
           start_address: route.start,
           end_address: route.end,
           driver_tin: driver.personalId,
