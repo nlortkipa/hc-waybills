@@ -98,7 +98,7 @@ export const refs = {
       // (code -1014) and a registered number may not be sent as foreign (code -1065). Check it now,
       // not at the first upload. Skipped while RS.ge isn't connected.
       if (storedCreds() && (!was || was.personalId.trim() !== x.personalId || (was.citizenship ?? 'GE') !== x.citizenship)) {
-        const name = await georgianName(x.personalId)
+        const name = await rsName(x.personalId)
         if (x.citizenship === 'GE' && !name) fail('ეს პირადი ნომერი RS.ge-ს რეესტრში ვერ მოიძებნა')
         if (x.citizenship === 'foreign' && name) fail('ეს პირადი ნომერი საქართველოს რეესტრშია — აირჩიე „საქართველოს მოქალაქე“')
       }
@@ -189,23 +189,23 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   }
   delete next.spSet
   if (next.buyerTin && !/^\d{9}$|^\d{11}$/.test(next.buyerTin) && !next.buyerForeign) fail('მყიდველის ს/ნ უნდა იყოს 9 (კომპანია) ან 11 (ფიზიკური პირი) ციფრი')
-  if (next.buyerForeign && !next.buyerName) fail('უცხოელი მყიდველისთვის შეიყვანე დასახელება')
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
   if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
-  // Georgian buyer: the name always comes from RS.ge, never from what was stored or typed
-  // (RS.ge itself ignores BUYER_NAME and writes the registered name into the waybill).
-  if (next.buyerTin && !next.buyerForeign) next.buyerName = await lookupName(next.buyerTin, 'მყიდველი')
-  // A number in the Georgian register sent as "foreign" is refused by RS.ge (code -1066).
-  if (next.buyerForeign && /^\d{9}$|^\d{11}$/.test(next.buyerTin) && (await georgianName(next.buyerTin))) fail(GEORGIAN_AS_FOREIGN)
+  // The typed name is kept as is (it may differ from RS.ge's); an empty one is filled from RS.ge.
+  // A Georgian number must still be in RS.ge's register.
+  if (next.buyerTin && !next.buyerForeign) {
+    const name = await lookupName(next.buyerTin, 'მყიდველი')
+    next.buyerName ||= name
+  }
+  if (next.buyerTin && next.buyerForeign && !next.buyerName) next.buyerName = await rsName(next.buyerTin)
+  if (next.buyerTin && !next.buyerName) fail('შეიყვანე მყიდველის დასახელება')
   db.set('rs', next)
 }
 
-const GEORGIAN_AS_FOREIGN = 'ეს ნომერი საქართველოს რეესტრშია — გამორთე „უცხოელი“, RS.ge სხვაგვარად ზედნადებს არ მიიღებს'
-
-/** Registered name of a Georgian number, '' when RS.ge doesn't know it. Needs the stored service user. */
-async function georgianName(tin: string) {
+/** Name RS.ge has for the number, '' when it doesn't know it. Needs the stored service user. */
+async function rsName(tin: string) {
   const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
   return rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
 }
@@ -247,9 +247,9 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
     units: r.units.length ? r.units : prev.units,
     transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
   })
-  // A Georgian buyer saved earlier (possibly typed by hand) gets its name from RS.ge now.
+  // A buyer saved without a name gets RS.ge's now. A typed name is never replaced.
   const rs = db.get().rs
-  if (rs.buyerTin && !rs.buyerForeign) {
+  if (rs.buyerTin && !rs.buyerName) {
     const name = await rsge.nameFromTin(c, rs.buyerTin).catch(() => '')
     if (name && name !== rs.buyerName) db.set('rs', { ...db.get().rs, buyerName: name })
   }
@@ -264,9 +264,11 @@ export function disconnectRs(user: User) {
 }
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
-export async function rsNameFromTin(body: { tin?: string } | undefined, user: User) {
+export async function rsNameFromTin(body: { tin?: string; foreign?: boolean } | undefined, user: User) {
   requireAdmin(user)
   const tin = str(body?.tin)
+  // A foreign number has no fixed format, and RS.ge not knowing it is an answer, not an error ('').
+  if (body?.foreign) return { name: tin && tin.length <= 50 ? await rsName(tin) : fail('არასწორი ნომერი') }
   if (!/^\d{9}$|^\d{11}$/.test(tin)) fail('9 ან 11 ციფრი')
   return { name: await lookupName(tin) }
 }

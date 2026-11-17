@@ -43,45 +43,45 @@ const FALLBACK_UNITS = [{ id: RS_UNIT_OTHER, name: 'სხვა' }]
 /** Georgian tax ID: 9 digits (company) or 11 (personal number). */
 const TIN_RE = /^\d{9}$|^\d{11}$/
 
-const GEORGIAN_AS_FOREIGN = 'ეს ნომერი საქართველოს რეესტრშია — გამორთე „მყიდველი უცხოელია“'
-
 const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet && !!rs.sellerUnId
 
 /* ------------------------------ Name lookup ------------------------------ */
 
-type Lookup = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; name: string } | { state: 'error'; message: string }
+/** `missing`: a foreign number RS.ge doesn't know — its name is typed by hand. */
+type Lookup = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; name: string } | { state: 'missing' } | { state: 'error'; message: string }
 
 /** Names already looked up in this session, so re-renders and remounts don't ask RS.ge again. */
 const nameCache = new Map<string, string>()
 
 /**
- * Looks the taxpayer's name up on RS.ge as soon as `tin` is a full Georgian number. A stored
- * name is never trusted: it may have been typed by hand before the lookup existed.
+ * Looks the taxpayer's name up on RS.ge as soon as `tin` is complete: a full Georgian number, or
+ * any foreign number. A stored name is never trusted: it may have been typed by hand.
  */
-function useTinName(tin: string, enabled: boolean): Lookup {
-  const [res, setRes] = useState<{ tin: string; lookup: Lookup }>({ tin: '', lookup: { state: 'idle' } })
-  const valid = enabled && TIN_RE.test(tin)
+function useTinName(tin: string, enabled: boolean, foreign = false): Lookup {
+  const [res, setRes] = useState<{ key: string; lookup: Lookup }>({ key: '', lookup: { state: 'idle' } })
+  const valid = enabled && (foreign ? tin !== '' : TIN_RE.test(tin))
+  const key = `${foreign}:${tin}`
   const preset = nameCache.get(tin)
   useEffect(() => {
     if (!valid || preset) return
     let gone = false
     const t = setTimeout(() => {
-      rsSettings.nameFromTin(tin).then(
+      rsSettings.nameFromTin(tin, foreign).then(
         ({ name }) => {
-          nameCache.set(tin, name)
-          if (!gone) setRes({ tin, lookup: { state: 'ok', name } })
+          if (name) nameCache.set(tin, name)
+          if (!gone) setRes({ key, lookup: name ? { state: 'ok', name } : { state: 'missing' } })
         },
-        (e: Error) => !gone && setRes({ tin, lookup: { state: 'error', message: e.message } }),
+        (e: Error) => !gone && setRes({ key, lookup: { state: 'error', message: e.message } }),
       )
     }, 300)
     return () => {
       gone = true
       clearTimeout(t)
     }
-  }, [tin, valid, preset])
+  }, [tin, foreign, key, valid, preset])
   if (!valid) return { state: 'idle' }
   if (preset) return { state: 'ok', name: preset }
-  return res.tin === tin ? res.lookup : { state: 'loading' }
+  return res.key === key ? res.lookup : { state: 'loading' }
 }
 
 function LookupLine({ lookup }: { lookup: Lookup }) {
@@ -94,6 +94,7 @@ function LookupLine({ lookup }: { lookup: Lookup }) {
           <span className="text-slate-500">RS.ge-ზე მოწმდება…</span>
         </>
       )}
+      {lookup.state === 'missing' && <span className="text-slate-500">RS.ge-ზე ვერ მოიძებნა — დასახელება შეიყვანე ხელით</span>}
       {lookup.state === 'ok' && (
         <>
           <CheckCircle2 className="size-3.5 text-emerald-500" />
@@ -323,19 +324,22 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     setErrors((x) => ({ ...x, [k]: '' }))
   }
   const buyerTin = f.buyerTin.trim()
-  // Looked up for a foreign buyer too: a number in the Georgian register can't be sent as foreign.
-  const buyer = useTinName(buyerTin, connected)
+  // Looked up for every buyer, Georgian or foreign.
+  const buyer = useTinName(buyerTin, connected, f.buyerForeign)
   const transporter = useTinName(f.transporterTin.trim(), connected)
-  /** The name that will be saved: RS.ge's for a Georgian buyer, the typed one for a foreign buyer. */
-  const buyerName = f.buyerForeign ? f.buyerName.trim() : buyer.state === 'ok' ? buyer.name : rs.buyerName
-  /** RS.ge refuses a registered Georgian number marked as foreign (code -1066). */
-  const georgianAsForeign = f.buyerForeign && buyer.state === 'ok'
-  /** The stored name is not what RS.ge has for this number (e.g. typed by hand earlier). */
-  const staleName = !f.buyerForeign && buyer.state === 'ok' && buyerTin === rs.buyerTin && buyer.name !== rs.buyerName
+  // A new number fills the name with RS.ge's once; after that it is the user's to edit. The saved
+  // number keeps its saved name, which may be an override.
+  const [filledFor, setFilledFor] = useState(rs.buyerTin)
+  if (buyer.state === 'ok' && buyerTin !== filledFor) {
+    setFilledFor(buyerTin)
+    setF((x) => ({ ...x, buyerName: buyer.name }))
+  }
+  /** RS.ge has a different name than the one in the field. */
+  const rsOtherName = buyer.state === 'ok' && f.buyerName.trim() !== buyer.name ? buyer.name : null
 
   const orig = toForm(rs, d.cargo)
   const cargoDirty = f.cargoDescription.trim() !== orig.cargoDescription || f.cargoCode.trim() !== orig.cargoCode || Number(f.cargoQuantity) !== d.cargo.quantity
-  const dirty = (Object.keys(f) as (keyof Form)[]).some((k) => k !== 'buyerName' && String(f[k]).trim() !== String(orig[k])) || buyerName !== rs.buyerName
+  const dirty = (Object.keys(f) as (keyof Form)[]).some((k) => String(f[k]).trim() !== String(orig[k]))
 
   const units = rs.units.some((u) => u.id === RS_UNIT_OTHER) ? rs.units : [...rs.units, ...FALLBACK_UNITS]
   const transTypes = rs.transTypes.length ? rs.transTypes : FALLBACK_TRANS
@@ -348,9 +352,8 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     if (!buyerTin) e.buyerTin = 'სავალდებულო ველი'
     else if (!f.buyerForeign && !TIN_RE.test(buyerTin)) e.buyerTin = '9 ან 11 ციფრი'
     else if (buyer.state === 'loading') e.buyerTin = 'დაელოდე, მოწმდება RS.ge-ზე'
-    else if (georgianAsForeign) e.buyerTin = GEORGIAN_AS_FOREIGN
-    else if (!f.buyerForeign && buyer.state === 'error') e.buyerTin = buyer.message
-    if (f.buyerForeign && !f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
+    else if (buyer.state === 'error') e.buyerTin = buyer.message
+    if (!f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
     if (Number(f.unitId) === RS_UNIT_OTHER && !f.unitTxt.trim()) e.unitTxt = 'სავალდებულო ველი'
@@ -369,8 +372,7 @@ function DefaultsForm({ connected }: { connected: boolean }) {
       if (cargoDirty) await cargo.save({ description: f.cargoDescription, code: f.cargoCode, quantity: Number(f.cargoQuantity) })
       await rsSettings.save({
         ...f,
-        // Georgian buyer: the server takes the name from RS.ge as well; this is what was shown.
-        buyerName,
+        buyerName: f.buyerName.trim(),
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
@@ -395,9 +397,8 @@ function DefaultsForm({ connected }: { connected: boolean }) {
             <Toggle
               checked={f.buyerForeign}
               onChange={(v) => {
-                // A foreign buyer's name is typed by hand: never carry a Georgian registry name over.
-                setF((x) => ({ ...x, buyerForeign: v, buyerName: v ? (rs.buyerForeign ? rs.buyerName : '') : x.buyerName }))
-                setErrors((x) => ({ ...x, buyerTin: '', buyerName: '' }))
+                setF((x) => ({ ...x, buyerForeign: v }))
+                setErrors((x) => ({ ...x, buyerTin: '' }))
               }}
               label="მყიდველი უცხოელია"
             />
@@ -405,36 +406,37 @@ function DefaultsForm({ connected }: { connected: boolean }) {
           <div>
             <Field
               label={f.buyerForeign ? 'უცხოელის პირადი ნომერი' : 'საიდენტიფიკაციო / პირადი ნომერი'}
-              error={errors.buyerTin || (georgianAsForeign ? GEORGIAN_AS_FOREIGN : undefined)}
+              error={errors.buyerTin}
               hint={
                 f.buyerForeign
-                  ? 'ნომერი, რომლითაც უცხოელი რეგისტრირებულია RS.ge-ზე — RS.ge მას ზედნადების ატვირთვისას ამოწმებს'
+                  ? 'ნომერი, რომლითაც უცხოელი რეგისტრირებულია RS.ge-ზე — დასახელება შეივსება ავტომატურად, თუ RS.ge-ზე მოიძებნა'
                   : buyer.state === 'idle'
                     ? '9 ციფრი (კომპანია) ან 11 (ფიზიკური პირი) — დასახელება შეივსება ავტომატურად'
                     : undefined
               }
             >
-              <Input value={f.buyerTin} inputMode={f.buyerForeign ? 'text' : 'numeric'} className="font-mono" invalid={!!errors.buyerTin || georgianAsForeign} onChange={set('buyerTin')} />
+              <Input value={f.buyerTin} inputMode={f.buyerForeign ? 'text' : 'numeric'} className="font-mono" invalid={!!errors.buyerTin} onChange={set('buyerTin')} />
             </Field>
-            {!f.buyerForeign && !errors.buyerTin && buyer.state !== 'ok' && <LookupLine lookup={buyer} />}
+            {!errors.buyerTin && buyer.state !== 'ok' && <LookupLine lookup={buyer} />}
           </div>
-          <Field
-            label="დასახელება"
-            error={errors.buyerName}
-            hint={f.buyerForeign ? 'სავალდებულოა უცხოელისთვის' : staleName ? `შენახულია „${rs.buyerName}“ — RS.ge-ზე სხვა დასახელებაა. შეინახე განსაახლებლად.` : !f.buyerForeign && buyer.state === 'ok' ? 'RS.ge-ს რეესტრიდან' : undefined}
-          >
-            {f.buyerForeign ? (
-              <Input value={f.buyerName} invalid={!!errors.buyerName} onChange={set('buyerName')} />
-            ) : (
+          <div>
+            <Field label="დასახელება" error={errors.buyerName} hint={buyer.state === 'ok' && !rsOtherName ? 'RS.ge-ს რეესტრიდან' : undefined}>
               <Input
-                value={buyer.state === 'ok' ? buyer.name : ''}
-                readOnly
-                tabIndex={-1}
-                placeholder={buyer.state === 'loading' ? 'მოწმდება…' : 'შეივსება ნომრით'}
-                className="cursor-default bg-transparent ring-1 ring-slate-500/15 ring-inset"
+                value={f.buyerName}
+                placeholder={buyer.state === 'loading' ? 'მოწმდება…' : f.buyerForeign ? undefined : 'შეივსება ნომრით'}
+                invalid={!!errors.buyerName}
+                onChange={set('buyerName')}
               />
+            </Field>
+            {!errors.buyerName && rsOtherName && (
+              <p className="mt-1 ml-1 text-xs text-slate-500">
+                RS.ge-ზე: „{rsOtherName}“ ·{' '}
+                <button type="button" className="text-brand-600 hover:underline" onClick={() => setF((x) => ({ ...x, buyerName: rsOtherName }))}>
+                  გამოიყენე
+                </button>
+              </p>
             )}
-          </Field>
+          </div>
         </Section>
 
         <Section title="ტრანსპორტირება">

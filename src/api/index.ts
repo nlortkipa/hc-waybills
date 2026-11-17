@@ -108,9 +108,9 @@ export const rsSettings = {
   syncNow() {
     return call('POST', '/api/rs/sync')
   },
-  /** Taxpayer name for a tax ID / personal number, from RS.ge (stored service user). */
-  nameFromTin(tin: string) {
-    return api<{ name: string }>('POST', '/api/rs/name', { tin })
+  /** Taxpayer name for a tax ID / personal number, from RS.ge (stored service user). '' for a foreign number RS.ge doesn't know. */
+  nameFromTin(tin: string, foreign = false) {
+    return api<{ name: string }>('POST', '/api/rs/name', { tin, foreign })
   },
 }
 
