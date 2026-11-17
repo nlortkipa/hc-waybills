@@ -2,10 +2,10 @@
  * Business rules. Every check that used to run in the browser runs here now, so a
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
-import { resolveRoute } from '../src/lib/route.ts'
+import { canUseCarrier, resolveRoute, routeUsable } from '../src/lib/route.ts'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
-import type { CargoDefaults, Carrier, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
+import type { CargoDefaults, Carrier, CarrierRoute, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
 import { IntegrationError, sms } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { store as db } from './store.ts'
@@ -20,6 +20,7 @@ export class HttpError extends Error {
 const fail = (message: string, status = 400): never => {
   throw new HttpError(status, message)
 }
+const str = (v: unknown) => String(v ?? '').trim()
 
 /* ------------------------------ Auth ------------------------------ */
 
@@ -40,18 +41,18 @@ export const auth = {
   },
 }
 
-/** What a user is allowed to see: operators only get their own carrier's shipments. The RS.ge password never leaves the server. */
+/** What a user is allowed to see: operators only get their own carriers' shipments. The RS.ge password never leaves the server. */
 export function viewFor(user: User): Database {
   const raw = db.get()
   const d: Database = { ...raw, rs: { ...raw.rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' } }
   if (user.role !== 'operator') return d
-  const mine = new Set(d.shipments.filter((s) => s.carrierId === user.carrierId).map((s) => s.id))
+  const mine = new Set(d.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => s.id))
   return { ...d, shipments: d.shipments.filter((s) => mine.has(s.id)), logs: d.logs.filter((l) => l.shipmentId && mine.has(l.shipmentId)) }
 }
 
 /* ------------------------- Reference data ------------------------- */
 
-export const REF_COLLECTIONS = ['carriers', 'drivers', 'trucks', 'users'] as const
+export const REF_COLLECTIONS = ['carriers', 'routes', 'drivers', 'trucks', 'users'] as const
 export type RefCollection = (typeof REF_COLLECTIONS)[number]
 type RefRecord = Database[RefCollection][number]
 
@@ -62,8 +63,21 @@ const otherAdmins = (id: string) => active(db.get().users).filter((u) => u.role 
 const LAST_ADMIN = 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
 
 function shipmentCount(col: RefCollection, id: string): number {
-  const k = ({ carriers: 'carrierId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
+  const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
   return db.get().shipments.filter((s) => s[k] === id).length
+}
+
+/** Removes a record, or soft-deletes it when shipments reference it so they keep showing it. */
+function removeOrRetire(col: RefCollection, rec: RefRecord) {
+  if (shipmentCount(col, rec.id) > 0) db.put(col, { ...rec, deletedAt: rec.deletedAt ?? nowIso() } as never)
+  else db.remove(col, rec.id)
+}
+
+/** Removes a carrier's routes whose end address is gone (or all of them, for a deleted carrier). */
+function dropDeadRoutes(carrierId: string) {
+  const c = db.get().carriers.find((x) => x.id === carrierId)
+  const live = new Set(c && !c.deletedAt ? active(c.destinations).map((x) => x.id) : [])
+  for (const r of active(db.get().routes)) if (r.carrierId === carrierId && !live.has(r.destinationId)) removeOrRetire('routes', r)
 }
 
 export const refs = {
@@ -83,9 +97,14 @@ export const refs = {
       revokeSessions = !!was && (phoneKey(was.phone) !== phoneKey(u.phone) || was.role !== u.role)
       if (!phoneKey(u.phone ?? '')) fail('შეიყვანე ტელეფონის ნომერი')
       if (active(db.get().users).some((x) => x.id !== u.id && phoneKey(x.phone) === phoneKey(u.phone))) fail('ამ ტელეფონის ნომრით მომხმარებელი უკვე არსებობს')
+      delete (u as User & { carrierId?: unknown }).carrierId
       if (u.role === 'operator') {
-        if (!u.carrierId || !active(db.get().carriers).some((c) => c.id === u.carrierId)) fail('ოპერატორს უნდა ჰქონდეს მიბმული კარიერი')
-      } else delete u.carrierId
+        const ids = Array.isArray(u.carrierIds) ? [...new Set(u.carrierIds.map(String))] : []
+        const live = new Set(active(db.get().carriers).map((c) => c.id))
+        // A carrier deleted since the form was opened is dropped silently if others remain.
+        u.carrierIds = ids.filter((id) => live.has(id))
+        if (!u.carrierIds.length) fail('ოპერატორს უნდა ჰქონდეს მინიმუმ ერთი კარიერი')
+      } else delete u.carrierIds
     }
     if (col === 'drivers') {
       const x = rec as Driver
@@ -116,7 +135,19 @@ export const refs = {
         .map((x) => ({ ...x, deletedAt: x.deletedAt ?? at }))
       c.destinations = [...c.destinations, ...gone]
     }
+    if (col === 'routes') {
+      const r = rec as CarrierRoute
+      const d = db.get()
+      // Only these fields are kept.
+      Object.assign(r, { carrierId: str(r.carrierId), destinationId: str(r.destinationId) })
+      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'destinationId'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
+      const { carrier, destination } = resolveRoute(d.carriers, r.carrierId, r.destinationId)
+      if (!carrier || carrier.deletedAt) fail('აირჩიე კარიერი')
+      if (!destination || destination.deletedAt) fail('აირჩიე დასრულების მისამართი')
+      if (active(d.routes).some((x) => x.id !== r.id && x.carrierId === r.carrierId && x.destinationId === r.destinationId)) fail('ეს მარშრუტი უკვე არსებობს')
+    }
     db.put(col, rec as never)
+    if (col === 'carriers') dropDeadRoutes(rec.id)
     if (revokeSessions) db.sessions.deleteForUser(rec.id, rec.id === by.id ? token : undefined)
     return rec
   },
@@ -129,13 +160,13 @@ export const refs = {
       if (u?.role === 'admin' && !u.deletedAt && !otherAdmins(id)) fail(`წაშლა შეუძლებელია: ${LAST_ADMIN}`)
     }
     if (col === 'carriers') {
-      const n = active(db.get().users).filter((x) => x.role === 'operator' && x.carrierId === id).length
-      if (n) fail(`წაშლა შეუძლებელია: მიბმულია ${n} ოპერატორთან — ჯერ შეცვალე ან წაშალე ისინი.`)
+      const n = active(db.get().users).filter((x) => x.role === 'operator' && x.carrierIds?.includes(id)).length
+      if (n) fail(`წაშლა შეუძლებელია: მიბმულია ${n} ოპერატორთან — ჯერ მოხსენი ეს კარიერი მათ ანგარიშებში.`)
     }
     const rec = (db.get()[col] as RefRecord[]).find((r) => r.id === id)
     if (!rec) fail('ჩანაწერი ვერ მოიძებნა', 404)
-    if (shipmentCount(col, id) > 0) db.put(col, { ...rec!, deletedAt: rec!.deletedAt ?? nowIso() } as never)
-    else db.remove(col, id)
+    removeOrRetire(col, rec!)
+    if (col === 'carriers') dropDeadRoutes(id)
     if (col === 'users') db.sessions.deleteForUser(id)
   },
 }
@@ -157,23 +188,19 @@ export function saveCargo(value: CargoDefaults, user: User) {
 
 /* ------------------------------ RS.ge ------------------------------ */
 
-const str = (v: unknown) => String(v ?? '').trim()
 const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
 
 /** Saves the admin's RS.ge settings. An empty password keeps the stored one. */
 /**
- * Saves the waybill defaults (buyer, transport, unit, price…). The service user is not part of
- * this: it is set only by connectRs, after RS.ge accepted it. For a Georgian buyer the name is
- * taken from RS.ge, so it always matches the register.
+ * Saves the waybill defaults (transport, unit, price…). The service user is not part of this: it is
+ * set only by connectRs, after RS.ge accepted it. There is no buyer: every waybill is შიდა გადაზიდვა,
+ * whose buyer is the seller itself.
  */
 export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   requireAdmin(user)
   const prev = db.get().rs
   const next: RsSettings = {
     ...prev,
-    buyerTin: str(v.buyerTin),
-    buyerName: str(v.buyerName),
-    buyerForeign: !!v.buyerForeign,
     transporterTin: str(v.transporterTin),
     transId: num(v.transId, 1),
     transTxt: str(v.transTxt),
@@ -188,19 +215,10 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
     comment: str(v.comment),
   }
   delete next.spSet
-  if (next.buyerTin && !/^\d{9}$|^\d{11}$/.test(next.buyerTin) && !next.buyerForeign) fail('მყიდველის ს/ნ უნდა იყოს 9 (კომპანია) ან 11 (ფიზიკური პირი) ციფრი')
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
   if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
-  // The typed name is kept as is (it may differ from RS.ge's); an empty one is filled from RS.ge.
-  // A Georgian number must still be in RS.ge's register.
-  if (next.buyerTin && !next.buyerForeign) {
-    const name = await lookupName(next.buyerTin, 'მყიდველი')
-    next.buyerName ||= name
-  }
-  if (next.buyerTin && next.buyerForeign && !next.buyerName) next.buyerName = await rsName(next.buyerTin)
-  if (next.buyerTin && !next.buyerName) fail('შეიყვანე მყიდველის დასახელება')
   db.set('rs', next)
 }
 
@@ -247,12 +265,6 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
     units: r.units.length ? r.units : prev.units,
     transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
   })
-  // A buyer saved without a name gets RS.ge's now. A typed name is never replaced.
-  const rs = db.get().rs
-  if (rs.buyerTin && !rs.buyerName) {
-    const name = await rsge.nameFromTin(c, rs.buyerTin).catch(() => '')
-    if (name && name !== rs.buyerName) db.set('rs', { ...db.get().rs, buyerName: name })
-  }
   return { tin: r.tin, name: r.name }
 }
 
@@ -288,10 +300,12 @@ function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'carrierId' | 'desti
   const unitTxt = rs.unitId === RS_UNIT_OTHER ? rs.unitTxt : (rs.units.find((u) => u.id === rs.unitId)?.name ?? '')
   const amount = Math.round(s.quantity * rs.price * 100) / 100
   return {
-    type: 2, // მიწოდება ტრანსპორტირებით
-    buyerTin: rs.buyerTin,
-    buyerForeign: rs.buyerForeign,
-    buyerName: rs.buyerName,
+    // შიდა გადაზიდვა: the goods move between the company's own sites, so the buyer is the seller.
+    // (With any other type RS.ge refuses buyer = seller: -1047.)
+    type: 1,
+    buyerTin: rs.sellerTin,
+    buyerForeign: false,
+    buyerName: rs.sellerName,
     startAddress: route.start,
     endAddress: route.end,
     driverTin: driver.personalId.trim(),
@@ -325,7 +339,7 @@ function patch(id: string, fn: (s: Shipment) => Partial<Shipment>, event?: Omit<
 
 function get(id: string, user?: User) {
   const s = db.get().shipments.find((x) => x.id === id)
-  if (!s || (user?.role === 'operator' && s.carrierId !== user.carrierId)) return fail('რეისი ვერ მოიძებნა', 404)
+  if (!s || (user && !canUseCarrier(user, s.carrierId))) return fail('რეისი ვერ მოიძებნა', 404)
   return s
 }
 
@@ -333,20 +347,23 @@ const running = new Set<string>()
 
 export interface NewShipmentInput {
   carrierId: string
-  destinationId: string
+  routeId: string
   driverId: string
   truckId: string
 }
 
 export const shipments = {
   /** Creates the record and starts the upload pipeline in the background. */
-  create(input: NewShipmentInput, user: User): string {
+  create(body: Partial<NewShipmentInput>, user: User): string {
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა', 403)
-    if (user.role === 'operator' && input.carrierId !== user.carrierId) fail('ოპერატორს შეუძლია მხოლოდ საკუთარი კარიერის გამოყენება', 403)
+    const input = { carrierId: str(body.carrierId), routeId: str(body.routeId), driverId: str(body.driverId), truckId: str(body.truckId) }
+    if (!canUseCarrier(user, input.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
     const d = db.get()
-    const route = resolveRoute(d.carriers, input.carrierId, input.destinationId)
+    const picked = d.routes.find((x) => x.id === input.routeId && x.carrierId === input.carrierId)
+    const route = resolveRoute(d.carriers, input.carrierId, picked?.destinationId ?? '')
     if (!route.carrier || route.carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
-    if (!route.destination || route.destination.deletedAt) fail('დასრულების მისამართი ვერ მოიძებნა')
+    if (!picked || !routeUsable(d.carriers, picked)) fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
+    const destinationId = picked!.destinationId
     if (!active(d.drivers).some((x) => x.id === input.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
     if (!active(d.trucks).some((x) => x.id === input.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
     // Cargo and declared quantity are fixed by the admin, never taken from the request.
@@ -360,12 +377,13 @@ export const shipments = {
       createdAt: nowIso(),
       createdBy: user.id,
       carrierId: input.carrierId,
-      destinationId: input.destinationId,
+      routeId: input.routeId,
+      destinationId,
       driverId: input.driverId,
       truckId: input.truckId,
       cargo,
       quantity,
-      rsWaybill: buildWaybill(d, { ...input, id: sid, cargo, quantity }),
+      rsWaybill: buildWaybill(d, { ...input, destinationId, id: sid, cargo, quantity }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },

@@ -1,4 +1,4 @@
-import { Building2, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
+import { Building2, Check, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
@@ -6,6 +6,7 @@ import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
+import { resolveRoute, routeLabel } from '../lib/route'
 import type { Database, Destination } from '../types'
 
 type Rec = Record<string, string | undefined> & { id: string }
@@ -15,7 +16,14 @@ interface FieldDef {
   label: string
   type?: 'text' | 'tel' | 'email' | 'select'
   placeholder?: string
-  options?: (d: Database) => { value: string; label: string }[]
+  /** `rec` is the record being edited, for options that depend on another field. */
+  options?: (d: Database, rec: Rec) => { value: string; label: string }[]
+  /** Picked again (first option) when this other field changes. */
+  resetOn?: string
+  /** Under a select whose options depend on another field: why there are none. */
+  emptyHint?: (d: Database, rec: Rec) => string | undefined
+  /** Takes the full row of the form. */
+  wide?: boolean
   validate?: (v: string, rec: Rec) => string | null
   optional?: boolean
   showIf?: (rec: Rec) => boolean
@@ -44,9 +52,26 @@ const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpper
 
 /** Carrier records carry a destinations array next to their string fields. */
 const destsOf = (r: Rec) => active((r as unknown as { destinations?: Destination[] }).destinations ?? [])
+/** User records carry the operator's carrier ids. */
+const carrierIdsOf = (r: Rec) => (r as unknown as { carrierIds?: string[] }).carrierIds ?? []
+
+const carrierNames = (d: Database, r: Rec) =>
+  carrierIdsOf(r)
+    .map((id) => d.carriers.find((c) => c.id === id))
+    .filter((c) => c && !c.deletedAt)
+    .map((c) => c!.name)
+    .join(', ') || '—'
 
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
-const carrierOptions = (d: Database) => active(d.carriers).map((c) => ({ value: c.id, label: c.name }))
+/** A route record (carrierId, destinationId) resolved to its carrier and addresses. */
+const routeOf = (d: Database, r: Rec) => resolveRoute(d.carriers, r.carrierId ?? '', r.destinationId ?? '')
+
+/** End addresses of the route's carrier that no other route uses yet. */
+function freeDestinations(d: Database, r: Rec) {
+  const c = d.carriers.find((x) => x.id === r.carrierId && !x.deletedAt)
+  const taken = new Set(active(d.routes).filter((x) => x.carrierId === r.carrierId && x.id !== r.id).map((x) => x.destinationId))
+  return c ? active(c.destinations).filter((x) => !taken.has(x.id)) : []
+}
 
 const TABS: TabDef[] = [
   {
@@ -75,6 +100,37 @@ const TABS: TabDef[] = [
           </ul>
         ),
       },
+    ],
+  },
+  {
+    key: 'routes',
+    label: 'მარშრუტები',
+    singular: 'მარშრუტის',
+    icon: Route,
+    fields: [
+      { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name })) },
+      {
+        key: 'destinationId',
+        label: 'დასრულების მისამართი',
+        type: 'select',
+        placeholder: 'აირჩიე დასრულების მისამართი…',
+        wide: true,
+        resetOn: 'carrierId',
+        options: (d, r) => freeDestinations(d, r).map((x) => ({ value: x.id, label: x.address })),
+        emptyHint: (d, r) => {
+          const c = d.carriers.find((x) => x.id === r.carrierId)
+          if (!c) return undefined
+          return active(c.destinations).length ? 'ამ კარიერის ყველა დასრულების მისამართს მარშრუტი უკვე აქვს.' : 'ამ კარიერს დასრულების მისამართი არ აქვს — დაამატე „კარიერებში“.'
+        },
+      },
+    ],
+    title: (r, d) => routeLabel(d.carriers, { carrierId: r.carrierId ?? '', destinationId: r.destinationId ?? '' }),
+    subtitle: (r, d) => carrierName(d, r.carrierId),
+    columns: [
+      { label: 'კარიერი', render: (r, d) => <span className="font-medium text-slate-900">{carrierName(d, r.carrierId)}</span> },
+      { label: 'დაწყების მისამართი', render: (r, d) => routeOf(d, r).start || '—' },
+      { label: 'დასრულების მისამართი', render: (r, d) => routeOf(d, r).end || '—' },
+      { label: 'სასწორის ID', render: (r, d) => <span className="font-mono text-[13px]">{routeOf(d, r).destination?.scaleId || '—'}</span> },
     ],
   },
   {
@@ -139,14 +195,13 @@ const TABS: TabDef[] = [
         type: 'select',
         options: () => (['admin', 'operator', 'report'] as const).map((r) => ({ value: r, label: roleLabel[r] })),
       },
-      { key: 'carrierId', label: 'კარიერი', type: 'select', options: carrierOptions, showIf: (r) => r.role === 'operator' },
     ],
     title: (r) => `${r.firstName} ${r.lastName}`,
-    subtitle: (r, d) => (r.role === 'operator' ? `${roleLabel.operator} · ${carrierName(d, r.carrierId)}` : roleLabel[r.role as 'admin']),
+    subtitle: (r, d) => (r.role === 'operator' ? `${roleLabel.operator} · ${carrierNames(d, r)}` : roleLabel[r.role as 'admin']),
     columns: [
       { label: 'სახელი', render: (r) => <span className="font-medium text-slate-900">{r.firstName} {r.lastName}</span> },
       { label: 'როლი', render: (r) => <Badge tone={r.role === 'admin' ? 'violet' : r.role === 'operator' ? 'blue' : 'green'}>{roleLabel[r.role as 'admin']}</Badge> },
-      { label: 'კარიერი', render: (r, d) => (r.carrierId ? carrierName(d, r.carrierId) : '—') },
+      { label: 'კარიერები', render: (r, d) => (r.role === 'operator' ? carrierNames(d, r) : '—') },
       { label: 'ელ-ფოსტა', render: (r) => r.email },
       { label: 'ტელეფონი', render: (r) => fmtPhone(r.phone!) },
     ],
@@ -167,13 +222,20 @@ export function ReferenceData() {
   const rows = useMemo(() => {
     const list = active(d[tab.key] as unknown as (Rec & { deletedAt?: string })[])
     const n = q.trim().toLowerCase()
-    const text = (r: Rec) => [...Object.values(r).filter((v) => typeof v === 'string'), ...destsOf(r).map((x) => x.address)]
+    const text = (r: Rec): string[] => {
+      if (tab.key === 'routes') {
+        const x = routeOf(d, r)
+        return [carrierName(d, r.carrierId), x.start, x.end, x.destination?.scaleId ?? '']
+      }
+      return [...Object.values(r).filter((v) => typeof v === 'string'), ...destsOf(r).map((x) => x.address), ...(tab.key === 'users' ? [carrierNames(d, r)] : [])]
+    }
     return n ? list.filter((r) => text(r).some((v) => v.toLowerCase().includes(n))) : list
   }, [d, tab.key, q])
 
   const blank = (): Rec => {
     const r: Rec = { id: '' }
-    tab.fields.forEach((f) => (r[f.key] = f.type === 'select' ? (f.options!(d)[0]?.value ?? '') : ''))
+    // Options can depend on fields before them (a route's end addresses on its carrier).
+    tab.fields.forEach((f) => (r[f.key] = f.type === 'select' ? (f.options!(d, r)[0]?.value ?? '') : ''))
     if (tab.key === 'carriers') Object.assign(r, { destinations: [{ id: '', address: '', scaleId: '' }] })
     return r
   }
@@ -196,7 +258,7 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მძღოლები, მანქანები და მომხმარებლები."
+        subtitle="კარიერები, მარშრუტები, მძღოლები, მანქანები და მომხმარებლები."
         actions={
           <span className="hidden sm:block">
             <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
@@ -310,8 +372,10 @@ export function ReferenceData() {
 
 function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name: string }) {
   const user = useUser()
+  const d = useDb()
   const blocker = refs.blocker(col, id, user)
   const used = refs.shipmentCount(col, id)
+  const routeCount = col === 'carriers' ? active(d.routes).filter((x) => x.carrierId === id).length : 0
   return (
     <>
       <b className="text-slate-900">{name}</b> წაიშლება სიიდან და ახალ რეისებში ვეღარ აირჩევა.
@@ -320,6 +384,7 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
       ) : used ? (
         <p className="mt-2 rounded-lg bg-slate-100 p-2 text-slate-600">გამოიყენება {used} რეისში — ეს რეისები და რეპორტები კვლავ აჩვენებს ამ ჩანაწერს.</p>
       ) : null}
+      {!blocker && routeCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">მასთან ერთად წაიშლება ამ კარიერის {routeCount} მარშრუტი.</p>}
       {!blocker && col === 'users' && id === user.id && (
         <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ეს შენი ანგარიშია — წაშლის შემდეგ სისტემიდან გამოხვალ.</p>
       )}
@@ -347,6 +412,10 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [r, setR] = useState<Rec>(() => (tab.key === 'drivers' && !rec.citizenship ? { ...rec, citizenship: 'GE' } : rec))
   const hasDests = tab.key === 'carriers'
   const [dests, setDests] = useState<Destination[]>(() => destsOf(rec).map((x) => ({ ...x })))
+  const liveCarriers = active(d.carriers)
+  // Deleted carriers drop out of the list; saving removes them from the operator.
+  const [carrierIds, setCarrierIds] = useState<string[]>(() => carrierIdsOf(rec).filter((id) => liveCarriers.some((c) => c.id === id)))
+  const pickCarriers = tab.key === 'users' && r.role === 'operator'
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const isNew = !rec.id
@@ -358,13 +427,13 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       if (f.showIf && !f.showIf(r)) continue
       const v = (r[f.key] ?? '').trim()
       if (!v) {
-        if (f.key === 'carrierId' && !active(d.carriers).length) errs[f.key] = 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
-        else if (!f.optional) errs[f.key] = 'სავალდებულო ველი'
+        if (!f.optional) errs[f.key] = f.type === 'select' ? 'აირჩიე' : 'სავალდებულო ველი'
         continue
       }
       const msg = f.validate?.(v, r)
       if (msg) errs[f.key] = msg
     }
+    if (pickCarriers && !carrierIds.length) errs.carrierIds = liveCarriers.length ? 'მონიშნე მინიმუმ ერთი კარიერი' : 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
     if (hasDests) {
       if (!dests.length) errs.destinations = 'დაამატე მინიმუმ ერთი დასრულების მისამართი'
       const seen = new Set<string>()
@@ -389,6 +458,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         clean[f.key] = v
       }
       if (hasDests) Object.assign(clean, { destinations: dests.map((x) => ({ id: x.id, address: x.address.trim(), scaleId: (x.scaleId ?? '').trim() })) })
+      if (pickCarriers) Object.assign(clean, { carrierIds })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -397,6 +467,21 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       setBusy(false)
     }
   }
+
+  /** Sets a field; fields whose options depend on it are picked again. */
+  const setField = (key: string, value: string) => {
+    setR((x) => {
+      const next: Rec = { ...x, [key]: value }
+      for (const f of tab.fields) if (f.resetOn === key) next[f.key] = f.options!(d, next)[0]?.value ?? ''
+      return next
+    })
+    setErrors((x) => ({ ...x, [key]: '', ...Object.fromEntries(tab.fields.filter((f) => f.resetOn === key).map((f) => [f.key, ''])) }))
+    // A new operator with only one carrier to choose from gets it right away.
+    if (key === 'role' && value === 'operator' && !carrierIds.length && liveCarriers.length === 1) setCarrierIds([liveCarriers[0].id])
+  }
+
+  const fields = tab.fields.filter((f) => !f.showIf || f.showIf(r))
+  const routeStart = tab.key === 'routes' ? d.carriers.find((c) => c.id === r.carrierId)?.startAddress : undefined
 
   return (
     <Modal
@@ -415,14 +500,14 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       }
     >
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
-        {tab.fields
-          .filter((f) => !f.showIf || f.showIf(r))
-          .map((f) => (
-            <div key={f.key} className={cx(tab.fields.length % 2 === 1 && f === tab.fields[0] && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]}>
+        {fields.map((f) => {
+          const opts = f.type === 'select' ? f.options!(d, r) : []
+          return (
+            <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
+              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : undefined}>
                 {f.type === 'select' ? (
-                  <Select value={r[f.key] ?? ''} onChange={(e) => setR((x) => ({ ...x, [f.key]: e.target.value, ...(f.key === 'role' && e.target.value === 'operator' && !x.carrierId ? { carrierId: d.carriers[0]?.id } : {}) }))} invalid={!!errors[f.key]}>
-                    {f.options!(d).map((o) => (
+                  <Select value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
+                    {opts.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -436,15 +521,54 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                     inputMode={f.key === 'personalId' ? 'numeric' : undefined}
                     className={f.mono ? 'font-mono' : undefined}
                     invalid={!!errors[f.key]}
-                    onChange={(e) => {
-                      setR((x) => ({ ...x, [f.key]: e.target.value }))
-                      setErrors((x) => ({ ...x, [f.key]: '' }))
-                    }}
+                    onChange={(e) => setField(f.key, e.target.value)}
                   />
                 )}
               </Field>
             </div>
-          ))}
+          )
+        })}
+
+        {routeStart !== undefined && (
+          <div className="rounded-[10px] bg-fill px-4 py-3 text-sm sm:col-span-2">
+            <span className="text-slate-500">დაწყების მისამართი: </span>
+            <span className="font-medium text-slate-900">{routeStart || '—'}</span>
+          </div>
+        )}
+
+        {pickCarriers && (
+          <div className="sm:col-span-2">
+            <p className="mb-1.5 text-sm font-medium text-slate-700">კარიერები</p>
+            <p className="mb-2 text-xs text-slate-500">ოპერატორი რეისის შექმნისას აირჩევს ერთ-ერთს და ხედავს მონიშნული კარიერების რეისებს.</p>
+            {liveCarriers.length ? (
+              <div className="flex flex-wrap gap-2" role="group" aria-label="კარიერები">
+                {liveCarriers.map((c) => {
+                  const on = carrierIds.includes(c.id)
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => {
+                        setCarrierIds((xs) => (on ? xs.filter((x) => x !== c.id) : [...xs, c.id]))
+                        setErrors((x) => ({ ...x, carrierIds: '' }))
+                      }}
+                      className={cx(
+                        'pressable flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm ring-1 transition-colors',
+                        on ? 'bg-brand-600 font-medium text-white ring-brand-600' : 'bg-surface text-slate-700 ring-slate-200 hover:bg-fill',
+                      )}
+                    >
+                      {on && <Check className="size-4" />}
+                      {c.name}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+            {errors.carrierIds && <p className="mt-2 text-xs text-rose-600">{errors.carrierIds}</p>}
+          </div>
+        )}
+
         {hasDests && (
           <div className="sm:col-span-2">
             <div className="mb-2 flex items-center justify-between">
@@ -486,6 +610,9 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                 )
               })}
             </div>
+            {dests.some((x) => x.id && active(d.routes).some((y) => y.destinationId === x.id)) && (
+              <p className="mt-2 text-xs text-slate-500">წაშლილი მისამართის მარშრუტიც წაიშლება.</p>
+            )}
           </div>
         )}
         <button type="submit" className="hidden" />
@@ -493,4 +620,3 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     </Modal>
   )
 }
-

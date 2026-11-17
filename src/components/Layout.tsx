@@ -2,6 +2,7 @@ import { BarChart3, ChevronRight, Database, FileText, LayoutDashboard, LogOut, P
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useDb } from '../api/store'
+import { userCarriers } from '../api'
 import { cx, initials } from '../lib/util'
 import { roleLabel, useSession, useUser } from '../session'
 import type { Role } from '../types'
@@ -53,8 +54,8 @@ function Brand() {
 function useAccount() {
   const user = useUser()
   const d = useDb()
-  const carrier = d.carriers.find((c) => c.id === user.carrierId)
-  return { user, sub: carrier ? `${roleLabel[user.role]} · ${carrier.name}` : roleLabel[user.role] }
+  const names = user.role === 'operator' ? userCarriers(d, user).map((c) => c.name) : []
+  return { user, sub: names.length ? `${roleLabel[user.role]} · ${names.join(', ')}` : roleLabel[user.role] }
 }
 
 function SidebarAccount({ onLogout }: { onLogout: () => void }) {

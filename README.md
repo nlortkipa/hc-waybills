@@ -11,7 +11,7 @@ sequenceDiagram
     participant RS as RS.ge (Waybill API)
     participant SMS as SMS Provider
 
-    Op->>App: Pick end address, driver, truck
+    Op->>App: Pick carrier, route, driver, truck
     Op->>App: Click "Upload waybill"
     App->>RS: Create waybill
     RS-->>App: Waybill number
@@ -33,12 +33,13 @@ flowchart LR
 
 | Entity | Fields |
 |---|---|
-| **Carrier** | Name, code, start address (one), end addresses (one or more) |
+| **Carrier** | Name, start address (one), end addresses (one or more, each with its scale ID) |
+| **Route** | Carrier + one of its end addresses (start → end). Operators pick a route for each shipment |
 | **Driver** | First/last name, personal ID, phone |
 | **Truck** | Model, plate number, trailer number |
 | **User** | Name, phone, email, role |
 
-**Roles:** `Admin` · `Operator` (bound to one carrier) · `Report user`
+**Roles:** `Admin` · `Operator` (given one or more carriers) · `Report user`
 
 ## Running the app
 
@@ -90,23 +91,23 @@ The latest build is also saved as `release/hc-portal.apk` and copied into `dist/
 
 The interface is in Georgian.
 
-1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. There must always be at least one admin: the last one can't be deleted or given another role, but an admin can delete their own account once another admin exists. As admin, add carriers, drivers, trucks and other users (each with their own phone number) in **ცნობარები**. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
-2. As an operator, open **ახალი რეისი** (new shipment), pick the end address, driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
+1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. There must always be at least one admin: the last one can't be deleted or given another role, but an admin can delete their own account once another admin exists. As admin, add carriers, then open routes for them in **მარშრუტები** (pick the carrier, then one of its end addresses), and add drivers, trucks and other users (each with their own phone number) in **ცნობარები**. An operator is given one or more carriers and sees those carriers' shipments. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
+2. As an operator, open **ახალი რეისი** (new shipment), pick the carrier (skipped when there is only one), one of its routes, the driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
 3. In **API მოთხოვნები**: watch every RS.ge and SMS request and response (admins can clear the log).
 
 ### RS.ge waybills
 
 Protocol: [`docs/rs-ge/waybill_protocol.pdf`](docs/rs-ge/waybill_protocol.pdf) (official, v4.0.4, from eservices.rs.ge → სერვისების დოკუმენტაცია). SOAP endpoint `https://services.rs.ge/WayBillService/WayBillService.asmx` (override with `RS_WAYBILL_URL`).
 
-RS.ge has no separate sandbox host: everything goes to the normal endpoint, and waybills belong to whoever owns the service user. The test users in the protocol (`tbilisi` / `satesto2`) are rejected as of Nov 2026; the public test service user `YVELAM GAMOIYENET:12345678910` / `123456` works (test taxpayer 12345678910, buyer e.g. `206322102`, driver `11111111111`). Anyone can see and change its waybills, so cancel each one right after with **გაუქმება**.
+RS.ge has no separate sandbox host: everything goes to the normal endpoint, and waybills belong to whoever owns the service user. The test users in the protocol (`tbilisi` / `satesto2`) are rejected as of Nov 2026; the public test service user `YVELAM GAMOIYENET:12345678910` / `123456` works (test taxpayer 12345678910, driver `11111111111`). Anyone can see and change its waybills, so cancel each one right after with **გაუქმება**.
 
 Setup (admin, **RS.ge** tab):
 
 1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and enter its user name (`su`) and password (`sp`). The password is stored only on the server, encrypted (AES-256-GCM) with `HC_SECRET_KEY`, and never sent to browsers.
 2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
-3. Fill in the buyer (tax ID, name; **მოძებნა** looks the name up on RS.ge), unit, price, VAT type and transport fields. They apply to every shipment.
+3. Fill in the unit, price, VAT type and transport fields. They apply to every shipment. There is no buyer to fill in: every waybill is შიდა გადაზიდვა (internal transport between the company's own sites), so the buyer is the seller, taken from the connected service user.
 
-Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybil_vd` (sic; activates it with the transport start set to now and returns the waybill number. Plain `send_waybill` would keep the time of the save, which is wrong when activation is retried later). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. RS.ge also cancels a completed waybill, so **გაუქმება** stays available after **დასრულება**. After either one the waybill is read back; if RS.ge refused because it was already done on the rs.ge portal, that counts as done. Each of these calls appears in **API მოთხოვნები** with the password masked.
+Per shipment the server calls `save_waybill` (type 1, შიდა გადაზიდვა, buyer = seller; RS.ge refuses buyer = seller on any other type with code -1047; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybil_vd` (sic; activates it with the transport start set to now and returns the waybill number. Plain `send_waybill` would keep the time of the save, which is wrong when activation is retried later). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. RS.ge also cancels a completed waybill, so **გაუქმება** stays available after **დასრულება**. After either one the waybill is read back; if RS.ge refused because it was already done on the rs.ge portal, that counts as done. Each of these calls appears in **API მოთხოვნები** with the password masked.
 
 A retry after a refusal builds the waybill again from the current settings and reference data (nothing was created on RS.ge), so fixing the settings and pressing **ხელახლა ცდა** is enough.
 
@@ -130,4 +131,5 @@ Mapping notes:
 ### Mock assumptions to confirm with the client
 
 - Cargo (description, code) and the declared quantity are set once by the admin and sent in the RS.ge `goods_list`.
-- Drivers and trucks are shared across carriers. Only start/end addresses and operators are tied to a carrier.
+- Drivers and trucks are shared across carriers. Only addresses, routes and operators are tied to a carrier.
+- Removing an end address, or deleting a carrier, also removes its routes. Records that shipments use are kept, hidden from pickers, so those shipments still show them.

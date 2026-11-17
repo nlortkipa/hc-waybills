@@ -42,7 +42,7 @@ const SESSION_MAX_MS = 90 * 86400_000
 /** last_used_at is written at most this often, so polling doesn't write on every request. */
 const SESSION_TOUCH_MS = 3600_000
 
-type RecordCol = 'carriers' | 'drivers' | 'trucks' | 'users'
+type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
 export type StoredCol = RecordCol | 'shipments'
 type MetaKey = 'cargo' | 'rs'
 
@@ -59,6 +59,7 @@ sql.exec(`
   PRAGMA busy_timeout = 5000;
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS carriers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS drivers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS trucks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -72,7 +73,7 @@ sql.exec(`
 
 /* ------------------------------ Low level ------------------------------ */
 
-const RECORD_COLS: RecordCol[] = ['carriers', 'drivers', 'trucks', 'users']
+const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'users']
 
 function getMeta<T>(key: string): T | undefined {
   const row = sql.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
@@ -118,6 +119,7 @@ function readAll(): Database | null {
   return {
     version,
     carriers: parseRows(sql.prepare('SELECT data FROM carriers ORDER BY rowid').all()),
+    routes: parseRows(sql.prepare('SELECT data FROM routes ORDER BY rowid').all()),
     drivers: parseRows(sql.prepare('SELECT data FROM drivers ORDER BY rowid').all()),
     trucks: parseRows(sql.prepare('SELECT data FROM trucks ORDER BY rowid').all()),
     users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),

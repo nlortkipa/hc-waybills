@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { logs as logsApi } from '../api'
 import { Badge, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
+import { canUseCarrier } from '../lib/route'
 import { cx, formatTime } from '../lib/util'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -24,7 +25,7 @@ export function ApiLog() {
 
   const visibleIds = useMemo(() => {
     if (user.role !== 'operator') return null
-    return new Set(d.shipments.filter((x) => x.carrierId === user.carrierId).map((x) => x.id))
+    return new Set(d.shipments.filter((x) => canUseCarrier(user, x.carrierId)).map((x) => x.id))
   }, [d.shipments, user])
   const logs = d.logs.filter((l) => (!svc || l.service === svc) && (!visibleIds || !l.shipmentId || visibleIds.has(l.shipmentId)))
 

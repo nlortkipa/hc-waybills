@@ -2,23 +2,18 @@ import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, RefreshCw, Unp
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { cargo, rsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select, Toggle } from '../components/ui'
+import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
 import { formatDateTime } from '../lib/util'
 import type { CargoDefaults, RsSettings } from '../types'
 
-type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'unitId' | 'unitTxt' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment' | 'cargoDescription' | 'cargoCode' | 'cargoQuantity', string> & {
-  buyerForeign: boolean
-}
+type Form = Record<'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'unitId' | 'unitTxt' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment' | 'cargoDescription' | 'cargoCode' | 'cargoQuantity', string>
 
 const toForm = (rs: RsSettings, c: CargoDefaults): Form => ({
   cargoDescription: c.description,
   cargoCode: c.code,
   cargoQuantity: c.quantity ? String(c.quantity) : '',
-  buyerTin: rs.buyerTin,
-  buyerName: rs.buyerName,
-  buyerForeign: rs.buyerForeign,
   transporterTin: rs.transporterTin,
   transId: String(rs.transId),
   transTxt: rs.transTxt,
@@ -323,19 +318,7 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     setF((x) => ({ ...x, [k]: e.target.value }))
     setErrors((x) => ({ ...x, [k]: '' }))
   }
-  const buyerTin = f.buyerTin.trim()
-  // Looked up for every buyer, Georgian or foreign.
-  const buyer = useTinName(buyerTin, connected, f.buyerForeign)
   const transporter = useTinName(f.transporterTin.trim(), connected)
-  // A new number fills the name with RS.ge's once; after that it is the user's to edit. The saved
-  // number keeps its saved name, which may be an override.
-  const [filledFor, setFilledFor] = useState(rs.buyerTin)
-  if (buyer.state === 'ok' && buyerTin !== filledFor) {
-    setFilledFor(buyerTin)
-    setF((x) => ({ ...x, buyerName: buyer.name }))
-  }
-  /** RS.ge has a different name than the one in the field. */
-  const rsOtherName = buyer.state === 'ok' && f.buyerName.trim() !== buyer.name ? buyer.name : null
 
   const orig = toForm(rs, d.cargo)
   const cargoDirty = f.cargoDescription.trim() !== orig.cargoDescription || f.cargoCode.trim() !== orig.cargoCode || Number(f.cargoQuantity) !== d.cargo.quantity
@@ -349,11 +332,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     if (!f.cargoDescription.trim()) e.cargoDescription = 'სავალდებულო ველი'
     if (!f.cargoCode.trim()) e.cargoCode = 'სავალდებულო ველი'
     if (!(Number(f.cargoQuantity) > 0)) e.cargoQuantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
-    if (!buyerTin) e.buyerTin = 'სავალდებულო ველი'
-    else if (!f.buyerForeign && !TIN_RE.test(buyerTin)) e.buyerTin = '9 ან 11 ციფრი'
-    else if (buyer.state === 'loading') e.buyerTin = 'დაელოდე, მოწმდება RS.ge-ზე'
-    else if (buyer.state === 'error') e.buyerTin = buyer.message
-    if (!f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
     if (Number(f.unitId) === RS_UNIT_OTHER && !f.unitTxt.trim()) e.unitTxt = 'სავალდებულო ველი'
@@ -372,7 +350,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
       if (cargoDirty) await cargo.save({ description: f.cargoDescription, code: f.cargoCode, quantity: Number(f.cargoQuantity) })
       await rsSettings.save({
         ...f,
-        buyerName: f.buyerName.trim(),
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
@@ -390,51 +367,16 @@ function DefaultsForm({ connected }: { connected: boolean }) {
 
   return (
     <form onSubmit={save} noValidate>
-      {!connected && <p className="mb-3 ml-1 text-sm text-slate-500">ჯერ დაუკავშირდი RS.ge-ს — მყიდველის შემოწმება და ცნობარები მის გარეშე არ მუშაობს.</p>}
+      {!connected && <p className="mb-3 ml-1 text-sm text-slate-500">ჯერ დაუკავშირდი RS.ge-ს — ნომრების შემოწმება და ცნობარები მის გარეშე არ მუშაობს.</p>}
       <fieldset disabled={!connected} className="space-y-4 disabled:pointer-events-none disabled:opacity-50">
-        <Section title="მყიდველი" text={import.meta.env.DEV ? 'ვის მიეწოდება ტვირთი. ერთი და იგივე ყველა რეისზე. სატესტო მყიდველი: 206322102 (12345678910 თავად სატესტო გამყიდველია).' : 'ვის მიეწოდება ტვირთი. ერთი და იგივე ყველა რეისზე.'}>
-          <div className="sm:col-span-2">
-            <Toggle
-              checked={f.buyerForeign}
-              onChange={(v) => {
-                setF((x) => ({ ...x, buyerForeign: v }))
-                setErrors((x) => ({ ...x, buyerTin: '' }))
-              }}
-              label="მყიდველი უცხოელია"
-            />
-          </div>
-          <div>
-            <Field
-              label={f.buyerForeign ? 'უცხოელის პირადი ნომერი' : 'საიდენტიფიკაციო / პირადი ნომერი'}
-              error={errors.buyerTin}
-              hint={
-                f.buyerForeign
-                  ? 'ნომერი, რომლითაც უცხოელი რეგისტრირებულია RS.ge-ზე — დასახელება შეივსება ავტომატურად, თუ RS.ge-ზე მოიძებნა'
-                  : buyer.state === 'idle'
-                    ? '9 ციფრი (კომპანია) ან 11 (ფიზიკური პირი) — დასახელება შეივსება ავტომატურად'
-                    : undefined
-              }
-            >
-              <Input value={f.buyerTin} inputMode={f.buyerForeign ? 'text' : 'numeric'} className="font-mono" invalid={!!errors.buyerTin} onChange={set('buyerTin')} />
-            </Field>
-            {!errors.buyerTin && buyer.state !== 'ok' && <LookupLine lookup={buyer} />}
-          </div>
-          <div>
-            <Field label="დასახელება" error={errors.buyerName} hint={buyer.state === 'ok' && !rsOtherName ? 'RS.ge-ს რეესტრიდან' : undefined}>
-              <Input
-                value={f.buyerName}
-                placeholder={buyer.state === 'loading' ? 'მოწმდება…' : f.buyerForeign ? undefined : 'შეივსება ნომრით'}
-                invalid={!!errors.buyerName}
-                onChange={set('buyerName')}
-              />
-            </Field>
-            {!errors.buyerName && rsOtherName && (
-              <p className="mt-1 ml-1 text-xs text-slate-500">
-                RS.ge-ზე: „{rsOtherName}“ ·{' '}
-                <button type="button" className="text-brand-600 hover:underline" onClick={() => setF((x) => ({ ...x, buyerName: rsOtherName }))}>
-                  გამოიყენე
-                </button>
-              </p>
+        <Section title="ზედნადების ტიპი" text="შიდა გადაზიდვა — ტვირთი გადაადგილდება კომპანიის ობიექტებს შორის, ამიტომ მყიდველი თავად გამყიდველია.">
+          <div className="text-sm text-slate-700 sm:col-span-2">
+            მყიდველი: {rs.sellerTin ? (
+              <>
+                {rs.sellerName} <span className="font-mono text-[13px] text-slate-500">({rs.sellerTin})</span>
+              </>
+            ) : (
+              <span className="text-slate-500">შეივსება RS.ge-სთან დაკავშირებისას</span>
             )}
           </div>
         </Section>

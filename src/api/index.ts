@@ -2,8 +2,9 @@
  * App-facing API. Every change goes to the HC server (server/), which owns the data
  * and enforces the rules; reads come from the synced copy in ./store.
  */
+import { canUseCarrier } from '../lib/route'
 import { active } from '../lib/util'
-import type { CargoDefaults, Database, RsSettings, Shipment, User } from '../types'
+import type { CargoDefaults, Carrier, Database, RsSettings, Shipment, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -42,7 +43,7 @@ export const auth = {
 
 /* ------------------------- Reference data ------------------------- */
 
-export type RefCollection = 'carriers' | 'drivers' | 'trucks' | 'users'
+export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
 type RefRecord<K extends RefCollection> = Database[K][number]
 
 export const refs = {
@@ -52,7 +53,7 @@ export const refs = {
 
   /** Number of shipments that reference the record (they keep showing it after deletion). */
   shipmentCount(col: RefCollection, id: string): number {
-    const k = ({ carriers: 'carrierId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
+    const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
     return db.get().shipments.filter((s) => s[k] === id).length
   },
 
@@ -64,14 +65,14 @@ export const refs = {
     }
     if (col === 'carriers') {
       const u = refs.boundOperators(id)
-      if (u) return `მიბმულია ${u} ოპერატორთან — ჯერ შეცვალე ან წაშალე ისინი.`
+      if (u) return `მიბმულია ${u} ოპერატორთან — ჯერ მოხსენი ეს კარიერი მათ ანგარიშებში.`
     }
     return null
   },
 
-  /** Active operators bound to a carrier — they can no longer create shipments once it is deleted. */
+  /** Active operators given a carrier — they could no longer use it once it is deleted. */
   boundOperators(carrierId: string): number {
-    return active(db.get().users).filter((x) => x.role === 'operator' && x.carrierId === carrierId).length
+    return active(db.get().users).filter((x) => x.role === 'operator' && x.carrierIds?.includes(carrierId)).length
   },
 
   /** Deletes a record. If shipments reference it, the server soft-deletes it so reports keep showing it. */
@@ -116,14 +117,24 @@ export const rsSettings = {
 
 /* ---------------------------- Shipments ---------------------------- */
 
+/** Carriers a user can create shipments for: an operator's own, everyone else's all. Deleted ones are left out. */
+export function usableCarriers(d: Database, user: User): Carrier[] {
+  return active(d.carriers).filter((c) => canUseCarrier(user, c.id))
+}
+
+/** Carriers whose shipments the user sees, deleted ones included (their shipments stay visible). */
+export function userCarriers(d: Database, user: User): Carrier[] {
+  return user.role === 'operator' ? d.carriers.filter((c) => canUseCarrier(user, c.id)) : d.carriers
+}
+
 export function visibleShipments(d: Database, user: User): Shipment[] {
-  const list = user.role === 'operator' ? d.shipments.filter((s) => s.carrierId === user.carrierId) : d.shipments
+  const list = d.shipments.filter((s) => canUseCarrier(user, s.carrierId))
   return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 export interface NewShipmentInput {
   carrierId: string
-  destinationId: string
+  routeId: string
   driverId: string
   truckId: string
 }

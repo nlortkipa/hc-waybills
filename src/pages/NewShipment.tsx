@@ -1,9 +1,10 @@
 import { ArrowRight, FileUp, Info } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { shipments } from '../api'
+import { shipments, usableCarriers } from '../api'
 import { Button, Card, Field, PageHeader, Select } from '../components/ui'
 import { active, formatTonnes } from '../lib/util'
+import { routeLabel, routeUsable } from '../lib/route'
 import { rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
@@ -14,19 +15,22 @@ export function NewShipment() {
   const d = useDb()
   const nav = useNavigate()
   const toast = useToast()
-  const [carrierId, setCarrierId] = useState(user.carrierId ?? active(d.carriers)[0]?.id ?? '')
-  const [form, setForm] = useState({ destinationId: '', driverId: '', truckId: '', })
+  const carriers = usableCarriers(d, user)
+  const [form, setForm] = useState({ carrierId: '', routeId: '', driverId: '', truckId: '' })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
-  const carrier = d.carriers.find((c) => c.id === carrierId)
-  const destinations = carrier && !carrier.deletedAt ? active(carrier.destinations) : []
+  // With a single carrier or route there is nothing to choose: it is preselected.
+  const carrier = carriers.find((c) => c.id === form.carrierId) ?? (carriers.length === 1 ? carriers[0] : undefined)
+  const routes = carrier ? d.routes.filter((x) => x.carrierId === carrier.id && routeUsable(d.carriers, x)) : []
+  const route = routes.find((x) => x.id === form.routeId) ?? (routes.length === 1 ? routes[0] : undefined)
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => {
-    setForm((f) => ({ ...f, [k]: e.target.value }))
-    setErrors((x) => ({ ...x, [k]: '' }))
+    const v = e.target.value
+    // Routes belong to a carrier: picking another carrier clears the route.
+    setForm((f) => ({ ...f, [k]: v, ...(k === 'carrierId' ? { routeId: '' } : {}) }))
+    setErrors((x) => ({ ...x, [k]: '', ...(k === 'carrierId' ? { routeId: '' } : {}) }))
   }
 
-  const destination = destinations.find((x) => x.id === form.destinationId)
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
   const item = d.cargo.description ? d.cargo : undefined
@@ -36,14 +40,15 @@ export function NewShipment() {
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     const err: Record<string, string> = {}
-    if (!form.destinationId) err.destinationId = 'აირჩიე დასრულების მისამართი'
+    if (!carrier) err.carrierId = 'აირჩიე კარიერი'
+    else if (!route) err.routeId = 'აირჩიე მარშრუტი'
     if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
     if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
     setErrors(err)
-    if (Object.keys(err).length) return
+    if (Object.keys(err).length || !carrier || !route) return
     setBusy(true)
     try {
-      const id = await shipments.create({ carrierId, destinationId: form.destinationId, driverId: form.driverId, truckId: form.truckId }, user)
+      const id = await shipments.create({ carrierId: carrier.id, routeId: route.id, driverId: form.driverId, truckId: form.truckId }, user)
       toast('info', 'ზედნადები იტვირთება RS.ge-ზე…')
       nav(`/shipments/${id}`)
     } catch (e) {
@@ -54,43 +59,36 @@ export function NewShipment() {
 
   return (
     <>
-      <PageHeader title="ახალი რეისი" subtitle="აირჩიე დასრულების მისამართი, მძღოლი და მანქანა, შემდეგ ატვირთე ზედნადები RS.ge-ზე." />
+      <PageHeader title="ახალი რეისი" subtitle="აირჩიე კარიერი, მარშრუტი, მძღოლი და მანქანა, შემდეგ ატვირთე ზედნადები RS.ge-ზე." />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="p-5 sm:p-6">
           <form onSubmit={submit} className="space-y-5" noValidate>
-            {user.role === 'admin' ? (
-              <Field label="კარიერი">
-                <Select
-                  value={carrierId}
-                  onChange={(e) => {
-                    setCarrierId(e.target.value)
-                    setForm((f) => ({ ...f, destinationId: '' }))
-                  }}
-                >
-                  {active(d.carriers).map((c) => (
+            {carriers.length === 1 ? (
+              <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
+                <span className="text-slate-500">კარიერი: </span>
+                <span className="font-medium text-slate-900">{carriers[0].name}</span>
+              </div>
+            ) : (
+              <Field
+                label="კარიერი"
+                error={errors.carrierId}
+                hint={carriers.length ? undefined : user.role === 'operator' ? 'შენ არცერთი კარიერი არ გაქვს მინიჭებული — მიმართე ადმინისტრატორს.' : 'კარიერები ჯერ არ არის — დაამატე ცნობარებში.'}
+              >
+                <Select value={carrier?.id ?? ''} onChange={set('carrierId')} placeholder="აირჩიე კარიერი…" invalid={!!errors.carrierId} disabled={!carriers.length}>
+                  {carriers.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
                 </Select>
               </Field>
-            ) : (
-              <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
-                <span className="text-slate-500">კარიერი: </span>
-                <span className="font-medium text-slate-900">{d.carriers.find((c) => c.id === carrierId)?.name ?? '—'}</span>
-              </div>
             )}
 
-            <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
-              <span className="text-slate-500">დაწყების მისამართი: </span>
-              <span className="font-medium text-slate-900">{carrier?.startAddress || '—'}</span>
-            </div>
-
-            <Field label="დასრულების მისამართი" error={errors.destinationId} hint={carrier?.deletedAt ? 'შენი კარიერი წაშლილია — სთხოვე ადმინისტრატორს ახალი კარიერის მინიჭება.' : destinations.length ? undefined : 'ამ კარიერს დასრულების მისამართი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'}>
-              <Select value={form.destinationId} onChange={set('destinationId')} placeholder="აირჩიე დასრულების მისამართი…" invalid={!!errors.destinationId}>
-                {destinations.map((x) => (
+            <Field label="მარშრუტი" error={errors.routeId} hint={carrier && !routes.length ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.' : undefined}>
+              <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length}>
+                {routes.map((x) => (
                   <option key={x.id} value={x.id}>
-                    {x.address}
+                    {routeLabel(d.carriers, x)}
                   </option>
                 ))}
               </Select>
@@ -142,7 +140,8 @@ export function NewShipment() {
           <Card className="p-5">
             <h3 className="text-sm font-semibold text-slate-900">შეჯამება</h3>
             <dl className="mt-3 space-y-2.5 text-sm">
-              <Row k="მარშრუტი" v={destination ? `${carrier?.startAddress} → ${destination.address}` : undefined} />
+              <Row k="კარიერი" v={carrier?.name} />
+              <Row k="მარშრუტი" v={route ? routeLabel(d.carriers, route) : undefined} />
               <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
               <Row k="მძღოლის ტელ." v={driver?.phone} />
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}` : undefined} mono />

@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, Clock, FileCheck2, Plus, Truck } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { visibleShipments } from '../api'
+import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, PageHeader, Stat } from '../components/ui'
 import { useDb } from '../api/store'
@@ -12,7 +12,7 @@ export function Dashboard() {
   const user = useUser()
   const d = useDb()
   const rows = useMemo(() => visibleShipments(d, user), [d, user])
-  const carrier = d.carriers.find((c) => c.id === user.carrierId)
+  const mine = user.role === 'operator' ? userCarriers(d, user) : []
 
   const today = tbilisiDay()
   const todays = rows.filter((s) => tbilisiDay(s.createdAt) === today)
@@ -24,7 +24,7 @@ export function Dashboard() {
     <>
       <PageHeader
         title={`გამარჯობა, ${user.firstName}`}
-        subtitle={carrier ? `კარიერი: ${carrier.name}` : 'ყველა კარიერის მიმოხილვა'}
+        subtitle={mine.length ? `${mine.length > 1 ? 'კარიერები' : 'კარიერი'}: ${mine.map((c) => c.name).join(', ')}` : 'ყველა კარიერის მიმოხილვა'}
         actions={
           <Link to="/new" className="hidden sm:block">
             <Button icon={<Plus className="size-4" />}>ახალი რეისი</Button>
@@ -52,7 +52,7 @@ export function Dashboard() {
             <AlertTriangle className="size-4 text-rose-500" />
             <h2 className="text-sm font-semibold text-rose-900">საჭიროებს ყურადღებას</h2>
           </div>
-          <ShipmentList rows={failed} showCarrier={user.role !== 'operator'} />
+          <ShipmentList rows={failed} showCarrier={user.role !== 'operator' || mine.length > 1} />
         </Card>
       )}
 
@@ -64,7 +64,7 @@ export function Dashboard() {
           </Link>
         </div>
         {rows.length ? (
-          <ShipmentList rows={rows.slice(0, 8)} showCarrier={user.role !== 'operator'} />
+          <ShipmentList rows={rows.slice(0, 8)} showCarrier={user.role !== 'operator' || mine.length > 1} />
         ) : (
           <EmptyState icon={<Truck className="size-6" />} title="რეისები ჯერ არ არის" text="შექმენი პირველი რეისი ზედნადების ასატვირთად." />
         )}

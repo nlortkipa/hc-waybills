@@ -36,9 +36,6 @@ export function defaultRsSettings(): RsSettings {
     sellerUserId: null,
     sellerTin: '',
     sellerName: '',
-    buyerTin: '',
-    buyerName: '',
-    buyerForeign: false,
     transporterTin: '',
     transId: 1,
     transTxt: '',
@@ -62,9 +59,8 @@ export function defaultRsSettings(): RsSettings {
  */
 export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[] {
   const out: string[] = []
-  if (!opts.hasCreds) out.push('სერვისის მომხმარებელი და პაროლი')
-  if (!rs.buyerTin) out.push('მყიდველის საიდენტიფიკაციო ნომერი')
-  if (!rs.buyerName) out.push('მყიდველის დასახელება')
+  // The seller doubles as the buyer (შიდა გადაზიდვა); connecting fills it in.
+  if (!opts.hasCreds || !rs.sellerTin) out.push('სერვისის მომხმარებელი და პაროლი')
   if (!rs.unitId) out.push('საზომი ერთეული')
   if (rs.unitId === RS_UNIT_OTHER && !rs.unitTxt) out.push('ერთეულის დასახელება')
   if (rs.transId === RS_TRANS_OTHER && !rs.transTxt) out.push('ტრანსპორტის ტიპის დასახელება')

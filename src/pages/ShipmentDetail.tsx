@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { shipments } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, StatusBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
+import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { plateKey, RS_STATUS } from '../lib/rs'
@@ -48,7 +49,7 @@ export function ShipmentDetail() {
     }
   }
 
-  if (!s || (user.role === 'operator' && s.carrierId !== user.carrierId)) {
+  if (!s || !canUseCarrier(user, s.carrierId)) {
     return <EmptyState icon={<FileText className="size-6" />} title="რეისი ვერ მოიძებნა" action={<Link to="/shipments" className="text-sm font-medium text-brand-600">რეისებზე დაბრუნება</Link>} />
   }
 

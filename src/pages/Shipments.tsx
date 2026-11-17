@@ -1,7 +1,7 @@
 import { Plus, Search, Truck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { visibleShipments } from '../api'
+import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, Input, PageHeader, Select, statusMeta } from '../components/ui'
 import { cx } from '../lib/util'
@@ -25,6 +25,9 @@ export function Shipments() {
   const [f, setF] = useState<(typeof filters)[number]['key']>('all')
   const [carrier, setCarrier] = useState('')
   const all = useMemo(() => visibleShipments(d, user), [d, user])
+  const carriers = userCarriers(d, user)
+  // Operators with a single carrier don't need the carrier filter or column.
+  const multi = user.role !== 'operator' || carriers.length > 1
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -45,7 +48,7 @@ export function Shipments() {
     <>
       <PageHeader
         title="რეისები"
-        subtitle={`სულ ${all.length}${user.role === 'operator' ? ` · ${L.carrier(user.carrierId!)?.name}` : ''}`}
+        subtitle={`სულ ${all.length}${user.role === 'operator' && carriers.length === 1 ? ` · ${carriers[0].name}` : ''}`}
         actions={
           canCreate && (
             <Link to="/new" className="hidden sm:block">
@@ -60,10 +63,10 @@ export function Shipments() {
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ძებნა: ზედნადები, მძღოლი, ნომერი, მარშრუტი…" className="pl-9" />
         </div>
-        {user.role !== 'operator' && (
+        {multi && (
           <Select value={carrier} onChange={(e) => setCarrier(e.target.value)} className="sm:w-56">
             <option value="">ყველა კარიერი</option>
-            {d.carriers.map((c) => (
+            {carriers.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
                 {c.deletedAt ? ' (წაშლილი)' : ''}
@@ -89,7 +92,7 @@ export function Shipments() {
 
       <Card className="overflow-hidden">
         {rows.length ? (
-          <ShipmentList rows={rows} showCarrier={user.role !== 'operator'} />
+          <ShipmentList rows={rows} showCarrier={multi} />
         ) : (
           <EmptyState icon={<Truck className="size-6" />} title="რეისები ვერ მოიძებნა" text="სცადე სხვა ძებნა ან ფილტრი." />
         )}

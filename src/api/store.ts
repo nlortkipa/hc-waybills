@@ -11,6 +11,7 @@ import { api, getToken, onAuthLost } from './client'
 const EMPTY: Database = {
   version: 0,
   carriers: [],
+  routes: [],
   drivers: [],
   trucks: [],
   users: [],

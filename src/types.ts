@@ -25,6 +25,17 @@ export interface Carrier extends SoftDeletable {
   destinations: Destination[]
 }
 
+/**
+ * A route the admin opened for a carrier: its start address → one of its end addresses.
+ * Operators pick one of these for each shipment.
+ */
+export interface CarrierRoute extends SoftDeletable {
+  id: string
+  carrierId: string
+  /** One of the carrier's destinations. */
+  destinationId: string
+}
+
 export interface Driver extends SoftDeletable {
   id: string
   firstName: string
@@ -55,8 +66,8 @@ export interface User extends SoftDeletable {
   phone: string
   email: string
   role: Role
-  /** Operators are bound to exactly one carrier. */
-  carrierId?: string
+  /** Operators work for one or more carriers (chosen per shipment) and see those carriers' shipments. */
+  carrierIds?: string[]
 }
 
 export type ShipmentStatus =
@@ -77,6 +88,9 @@ export interface Shipment {
   createdAt: string
   createdBy: string
   carrierId: string
+  /** The route picked (CarrierRoute.id). */
+  routeId: string
+  /** The route's end address, copied when the shipment is created; the addresses are resolved from it. */
   destinationId: string
   driverId: string
   truckId: string
@@ -157,11 +171,6 @@ export interface RsSettings {
   sellerTin: string
   sellerName: string
   checkedAt?: string
-
-  /* Buyer (receiver of the goods). */
-  buyerTin: string
-  buyerName: string
-  buyerForeign: boolean
 
   /** Optional: tax ID of a separate transport company (TRANSPORTER_TIN). */
   transporterTin: string
@@ -260,6 +269,7 @@ export interface RsRemoteWaybill {
 export interface Database {
   version: number
   carriers: Carrier[]
+  routes: CarrierRoute[]
   drivers: Driver[]
   trucks: Truck[]
   users: User[]
