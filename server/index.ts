@@ -10,7 +10,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, checkRs, HttpError, mock, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
+import { auth, connectRs, disconnectRs, HttpError, mock, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -39,7 +39,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['DELETE', /^\/api\/refs\/(\w+)\/([\w-]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), params[1], user)],
   ['PUT', /^\/api\/cargo$/, ({ body, user }) => saveCargo(body, user)],
   ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
-  ['POST', /^\/api\/rs\/check$/, ({ body, user }) => checkRs(body, user)],
+  ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
+  ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
   ['POST', /^\/api\/rs\/name$/, ({ body, user }) => rsNameFromTin(body, user)],
   ['POST', /^\/api\/shipments$/, ({ body, user }) => ({ id: shipments.create(body ?? {}, user) })],
   ['POST', /^\/api\/shipments\/([\w-]+)\/run$/, ({ params, user }) => void shipments.run(params[0], user).catch(() => {})],

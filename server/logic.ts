@@ -68,7 +68,7 @@ function shipmentCount(col: RefCollection, id: string): number {
 
 export const refs = {
   /** `token` is the caller's session: kept when admins change their own phone or role. */
-  save(col: RefCollection, record: RefRecord & { id?: string }, by: User, token?: string) {
+  async save(col: RefCollection, record: RefRecord & { id?: string }, by: User, token?: string) {
     requireAdmin(by)
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord
     const prev = (db.get()[col] as RefRecord[]).find((r) => r.id === rec.id)
@@ -91,7 +91,17 @@ export const refs = {
       const x = rec as Driver
       x.citizenship = x.citizenship === 'foreign' ? 'foreign' : 'GE'
       if (x.citizenship === 'GE' && !/^\d{11}$/.test(String(x.personalId ?? '').trim())) fail('პირადი ნომერი უნდა იყოს 11 ციფრი')
-      if (!String(x.personalId ?? '').trim()) fail('შეიყვანე პირადი ნომერი')
+      x.personalId = String(x.personalId ?? '').trim()
+      if (!x.personalId) fail('შეიყვანე პირადი ნომერი')
+      const was = prev as Driver | undefined
+      // RS.ge checks the driver on every waybill: a Georgian number must be in its register
+      // (code -1014) and a registered number may not be sent as foreign (code -1065). Check it now,
+      // not at the first upload. Skipped while RS.ge isn't connected.
+      if (storedCreds() && (!was || was.personalId.trim() !== x.personalId || (was.citizenship ?? 'GE') !== x.citizenship)) {
+        const name = await georgianName(x.personalId)
+        if (x.citizenship === 'GE' && !name) fail('ეს პირადი ნომერი RS.ge-ს რეესტრში ვერ მოიძებნა')
+        if (x.citizenship === 'foreign' && name) fail('ეს პირადი ნომერი საქართველოს რეესტრშია — აირჩიე „საქართველოს მოქალაქე“')
+      }
     }
     if (col === 'carriers') {
       const c = rec as Carrier
@@ -151,16 +161,16 @@ const str = (v: unknown) => String(v ?? '').trim()
 const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
 
 /** Saves the admin's RS.ge settings. An empty password keeps the stored one. */
-export function saveRsSettings(v: Partial<RsSettings>, user: User) {
+/**
+ * Saves the waybill defaults (buyer, transport, unit, price…). The service user is not part of
+ * this: it is set only by connectRs, after RS.ge accepted it. For a Georgian buyer the name is
+ * taken from RS.ge, so it always matches the register.
+ */
+export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   requireAdmin(user)
   const prev = db.get().rs
-  const su = str(v.su)
-  const sp = str(v.sp) || (su === prev.su ? prev.sp : '')
-  const credsChanged = su !== prev.su || sp !== prev.sp
   const next: RsSettings = {
     ...prev,
-    su,
-    sp,
     buyerTin: str(v.buyerTin),
     buyerName: str(v.buyerName),
     buyerForeign: !!v.buyerForeign,
@@ -178,66 +188,84 @@ export function saveRsSettings(v: Partial<RsSettings>, user: User) {
     comment: str(v.comment),
   }
   delete next.spSet
-  // New service user → the seller found by the last check no longer applies.
-  if (credsChanged) Object.assign(next, { sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined })
   if (next.buyerTin && !/^\d{9}$|^\d{11}$/.test(next.buyerTin) && !next.buyerForeign) fail('მყიდველის ს/ნ უნდა იყოს 9 (კომპანია) ან 11 (ფიზიკური პირი) ციფრი')
+  if (next.buyerTin && next.buyerTin === prev.sellerTin) fail('მყიდველი ვერ იქნება თავად გამყიდველი — RS.ge ასეთ ზედნადებს არ იღებს')
+  if (next.buyerForeign && !next.buyerName) fail('უცხოელი მყიდველისთვის შეიყვანე დასახელება')
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
   if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
-  if (credsChanged) resetRsCache()
+  // Georgian buyer: the name always comes from RS.ge, never from what was stored or typed
+  // (RS.ge itself ignores BUYER_NAME and writes the registered name into the waybill).
+  if (next.buyerTin && !next.buyerForeign) next.buyerName = await lookupName(next.buyerTin, 'მყიდველი')
+  // A number in the Georgian register sent as "foreign" is refused by RS.ge (code -1066).
+  if (next.buyerForeign && /^\d{9}$|^\d{11}$/.test(next.buyerTin) && (await georgianName(next.buyerTin))) fail(GEORGIAN_AS_FOREIGN)
   db.set('rs', next)
 }
 
-/** Credentials typed on the admin screen, else the stored ones. */
-function credsFrom(body: { su?: string; sp?: string } | undefined): RsCreds {
-  const rs = db.get().rs
-  const su = str(body?.su)
-  if (su && su !== rs.su) {
-    if (!str(body?.sp)) fail('შეიყვანე სერვისის პაროლი')
-    return { su, sp: str(body?.sp) }
-  }
-  if (str(body?.sp)) return { su: su || rs.su, sp: str(body?.sp) }
-  return storedCreds() ?? fail('შეიყვანე სერვისის მომხმარებელი და პაროლი')
+const GEORGIAN_AS_FOREIGN = 'ეს ნომერი საქართველოს რეესტრშია — გამორთე „უცხოელი“, RS.ge სხვაგვარად ზედნადებს არ მიიღებს'
+
+/** Registered name of a Georgian number, '' when RS.ge doesn't know it. Needs the stored service user. */
+async function georgianName(tin: string) {
+  const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
+  return rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
 }
 
-const sameAsStored = (c: RsCreds) => {
-  const s = storedCreds()
-  return !!s && s.su === c.su && s.sp === c.sp
+/** Name of a Georgian taxpayer from RS.ge, with the stored service user. */
+async function lookupName(tin: string, who = 'გადამხდელი') {
+  const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
+  const name = await rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
+  return name || fail(`${who} ამ ნომრით RS.ge-ზე ვერ მოიძებნა`)
 }
 
-/** Checks the service user on RS.ge. For the stored user it also saves the seller and reference lists. */
-export async function checkRs(body: { su?: string; sp?: string } | undefined, user: User) {
+/**
+ * Connects a service user: checks it on RS.ge and, only if it passes, stores it together with the
+ * seller and the reference lists. Leaving `sp` empty re-checks the stored password.
+ */
+export async function connectRs(body: { su?: string; sp?: string } | undefined, user: User) {
   requireAdmin(user)
-  const c = credsFrom(body)
-  const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
-  // A service user that passed the check is stored right away, so it survives a reload even if
-  // the rest of the form isn't saved yet.
-  if (!sameAsStored(c)) resetRsCache()
   const prev = db.get().rs
+  const su = str(body?.su)
+  if (!su) fail('შეიყვანე სერვისის მომხმარებელი')
+  const sp = str(body?.sp) || (su === prev.su ? prev.sp : '')
+  if (!sp) fail('შეიყვანე სერვისის პაროლი')
+  const c: RsCreds = { su, sp }
+  const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
+  if (su !== prev.su || sp !== prev.sp) resetRsCache()
   db.set('rs', {
-      ...prev,
-      su: c.su,
-      sp: c.sp,
-      sellerUnId: r.unId,
-      sellerUserId: r.userId,
-      sellerTin: r.tin,
-      sellerName: r.name,
-      checkedAt: nowIso(),
-      units: r.units.length ? r.units : prev.units,
-      transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
+    ...db.get().rs,
+    su,
+    sp,
+    sellerUnId: r.unId,
+    sellerUserId: r.userId,
+    sellerTin: r.tin,
+    sellerName: r.name,
+    checkedAt: nowIso(),
+    units: r.units.length ? r.units : prev.units,
+    transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
   })
-  return { tin: r.tin, name: r.name, unId: r.unId, saved: true }
+  // A Georgian buyer saved earlier (possibly typed by hand) gets its name from RS.ge now.
+  const rs = db.get().rs
+  if (rs.buyerTin && !rs.buyerForeign) {
+    const name = await rsge.nameFromTin(c, rs.buyerTin).catch(() => '')
+    if (name && name !== rs.buyerName) db.set('rs', { ...db.get().rs, buyerName: name })
+  }
+  return { tin: r.tin, name: r.name }
+}
+
+/** Forgets the service user. Waybills already on RS.ge are not touched. */
+export function disconnectRs(user: User) {
+  requireAdmin(user)
+  resetRsCache()
+  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined })
 }
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
-export async function rsNameFromTin(body: { tin?: string; su?: string; sp?: string } | undefined, user: User) {
+export async function rsNameFromTin(body: { tin?: string } | undefined, user: User) {
   requireAdmin(user)
   const tin = str(body?.tin)
-  if (!tin) fail('შეიყვანე საიდენტიფიკაციო ნომერი')
-  const name = await rsge.nameFromTin(credsFrom(body), tin).catch((e: Error) => fail(e.message, 502))
-  if (!name) fail('ამ ნომრით გადამხდელი ვერ მოიძებნა')
-  return { name }
+  if (!/^\d{9}$|^\d{11}$/.test(tin)) fail('9 ან 11 ციფრი')
+  return { name: await lookupName(tin) }
 }
 
 /**

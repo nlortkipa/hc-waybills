@@ -92,17 +92,21 @@ export const cargo = {
 /* ------------------------------ RS.ge ------------------------------ */
 
 export const rsSettings = {
-  /** Saves the RS.ge settings. Leave `sp` empty to keep the stored password. Admin only. */
+  /** Saves the waybill defaults. A Georgian buyer's name is filled in from RS.ge. Admin only. */
   async save(value: Partial<RsSettings>) {
     await call('PUT', '/api/rs', value)
   },
-  /** Tests a service user on RS.ge (typed values, or the stored ones when empty). */
-  check(creds: { su?: string; sp?: string }) {
-    return call<{ tin: string; name: string; unId: number; saved: boolean }>('POST', '/api/rs/check', creds)
+  /** Checks a service user on RS.ge and stores it only if it works. Empty `sp` re-checks the stored password. */
+  connect(creds: { su: string; sp?: string }) {
+    return call<{ tin: string; name: string }>('POST', '/api/rs/connection', creds)
   },
-  /** Taxpayer name for a tax ID / personal number, from RS.ge. */
-  nameFromTin(tin: string, creds: { su?: string; sp?: string }) {
-    return api<{ name: string }>('POST', '/api/rs/name', { tin, ...creds })
+  /** Forgets the stored service user. */
+  disconnect() {
+    return call('DELETE', '/api/rs/connection')
+  },
+  /** Taxpayer name for a tax ID / personal number, from RS.ge (stored service user). */
+  nameFromTin(tin: string) {
+    return api<{ name: string }>('POST', '/api/rs/name', { tin })
   },
 }
 
