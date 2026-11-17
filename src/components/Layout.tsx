@@ -1,4 +1,4 @@
-import { BarChart3, ChevronRight, Database, FlaskConical, LayoutDashboard, LogOut, PlusCircle, Truck, X, type LucideIcon } from 'lucide-react'
+import { BarChart3, ChevronRight, Database, LayoutDashboard, LogOut, PlusCircle, Truck, Waypoints, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useDb } from '../api/store'
@@ -26,7 +26,7 @@ export const NAV: NavItem[] = [
   { to: '/shipments', tint: 'bg-amber-500', label: 'რეისები', icon: Truck, roles: ['admin', 'operator', 'report'], mobile: ['admin', 'operator', 'report'] },
   { to: '/reports', tint: 'bg-violet-500', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
   { to: '/refs', tint: 'bg-slate-500', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
-  { to: '/mock', tint: 'bg-rose-500', label: 'სატესტო პანელი', short: 'ტესტი', icon: FlaskConical, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
+  { to: '/logs', tint: 'bg-rose-500', label: 'API მოთხოვნები', short: 'API', icon: Waypoints, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
 ]
 
 function AppIcon({ className }: { className?: string }) {
@@ -141,7 +141,6 @@ export function Layout({ children }: { children: ReactNode }) {
                 <>
                   <n.icon className={cx('size-[19px]', isActive ? 'text-white' : 'text-brand-600')} />
                   {n.label}
-                  {n.to === '/mock' && <span className={cx('ml-auto rounded-full px-1.5 py-px text-[10px] font-semibold uppercase', isActive ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700')}>dev</span>}
                 </>
               )}
             </NavLink>

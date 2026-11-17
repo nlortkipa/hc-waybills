@@ -6,11 +6,12 @@
  * Also serves the built web app from dist/ when it exists, so one process is
  * enough in production. The Android app talks to it over the network.
  */
+import './env.ts'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, connectRs, disconnectRs, HttpError, mock, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
+import { auth, connectRs, disconnectRs, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -46,9 +47,7 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/shipments\/([\w-]+)\/run$/, ({ params, user }) => void shipments.run(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/retry-sms$/, ({ params, user }) => void shipments.retrySms(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/(close|cancel)$/, ({ params, user }) => shipments.finish(params[0], params[1] as 'close' | 'cancel', user)],
-  ['PATCH', /^\/api\/mock\/settings$/, ({ body }) => mock.updateSettings(body ?? {})],
-  ['DELETE', /^\/api\/mock\/logs$/, () => mock.clearLogs()],
-  ['POST', /^\/api\/mock\/reset$/, ({ user }) => mock.reset(user)],
+  ['DELETE', /^\/api\/logs$/, ({ user }) => logs.clear(user)],
 ]
 
 const NOT_MODIFIED = Symbol('not-modified')

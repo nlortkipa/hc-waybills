@@ -3,7 +3,7 @@
  * and enforces the rules; reads come from the synced copy in ./store.
  */
 import { active } from '../lib/util'
-import type { CargoDefaults, Database, MockSettings, RsSettings, Shipment, User } from '../types'
+import type { CargoDefaults, Database, RsSettings, Shipment, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -151,27 +151,10 @@ export const shipments = {
   },
 }
 
-/* ------------------------------ Mock ------------------------------ */
+/* ------------------------------ Logs ------------------------------ */
 
-let settingsTimer: ReturnType<typeof setTimeout> | undefined
-let pendingSettings: Partial<MockSettings> = {}
-
-export const mock = {
-  /** Applied locally at once (sliders), sent to the server once dragging pauses. */
-  updateSettings(p: Partial<MockSettings>) {
-    db.patchLocal((d) => ({ ...d, settings: { ...d.settings, ...p } }))
-    pendingSettings = { ...pendingSettings, ...p }
-    clearTimeout(settingsTimer)
-    settingsTimer = setTimeout(() => {
-      const body = pendingSettings
-      pendingSettings = {}
-      void call('PATCH', '/api/mock/settings', body).catch(() => {})
-    }, 300)
-  },
-  async clearLogs() {
-    await call('DELETE', '/api/mock/logs')
-  },
-  async reset() {
-    await call('POST', '/api/mock/reset')
+export const logs = {
+  async clear() {
+    await call('DELETE', '/api/logs')
   },
 }

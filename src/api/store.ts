@@ -16,7 +16,6 @@ const EMPTY: Database = {
   users: [],
   shipments: [],
   logs: [],
-  settings: { latencyMs: 0, smsFailRate: 0 },
   cargo: { description: '', code: '', quantity: 0 },
   rs: defaultRsSettings(),
 }

@@ -9,7 +9,6 @@ export function uid(prefix = ''): string {
 /** Drops soft-deleted records — use for lists and pickers, never for resolving history. */
 export const active = <T extends { deletedAt?: string }>(xs: T[]): T[] => xs.filter((x) => !x.deletedAt)
 
-export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export const nowIso = () => new Date().toISOString()
 

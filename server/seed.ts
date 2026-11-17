@@ -1,7 +1,7 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import type { Database } from '../src/types.ts'
 
-export const DB_VERSION = 12
+export const DB_VERSION = 13
 
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
@@ -17,10 +17,6 @@ export function createSeed(): Database {
     users,
     shipments: [],
     logs: [],
-    settings: {
-      latencyMs: 900,
-      smsFailRate: 0,
-    },
     cargo: { description: 'ღორღი 0–5 მმ', code: 'CRS-05', quantity: 25 },
     rs: defaultRsSettings(),
   }
@@ -34,12 +30,10 @@ export function migrate(db: Database): Database | null {
   // v10 → v11: RS.ge simulator and mode removed. IDs from the simulator mean nothing to RS.ge, so drop them.
   if (d.version === 10) {
     const { mode: _m, spSet: _ss, ...rs } = d.rs as Database['rs'] & { mode?: string }
-    const { rsFailRate: _f, ...settings } = d.settings as Database['settings'] & { rsFailRate?: number }
     d = {
       ...d,
       version: 11,
       rs: { ...rs, sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined },
-      settings,
       shipments: d.shipments.map((s) => {
         const { rsMode: _rm, ...rest } = s as typeof s & { rsMode?: string }
         return rest.rsWaybillId ? { ...rest, rsWaybillId: undefined } : rest
@@ -48,5 +42,10 @@ export function migrate(db: Database): Database | null {
   }
   // v11 → v12: service user fields back (v11 had none).
   if (d.version === 11) d = { ...d, version: 12, rs: { ...d.rs, su: d.rs.su ?? '', sp: d.rs.sp ?? '' } }
+  // v12 → v13: simulation settings (latency, SMS failure rate) removed.
+  if (d.version === 12) {
+    const { settings: _s, ...rest } = d as Database & { settings?: unknown }
+    d = { ...rest, version: 13 }
+  }
   return d.version === DB_VERSION ? d : null
 }

@@ -6,9 +6,9 @@
  * returns the waybill number). Later: close_waybill (delivered) or ref_waybill (cancel).
  *
  * RS.ge has no separate sandbox host: testing is done on the normal endpoint with a test
- * service user. The service user (su / sp) is entered by the admin and stored on the server;
- * RS_SU / RS_SP in the environment are used when none is stored. Every call goes to the
- * integration log, with the password masked.
+ * service user. The service user (su / sp) is entered by the admin and stored on the server,
+ * the password encrypted (server/secret.ts). Every call goes to the integration log, with the
+ * password masked.
  */
 import type { RsRefItem, RsWaybillPayload } from '../src/types.ts'
 import { IntegrationError, log } from './integrations.ts'
@@ -288,12 +288,10 @@ const live = {
 
 /* -------------------------------- Facade -------------------------------- */
 
-/** The stored service user, else RS_SU / RS_SP from the environment. */
+/** The service user the admin connected. */
 export function storedCreds(): RsCreds | null {
   const rs = db.get().rs
-  if (rs.su && rs.sp) return { su: rs.su, sp: rs.sp }
-  if (process.env.RS_SU && process.env.RS_SP) return { su: process.env.RS_SU, sp: process.env.RS_SP }
-  return null
+  return rs.su && rs.sp ? { su: rs.su, sp: rs.sp } : null
 }
 
 function activeCreds(): RsCreds {

@@ -117,11 +117,6 @@ export interface IntegrationLog {
   shipmentId?: string
 }
 
-export interface MockSettings {
-  latencyMs: number
-  smsFailRate: number
-}
-
 /** Cargo and declared quantity applied to every new shipment. Set by an admin. */
 export interface CargoDefaults extends Cargo {
   /** Declared quantity in tonnes. */
@@ -227,7 +222,6 @@ export interface Database {
   users: User[]
   shipments: Shipment[]
   logs: IntegrationLog[]
-  settings: MockSettings
   cargo: CargoDefaults
   rs: RsSettings
 }

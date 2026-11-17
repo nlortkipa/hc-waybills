@@ -4,7 +4,7 @@ import { Layout } from './components/Layout'
 import { ToastProvider } from './components/toast'
 import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'
-import { MockConsole } from './pages/MockConsole'
+import { ApiLog } from './pages/ApiLog'
 import { NewShipment } from './pages/NewShipment'
 import { ReferenceData } from './pages/ReferenceData'
 import { Reports } from './pages/Reports'
@@ -34,7 +34,7 @@ function AppRoutes() {
         <Route path="/shipments/:id" element={<ShipmentDetail />} />
         <Route path="/reports" element={<Guard roles={['admin', 'report']}><Reports /></Guard>} />
         <Route path="/refs" element={<Guard roles={['admin']}><ReferenceData /></Guard>} />
-        <Route path="/mock" element={<MockConsole />} />
+        <Route path="/logs" element={<ApiLog />} />
         <Route path="*" element={<Navigate to={home[user.role]} replace />} />
       </Routes>
     </Layout>

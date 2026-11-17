@@ -6,13 +6,15 @@
  * goes to SQLite first and reaches the copy only after it committed.
  *
  * On first start an existing db.json (the previous storage) is imported and renamed to
- * db.json.imported. The file holds the RS.ge password, so it is readable by its owner only.
+ * db.json.imported. The RS.ge password is stored encrypted (server/secret.ts); the file is
+ * still readable by its owner only.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { Database, IntegrationLog } from '../src/types.ts'
+import type { Database, IntegrationLog, RsSettings } from '../src/types.ts'
+import { decrypt, encrypt, isEncrypted } from './secret.ts'
 import { createSeed, migrate } from './seed.ts'
 
 const DATA = join(import.meta.dirname, 'data')
@@ -33,7 +35,7 @@ const SESSION_TOUCH_MS = 3600_000
 
 type RecordCol = 'carriers' | 'drivers' | 'trucks' | 'users'
 export type StoredCol = RecordCol | 'shipments'
-type MetaKey = 'settings' | 'cargo' | 'rs'
+type MetaKey = 'cargo' | 'rs'
 
 mkdirSync(dirname(FILE), { recursive: true })
 const sql = new DatabaseSync(FILE)
@@ -68,7 +70,21 @@ function getMeta<T>(key: string): T | undefined {
   return row ? (JSON.parse(row.value) as T) : undefined
 }
 const setMetaStmt = sql.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
-const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(value))
+const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(key === 'rs' ? sealRs(value as RsSettings) : value))
+
+/* The RS.ge password is encrypted in the database and plain only in memory. */
+const sealRs = (rs: RsSettings): RsSettings => ({ ...rs, sp: encrypt(rs.sp ?? '') })
+function openRs(rs: RsSettings): RsSettings {
+  if (!rs?.sp) return rs
+  try {
+    return { ...rs, sp: decrypt(rs.sp) }
+  } catch {
+    // Wrong or lost HC_SECRET_KEY: the password is unreadable. Treat RS.ge as disconnected
+    // (the admin enters it again) instead of refusing to start.
+    console.error('[secret] the stored RS.ge password can\'t be decrypted with HC_SECRET_KEY — reconnect RS.ge in settings')
+    return { ...rs, sp: '' }
+  }
+}
 
 function writeRow(col: StoredCol, rec: { id: string }) {
   if (col === 'shipments') {
@@ -98,9 +114,8 @@ function readAll(): Database | null {
     users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),
     shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
     logs: parseRows(sql.prepare(`SELECT data FROM logs ORDER BY rowid DESC LIMIT ${LOG_LIMIT}`).all()),
-    settings: getMeta('settings')!,
     cargo: getMeta('cargo')!,
-    rs: getMeta('rs')!,
+    rs: openRs(getMeta('rs')!),
   }
 }
 
@@ -130,7 +145,7 @@ function replaceAll(db: Database) {
     for (const s of db.shipments) writeRow('shipments', s)
     for (const l of [...db.logs].slice(0, LOG_LIMIT).reverse()) writeLog(l)
     setMeta('version', db.version)
-    setMeta('settings', db.settings)
+    sql.prepare("DELETE FROM meta WHERE key = 'settings'").run()
     setMeta('cargo', db.cargo)
     setMeta('rs', db.rs)
     if (!instance) setMeta('instance', (instance = randomBytes(6).toString('base64url')))
@@ -181,6 +196,15 @@ let mem: Database = (() => {
 })()
 console.log(`[db] ${FILE}`)
 
+// A password stored before encryption existed: encrypt it now.
+{
+  const sp = getMeta<RsSettings>('rs')?.sp
+  if (sp && !isEncrypted(sp)) {
+    tx(() => setMeta('rs', mem.rs), false)
+    console.log('[secret] encrypted the stored RS.ge password')
+  }
+}
+
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
@@ -190,7 +214,7 @@ function hashToken(token: string) {
 export const store = {
   /** The current data. Treat as read-only; change it through the methods below. */
   get: (): Database => mem,
-  /** Changes whenever the data does, including across restarts and database resets. */
+  /** Changes whenever the data does, including across restarts and new databases. */
   rev: () => `${instance}.${rev}`,
 
   /** Inserts or replaces one record. */
@@ -229,13 +253,6 @@ export const store = {
   clearLogs() {
     tx(() => sql.exec('DELETE FROM logs'))
     mem = { ...mem, logs: [] }
-  },
-
-  /** Back to the seed (only the admin). Sessions of users that no longer exist simply stop resolving. */
-  reset() {
-    const db = createSeed()
-    replaceAll(db)
-    mem = db
   },
 
   sessions: {

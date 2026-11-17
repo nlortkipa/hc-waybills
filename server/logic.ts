@@ -5,7 +5,7 @@
 import { resolveRoute } from '../src/lib/route.ts'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
-import type { CargoDefaults, Carrier, Database, Driver, MockSettings, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
+import type { CargoDefaults, Carrier, Database, Driver, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
 import { IntegrationError, sms } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { store as db } from './store.ts'
@@ -189,7 +189,6 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   }
   delete next.spSet
   if (next.buyerTin && !/^\d{9}$|^\d{11}$/.test(next.buyerTin) && !next.buyerForeign) fail('მყიდველის ს/ნ უნდა იყოს 9 (კომპანია) ან 11 (ფიზიკური პირი) ციფრი')
-  if (next.buyerTin && next.buyerTin === prev.sellerTin) fail('მყიდველი ვერ იქნება თავად გამყიდველი — RS.ge ასეთ ზედნადებს არ იღებს')
   if (next.buyerForeign && !next.buyerName) fail('უცხოელი მყიდველისთვის შეიყვანე დასახელება')
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
@@ -227,6 +226,7 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
   const prev = db.get().rs
   const su = str(body?.su)
   if (!su) fail('შეიყვანე სერვისის მომხმარებელი')
+  if (!/^[^:]+:(\d{9}|\d{11})$/.test(su)) fail('სერვისის მომხმარებელი უნდა იყოს ფორმატით სახელი:კოდი (კოდი — 9 ან 11 ციფრი)')
   const sp = str(body?.sp) || (su === prev.su ? prev.sp : '')
   if (!sp) fail('შეიყვანე სერვისის პაროლი')
   const c: RsCreds = { su, sp }
@@ -515,19 +515,11 @@ async function sendSms(id: string) {
   }
 }
 
-/* ------------------------------ Mock ------------------------------ */
+/* ------------------------------ Logs ------------------------------ */
 
-export const mock = {
-  updateSettings(p: Partial<MockSettings>) {
-    const next: Partial<MockSettings> = {}
-    for (const k of ['latencyMs', 'smsFailRate'] as const) if (k in p && Number.isFinite(Number(p[k]))) next[k] = Number(p[k])
-    db.set('settings', { ...db.get().settings, ...next })
-  },
-  clearLogs() {
-    db.clearLogs()
-  },
-  reset(user: User) {
+export const logs = {
+  clear(user: User) {
     requireAdmin(user)
-    db.reset()
+    db.clearLogs()
   },
 }

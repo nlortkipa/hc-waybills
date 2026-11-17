@@ -43,7 +43,6 @@ const FALLBACK_UNITS = [{ id: RS_UNIT_OTHER, name: 'სხვა' }]
 /** Georgian tax ID: 9 digits (company) or 11 (personal number). */
 const TIN_RE = /^\d{9}$|^\d{11}$/
 
-const BUYER_IS_SELLER = 'მყიდველი ვერ იქნება თავად გამყიდველი — RS.ge ასეთ ზედნადებს არ იღებს'
 const GEORGIAN_AS_FOREIGN = 'ეს ნომერი საქართველოს რეესტრშია — გამორთე „მყიდველი უცხოელია“'
 
 const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet && !!rs.sellerUnId
@@ -148,27 +147,44 @@ export function RsSettingsCard() {
 
 /* ------------------------------ Connection ------------------------------ */
 
+/** RS.ge service user names are "<name>:<taxpayer id>"; the form asks for the two parts separately. */
+function splitSu(su: string) {
+  const i = su.lastIndexOf(':')
+  return i < 0 ? { name: su, id: '' } : { name: su.slice(0, i), id: su.slice(i + 1) }
+}
+
 function ConnectionCard() {
   const rs = useDb().rs
   const toast = useToast()
   const connected = isConnected(rs)
   const [editing, setEditing] = useState(false)
-  const [su, setSu] = useState(rs.su)
+  const [suName, setSuName] = useState(() => splitSu(rs.su).name)
+  const [suId, setSuId] = useState(() => splitSu(rs.su).id)
   const [sp, setSp] = useState('')
-  const [errors, setErrors] = useState<{ su?: string; sp?: string }>({})
+  const [errors, setErrors] = useState<{ suName?: string; suId?: string; sp?: string }>({})
+  const su = `${suName.trim()}:${suId.trim()}`
   const [busy, setBusy] = useState(false)
   const [askDisconnect, setAskDisconnect] = useState(false)
   /** The stored password can be re-used while the user name stays the same. */
-  const keepsPassword = !!rs.spSet && su.trim() === rs.su
+  const keepsPassword = !!rs.spSet && su === rs.su
+  const setUser = (part: 'suName' | 'suId', set: (v: string) => void) => (e: { target: { value: string } }) => {
+    set(e.target.value)
+    setErrors((x) => ({ ...x, [part]: '' }))
+  }
 
   const connect = async (e: FormEvent) => {
     e.preventDefault()
-    const errs = { su: su.trim() ? '' : 'სავალდებულო ველი', sp: sp || keepsPassword ? '' : 'სავალდებულო ველი' }
+    const id = suId.trim()
+    const errs = {
+      suName: !suName.trim() ? 'სავალდებულო ველი' : suName.includes(':') ? 'სახელში „:“ არ უნდა იყოს' : '',
+      suId: !id ? 'სავალდებულო ველი' : /^\d{9}$|^\d{11}$/.test(id) ? '' : 'უნდა იყოს 9 ან 11 ციფრი',
+      sp: sp || keepsPassword ? '' : 'სავალდებულო ველი',
+    }
     setErrors(errs)
-    if (errs.su || errs.sp) return
+    if (errs.suName || errs.suId || errs.sp) return
     setBusy(true)
     try {
-      const r = await rsSettings.connect({ su: su.trim(), sp: sp || undefined })
+      const r = await rsSettings.connect({ su, sp: sp || undefined })
       setSp('')
       setEditing(false)
       toast('success', `დაკავშირებულია: ${r.name} (${r.tin})`)
@@ -183,7 +199,8 @@ function ConnectionCard() {
     setBusy(true)
     try {
       await rsSettings.disconnect()
-      setSu('')
+      setSuName('')
+      setSuId('')
       setSp('')
       setAskDisconnect(false)
       toast('success', 'RS.ge-სთან კავშირი გაითიშა')
@@ -219,7 +236,8 @@ function ConnectionCard() {
               variant="secondary"
               size="sm"
               onClick={() => {
-                setSu(rs.su)
+                setSuName(splitSu(rs.su).name)
+                setSuId(splitSu(rs.su).id)
                 setSp('')
                 setErrors({})
                 setEditing(true)
@@ -250,22 +268,15 @@ function ConnectionCard() {
       <Section
         icon={<PlugZap className="size-4" />}
         title="დაკავშირება RS.ge-სთან"
-        text="შეიყვანე სერვისის მომხმარებელი — იქმნება eservices.rs.ge-ზე (მომხმარებლები → სერვისის მომხმარებლები). შენახვამდე RS.ge-ზე შემოწმდება. პაროლი ინახება მხოლოდ სერვერზე."
+        text="შეიყვანე სერვისის მომხმარებელი (ფორმატით სახელი:კოდი, ორ ველად) — იქმნება eservices.rs.ge-ზე (მომხმარებლები → სერვისის მომხმარებლები). შენახვამდე RS.ge-ზე შემოწმდება. პაროლი ინახება მხოლოდ სერვერზე."
       >
-        <Field label="სერვისის მომხმარებელი" error={errors.su} hint={import.meta.env.DEV ? 'სატესტო: YVELAM GAMOIYENET:12345678910 / 123456' : 'ფორმატი: სახელი:საიდენტიფიკაციო'}>
-          <Input
-            value={su}
-            autoComplete="off"
-            className="font-mono"
-            placeholder="NAME:206322102"
-            invalid={!!errors.su}
-            onChange={(e) => {
-              setSu(e.target.value)
-              setErrors((x) => ({ ...x, su: '' }))
-            }}
-          />
+        <Field label="სერვისის მომხმარებლის სახელი" error={errors.suName} hint={import.meta.env.DEV ? 'სატესტო: YVELAM GAMOIYENET' : 'რაც „:“-მდე წერია'}>
+          <Input value={suName} autoComplete="off" className="font-mono" placeholder="NAME" invalid={!!errors.suName} onChange={setUser('suName', setSuName)} />
         </Field>
-        <Field label="პაროლი" error={errors.sp} hint={keepsPassword && !sp ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : undefined}>
+        <Field label="საიდენტიფიკაციო კოდი" error={errors.suId} hint={import.meta.env.DEV ? 'სატესტო: 12345678910' : 'რაც „:“-ის შემდეგ წერია (9 ან 11 ციფრი)'}>
+          <Input value={suId} inputMode="numeric" autoComplete="off" className="font-mono" placeholder="206322102" invalid={!!errors.suId} onChange={setUser('suId', setSuId)} />
+        </Field>
+        <Field label="პაროლი" error={errors.sp} hint={keepsPassword && !sp ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : import.meta.env.DEV ? 'სატესტო: 123456' : undefined}>
           <Input
             type="password"
             value={sp}
@@ -313,8 +324,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
   const transporter = useTinName(f.transporterTin.trim(), connected)
   /** The name that will be saved: RS.ge's for a Georgian buyer, the typed one for a foreign buyer. */
   const buyerName = f.buyerForeign ? f.buyerName.trim() : buyer.state === 'ok' ? buyer.name : rs.buyerName
-  /** RS.ge refuses a buyer that is the seller itself (code -1047). */
-  const buyerIsSeller = !!buyerTin && buyerTin === rs.sellerTin
   /** RS.ge refuses a registered Georgian number marked as foreign (code -1066). */
   const georgianAsForeign = f.buyerForeign && buyer.state === 'ok'
   /** The stored name is not what RS.ge has for this number (e.g. typed by hand earlier). */
@@ -334,7 +343,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     if (!(Number(f.cargoQuantity) > 0)) e.cargoQuantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
     if (!buyerTin) e.buyerTin = 'სავალდებულო ველი'
     else if (!f.buyerForeign && !TIN_RE.test(buyerTin)) e.buyerTin = '9 ან 11 ციფრი'
-    else if (buyerIsSeller) e.buyerTin = BUYER_IS_SELLER
     else if (buyer.state === 'loading') e.buyerTin = 'დაელოდე, მოწმდება RS.ge-ზე'
     else if (georgianAsForeign) e.buyerTin = GEORGIAN_AS_FOREIGN
     else if (!f.buyerForeign && buyer.state === 'error') e.buyerTin = buyer.message
@@ -393,7 +401,7 @@ function DefaultsForm({ connected }: { connected: boolean }) {
           <div>
             <Field
               label={f.buyerForeign ? 'უცხოელის პირადი ნომერი' : 'საიდენტიფიკაციო / პირადი ნომერი'}
-              error={errors.buyerTin || (buyerIsSeller ? BUYER_IS_SELLER : georgianAsForeign ? GEORGIAN_AS_FOREIGN : undefined)}
+              error={errors.buyerTin || (georgianAsForeign ? GEORGIAN_AS_FOREIGN : undefined)}
               hint={
                 f.buyerForeign
                   ? 'ნომერი, რომლითაც უცხოელი რეგისტრირებულია RS.ge-ზე — RS.ge მას ზედნადების ატვირთვისას ამოწმებს'
@@ -402,9 +410,9 @@ function DefaultsForm({ connected }: { connected: boolean }) {
                     : undefined
               }
             >
-              <Input value={f.buyerTin} inputMode={f.buyerForeign ? 'text' : 'numeric'} className="font-mono" invalid={!!errors.buyerTin || buyerIsSeller || georgianAsForeign} onChange={set('buyerTin')} />
+              <Input value={f.buyerTin} inputMode={f.buyerForeign ? 'text' : 'numeric'} className="font-mono" invalid={!!errors.buyerTin || georgianAsForeign} onChange={set('buyerTin')} />
             </Field>
-            {!f.buyerForeign && !errors.buyerTin && !buyerIsSeller && buyer.state !== 'ok' && <LookupLine lookup={buyer} />}
+            {!f.buyerForeign && !errors.buyerTin && buyer.state !== 'ok' && <LookupLine lookup={buyer} />}
           </div>
           <Field
             label="დასახელება"
