@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, X } from
 import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cx } from '../lib/util'
 import { inputCls, invalidCls } from './fieldStyles'
+import { CodeView } from './codeView'
 import type { ShipmentStatus, StepStatus } from '../types'
 
 /* ----------------------------- Button ----------------------------- */
@@ -236,11 +237,7 @@ export function Stat({ label, value, sub, icon, accent = 'bg-brand-500' }: { lab
 }
 
 export function JsonBlock({ value }: { value: unknown }) {
-  return (
-    <pre className="max-h-80 overflow-auto rounded-[10px] bg-[#1c1c1e] p-3 font-mono text-[11.5px] leading-relaxed text-[#f2f2f7] ring-1 ring-white/10">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  )
+  return <CodeView value={value} />
 }
 
 /** Contacts-style monogram. */
