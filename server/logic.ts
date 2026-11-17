@@ -2,12 +2,11 @@
  * Business rules. Every check that used to run in the browser runs here now, so a
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
-import { randomBytes } from 'node:crypto'
 import { resolveRoute } from '../src/lib/route.ts'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
 import type { CargoDefaults, Carrier, Database, Driver, MockSettings, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
-import { sms } from './integrations.ts'
+import { IntegrationError, sms } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { store as db } from './store.ts'
 
@@ -30,9 +29,7 @@ export const auth = {
     const key = phoneKey(String(phone ?? ''))
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
-    const token = randomBytes(24).toString('base64url')
-    db.sessions.set(token, user!.id)
-    return { token, user: user! }
+    return { token: db.sessions.create(user!.id), user: user! }
   },
   user(token: string | undefined): User | null {
     const id = token && db.sessions.get(token)
@@ -60,19 +57,30 @@ type RefRecord = Database[RefCollection][number]
 
 const requireAdmin = (u: User) => u.role === 'admin' || fail('მოქმედება ხელმისაწვდომია მხოლოდ ადმინისტრატორისთვის', 403)
 
+/** Active admins other than `id`. The last admin can't be deleted or demoted, so the system always has one. */
+const otherAdmins = (id: string) => active(db.get().users).filter((u) => u.role === 'admin' && u.id !== id).length
+const LAST_ADMIN = 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
+
 function shipmentCount(col: RefCollection, id: string): number {
   const k = ({ carriers: 'carrierId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
   return db.get().shipments.filter((s) => s[k] === id).length
 }
 
 export const refs = {
-  save(col: RefCollection, record: RefRecord & { id?: string }, by: User) {
+  /** `token` is the caller's session: kept when admins change their own phone or role. */
+  save(col: RefCollection, record: RefRecord & { id?: string }, by: User, token?: string) {
     requireAdmin(by)
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord
     const prev = (db.get()[col] as RefRecord[]).find((r) => r.id === rec.id)
     if (prev?.deletedAt) fail('ჩანაწერი წაშლილია')
+    let revokeSessions = false
     if (col === 'users') {
       const u = rec as User
+      const was = prev as User | undefined
+      if (!['admin', 'operator', 'report'].includes(u.role)) fail('აირჩიე როლი')
+      if (was?.role === 'admin' && u.role !== 'admin' && !otherAdmins(u.id)) fail(`როლის შეცვლა შეუძლებელია: ${LAST_ADMIN}`)
+      // A new phone may belong to someone else now, and a new role changes what the user may do: log them out everywhere.
+      revokeSessions = !!was && (phoneKey(was.phone) !== phoneKey(u.phone) || was.role !== u.role)
       if (!phoneKey(u.phone ?? '')) fail('შეიყვანე ტელეფონის ნომერი')
       if (active(db.get().users).some((x) => x.id !== u.id && phoneKey(x.phone) === phoneKey(u.phone))) fail('ამ ტელეფონის ნომრით მომხმარებელი უკვე არსებობს')
       if (u.role === 'operator') {
@@ -98,27 +106,27 @@ export const refs = {
         .map((x) => ({ ...x, deletedAt: x.deletedAt ?? at }))
       c.destinations = [...c.destinations, ...gone]
     }
-    db.update((d) => {
-      const list = d[col] as RefRecord[]
-      return { ...d, [col]: prev ? list.map((r) => (r.id === rec.id ? rec : r)) : [...list, rec] }
-    })
+    db.put(col, rec as never)
+    if (revokeSessions) db.sessions.deleteForUser(rec.id, rec.id === by.id ? token : undefined)
     return rec
   },
 
   /** Deletes a record. If shipments reference it, it is soft-deleted so reports keep showing it. */
   remove(col: RefCollection, id: string, by: User) {
     requireAdmin(by)
-    if (col === 'users' && by.id === id) fail('წაშლა შეუძლებელია: საკუთარი ანგარიშის წაშლა შეუძლებელია.')
+    if (col === 'users') {
+      const u = db.get().users.find((x) => x.id === id)
+      if (u?.role === 'admin' && !u.deletedAt && !otherAdmins(id)) fail(`წაშლა შეუძლებელია: ${LAST_ADMIN}`)
+    }
     if (col === 'carriers') {
       const n = active(db.get().users).filter((x) => x.role === 'operator' && x.carrierId === id).length
       if (n) fail(`წაშლა შეუძლებელია: მიბმულია ${n} ოპერატორთან — ჯერ შეცვალე ან წაშალე ისინი.`)
     }
-    const soft = shipmentCount(col, id) > 0
-    const at = nowIso()
-    db.update((d) => {
-      const list = d[col] as { id: string; deletedAt?: string }[]
-      return { ...d, [col]: soft ? list.map((r) => (r.id === id ? { ...r, deletedAt: at } : r)) : list.filter((r) => r.id !== id) }
-    })
+    const rec = (db.get()[col] as RefRecord[]).find((r) => r.id === id)
+    if (!rec) fail('ჩანაწერი ვერ მოიძებნა', 404)
+    if (shipmentCount(col, id) > 0) db.put(col, { ...rec!, deletedAt: rec!.deletedAt ?? nowIso() } as never)
+    else db.remove(col, id)
+    if (col === 'users') db.sessions.deleteForUser(id)
   },
 }
 
@@ -134,7 +142,7 @@ export function saveCargo(value: CargoDefaults, user: User) {
   if (!next.description) fail('შეიყვანე ტვირთის დასახელება')
   if (!next.code) fail('შეიყვანე ტვირთის კოდი')
   if (!(next.quantity > 0)) fail('რაოდენობა უნდა იყოს 0-ზე მეტი')
-  db.update((d) => ({ ...d, cargo: next }))
+  db.set('cargo', next)
 }
 
 /* ------------------------------ RS.ge ------------------------------ */
@@ -178,7 +186,7 @@ export function saveRsSettings(v: Partial<RsSettings>, user: User) {
   if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
   if (credsChanged) resetRsCache()
-  db.update((d) => ({ ...d, rs: next }))
+  db.set('rs', next)
 }
 
 /** Credentials typed on the admin screen, else the stored ones. */
@@ -206,10 +214,9 @@ export async function checkRs(body: { su?: string; sp?: string } | undefined, us
   // A service user that passed the check is stored right away, so it survives a reload even if
   // the rest of the form isn't saved yet.
   if (!sameAsStored(c)) resetRsCache()
-  db.update((d) => ({
-    ...d,
-    rs: {
-      ...d.rs,
+  const prev = db.get().rs
+  db.set('rs', {
+      ...prev,
       su: c.su,
       sp: c.sp,
       sellerUnId: r.unId,
@@ -217,10 +224,9 @@ export async function checkRs(body: { su?: string; sp?: string } | undefined, us
       sellerTin: r.tin,
       sellerName: r.name,
       checkedAt: nowIso(),
-      units: r.units.length ? r.units : d.rs.units,
-      transTypes: r.transTypes.length ? r.transTypes : d.rs.transTypes,
-    },
-  }))
+      units: r.units.length ? r.units : prev.units,
+      transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
+  })
   return { tin: r.tin, name: r.name, unId: r.unId, saved: true }
 }
 
@@ -234,8 +240,20 @@ export async function rsNameFromTin(body: { tin?: string; su?: string; sp?: stri
   return { name }
 }
 
+/**
+ * Tag written into every waybill's COMMENT. If save_waybill's answer is lost, the next attempt
+ * finds the waybill by this tag on RS.ge instead of creating a second one.
+ */
+const refTag = (shipmentId: string) => `HC:${shipmentId}`
+
+/** Adds the shipment's tag to a payload that doesn't have it yet (built before tags existed). */
+function withRef(p: RsWaybillPayload, shipmentId: string): RsWaybillPayload {
+  const ref = refTag(shipmentId)
+  return p.comment.includes(ref) ? p : { ...p, comment: [p.comment, ref].filter(Boolean).join('; ') }
+}
+
 /** Builds the waybill for a shipment from the admin's settings and the chosen route, driver and truck. */
-function buildWaybill(d: Database, s: Pick<Shipment, 'carrierId' | 'destinationId' | 'driverId' | 'truckId' | 'cargo' | 'quantity'>): RsWaybillPayload {
+function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'carrierId' | 'destinationId' | 'driverId' | 'truckId' | 'cargo' | 'quantity'>): RsWaybillPayload {
   const rs = d.rs
   const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
   const driver = d.drivers.find((x) => x.id === s.driverId)!
@@ -262,7 +280,7 @@ function buildWaybill(d: Database, s: Pick<Shipment, 'carrierId' | 'destinationI
     receptionInfo: rs.receptionInfo,
     receiverInfo: rs.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
-    comment: [truck.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, rs.comment].filter(Boolean).join('; '),
+    comment: [truck.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, rs.comment, refTag(s.id)].filter(Boolean).join('; '),
     goods: [{ name: s.cargo.description, unitId: rs.unitId, unitTxt, quantity: s.quantity, price: rs.price, amount, barCode: s.cargo.code, vatType: rs.vatType }],
   }
 }
@@ -275,12 +293,7 @@ const rsNotReady = (d: Database) => {
 /* ---------------------------- Shipments ---------------------------- */
 
 function patch(id: string, fn: (s: Shipment) => Partial<Shipment>, event?: Omit<ShipmentEvent, 'at'>) {
-  db.update((d) => ({
-    ...d,
-    shipments: d.shipments.map((s) =>
-      s.id === id ? { ...s, ...fn(s), events: event ? [...s.events, { at: nowIso(), ...event }] : s.events } : s,
-    ),
-  }))
+  db.updateShipment(id, (s) => ({ ...s, ...fn(s), events: event ? [...s.events, { at: nowIso(), ...event }] : s.events }))
 }
 
 function get(id: string, user?: User) {
@@ -314,8 +327,9 @@ export const shipments = {
     if (!cargo.description || !(quantity > 0)) fail('ფიქსირებული ტვირთი არ არის დაყენებული — მიმართე ადმინისტრატორს')
     const notReady = rsNotReady(d)
     if (notReady) fail(notReady)
+    const sid = uid('s')
     const s: Shipment = {
-      id: uid('s'),
+      id: sid,
       createdAt: nowIso(),
       createdBy: user.id,
       carrierId: input.carrierId,
@@ -324,13 +338,13 @@ export const shipments = {
       truckId: input.truckId,
       cargo,
       quantity,
-      rsWaybill: buildWaybill(d, { ...input, cargo, quantity }),
+      rsWaybill: buildWaybill(d, { ...input, id: sid, cargo, quantity }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
       events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
     }
-    db.update((d) => ({ ...d, shipments: [s, ...d.shipments] }))
+    db.put('shipments', s)
     void shipments.run(s.id)
     return s.id
   },
@@ -404,13 +418,38 @@ async function runPipeline(id: string) {
       const notReady = rsNotReady(d)
       if (notReady) throw new Error(notReady)
       // Shipments from before RS.ge settings existed get their waybill built now.
-      const payload = s.rsWaybill ?? buildWaybill(d, s)
+      const payload = withRef(s.rsWaybill ?? buildWaybill(d, s), id)
       let waybillId = s.rsWaybillId
-      if (!waybillId) {
-        waybillId = await rsge.saveWaybill(payload, id)
-        patch(id, () => ({ rsWaybill: payload, rsWaybillId: waybillId }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+      let number: string | undefined
+      if (!waybillId && s.rsSaveAttemptedAt) {
+        // An earlier save_waybill may have reached RS.ge without its answer reaching us. Look first;
+        // if that isn't possible, stop rather than risk a second waybill for the same trip.
+        const found = await rsge.findByRef(refTag(id), payload.buyerTin, new Date(s.rsSaveAttemptedAt), id).catch((e: Error) => {
+          throw new Error(`ვერ შემოწმდა, შეინახა თუ არა წინა მცდელობამ ზედნადები RS.ge-ზე, ამიტომ თავიდან არ გაიგზავნა (${e.message}). სცადე ცოტა ხანში.`)
+        })
+        // Deleted (-1) or cancelled (-2) ones don't count: a new waybill is right then.
+        if (found && found.status >= 0) {
+          waybillId = found.id
+          if (found.status >= 1 && found.number) number = found.number
+          patch(id, () => ({ rsWaybill: payload, rsWaybillId: found.id, rsSaveAttemptedAt: undefined }), {
+            level: 'info',
+            message: `RS.ge-ზე ნაპოვნია წინა მცდელობით შენახული ზედნადები (ID ${found.id}) — ახალი არ შეიქმნა`,
+          })
+        }
       }
-      const number = await rsge.sendWaybill(waybillId, id)
+      if (!waybillId) {
+        // Recorded before the call: from here on, a lost answer means "maybe saved".
+        patch(id, () => ({ rsWaybill: payload, rsSaveAttemptedAt: nowIso() }))
+        try {
+          waybillId = await rsge.saveWaybill(payload, id)
+        } catch (e) {
+          // RS.ge answered with a refusal: nothing was created, so the next try needs no lookup.
+          if (e instanceof IntegrationError && e.rejected) patch(id, () => ({ rsSaveAttemptedAt: undefined }))
+          throw e
+        }
+        patch(id, () => ({ rsWaybillId: waybillId, rsSaveAttemptedAt: undefined }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+      }
+      number ??= await rsge.sendWaybill(waybillId, id)
       patch(
         id,
         () => ({ status: 'uploaded', waybillNumber: number, rs: { status: 'ok', at: nowIso() } }),
@@ -454,10 +493,10 @@ export const mock = {
   updateSettings(p: Partial<MockSettings>) {
     const next: Partial<MockSettings> = {}
     for (const k of ['latencyMs', 'smsFailRate'] as const) if (k in p && Number.isFinite(Number(p[k]))) next[k] = Number(p[k])
-    db.update((d) => ({ ...d, settings: { ...d.settings, ...next } }))
+    db.set('settings', { ...db.get().settings, ...next })
   },
   clearLogs() {
-    db.update((d) => ({ ...d, logs: [] }))
+    db.clearLogs()
   },
   reset(user: User) {
     requireAdmin(user)

@@ -88,6 +88,11 @@ export interface Shipment {
   waybillNumber?: string
   /** RS.ge internal waybill ID returned by save_waybill. Kept so retries activate it instead of creating a duplicate. */
   rsWaybillId?: number
+  /**
+   * Set right before save_waybill and cleared once its answer arrives. If it is still set, an earlier
+   * call may have created the waybill without us hearing back, so the next attempt looks it up first.
+   */
+  rsSaveAttemptedAt?: string
   /** What was sent to RS.ge, fixed when the shipment is created so retries send the same waybill. */
   rsWaybill?: RsWaybillPayload
   /** After upload: the waybill was completed (close_waybill) or cancelled (ref_waybill) on RS.ge. */

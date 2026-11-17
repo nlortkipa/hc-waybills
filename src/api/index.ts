@@ -57,8 +57,11 @@ export const refs = {
   },
 
   /** Returns why a record cannot be deleted, or null if it can. The server checks the same rules. */
-  blocker(col: RefCollection, id: string, by?: User): string | null {
-    if (col === 'users' && by?.id === id) return 'საკუთარი ანგარიშის წაშლა შეუძლებელია.'
+  blocker(col: RefCollection, id: string, _by?: User): string | null {
+    if (col === 'users') {
+      const admins = active(db.get().users).filter((u) => u.role === 'admin')
+      if (admins.length === 1 && admins[0].id === id) return 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
+    }
     if (col === 'carriers') {
       const u = refs.boundOperators(id)
       if (u) return `მიბმულია ${u} ოპერატორთან — ჯერ შეცვალე ან წაშალე ისინი.`

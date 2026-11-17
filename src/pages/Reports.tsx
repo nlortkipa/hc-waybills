@@ -2,25 +2,26 @@ import { AlertTriangle, Download, FileText, MessageSquare, Truck } from 'lucide-
 import { useMemo, useState } from 'react'
 import { visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
-import { cx, downloadCsv, formatDay, formatTonnes } from '../lib/util'
+import { cx, downloadCsv, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 
+/** Calendar arithmetic on `YYYY-MM-DD` keys (UTC fields, so no zone shifts). */
 const dayKey = (d: Date) => d.toISOString().slice(0, 10)
 
 export function Reports() {
   const user = useUser()
   const d = useDb()
   const L = useLookup()
-  const [from, setFrom] = useState(() => dayKey(new Date(Date.now() - 6 * 86400_000)))
-  const [to, setTo] = useState(() => dayKey(new Date()))
+  const [from, setFrom] = useState(() => dayKey(new Date(Date.parse(tbilisiDay()) - 6 * 86400_000)))
+  const [to, setTo] = useState(() => tbilisiDay())
   const [carrier, setCarrier] = useState('')
 
   const rows = useMemo(
     () =>
       visibleShipments(d, user).filter((s) => {
-        const k = s.createdAt.slice(0, 10)
+        const k = tbilisiDay(s.createdAt)
         return k >= from && k <= to && (!carrier || s.carrierId === carrier)
       }),
     [d, user, from, to, carrier],
@@ -40,7 +41,7 @@ export function Reports() {
       out.push({ key: dayKey(dt), label: formatDay(dt, true), t: 0, n: 0 })
     }
     for (const s of uploaded) {
-      const b = out.find((x) => x.key === s.createdAt.slice(0, 10))
+      const b = out.find((x) => x.key === tbilisiDay(s.createdAt))
       if (b) {
         b.t += s.quantity
         b.n++
@@ -70,7 +71,7 @@ export function Reports() {
       ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
       ...rows.map((s) => {
         const x = L.describe(s)
-        return [s.waybillNumber ?? '', s.createdAt, x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
+        return [s.waybillNumber ?? '', tbilisiStamp(s.createdAt), x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
       }),
     ])
   }

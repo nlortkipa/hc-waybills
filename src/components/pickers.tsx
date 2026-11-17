@@ -22,7 +22,7 @@ import {
   type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { cx, formatDay } from '../lib/util'
+import { cx, formatDay, tbilisiDay } from '../lib/util'
 import { inputCls, invalidCls } from './fieldStyles'
 
 /* --------------------------- Popover plumbing --------------------------- */
@@ -318,7 +318,7 @@ export type DatePickerProps = {
 
 export function DatePicker({ value, onChange, min, max, invalid, disabled, className, id, placeholder = 'აირჩიე თარიღი' }: DatePickerProps) {
   const [open, setOpen] = useState(false)
-  const today = toKey(new Date())
+  const today = tbilisiDay()
   const [cursor, setCursor] = useState(value || today)
   const btn = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
@@ -374,7 +374,7 @@ export function DatePicker({ value, onChange, min, max, invalid, disabled, class
   }
 
   // 6-week grid starting on the Monday on/before the 1st of the cursor's month.
-  const c = fromKey(cursor) ?? new Date()
+  const c = fromKey(cursor) ?? fromKey(tbilisiDay())!
   const first = new Date(c.getFullYear(), c.getMonth(), 1)
   const start = new Date(first)
   start.setDate(1 - ((first.getDay() + 6) % 7))

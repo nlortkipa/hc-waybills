@@ -8,7 +8,7 @@
  */
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { extname, join, normalize } from 'node:path'
+import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { auth, checkRs, HttpError, mock, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
@@ -27,14 +27,15 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   [
     'GET',
     /^\/api\/state$/,
-    // ?rev=N → 204 when nothing changed since N, so clients can poll cheaply.
+    // ?rev=R → 204 when nothing changed since R, so clients can poll cheaply. R is opaque and
+    // survives restarts, so a client never mistakes new data for what it already has.
     ({ req, user }) => {
-      const since = Number(new URL(req.url!, 'http://x').searchParams.get('rev'))
+      const since = new URL(req.url!, 'http://x').searchParams.get('rev')
       if (since === store.rev()) return NOT_MODIFIED
       return { rev: store.rev(), db: viewFor(user) }
     },
   ],
-  ['PUT', /^\/api\/refs\/(\w+)$/, ({ params, body, user }) => refs.save(refCol(params[0]), body, user)],
+  ['PUT', /^\/api\/refs\/(\w+)$/, ({ params, body, user, token }) => refs.save(refCol(params[0]), body, user, token)],
   ['DELETE', /^\/api\/refs\/(\w+)\/([\w-]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), params[1], user)],
   ['PUT', /^\/api\/cargo$/, ({ body, user }) => saveCargo(body, user)],
   ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
@@ -89,16 +90,33 @@ const MIME: Record<string, string> = {
   '.apk': 'application/vnd.android.package-archive',
 }
 
-function serveStatic(req: IncomingMessage, res: ServerResponse) {
-  const path = normalize(decodeURIComponent(new URL(req.url!, 'http://x').pathname)).replace(/^(\.\.[/\\])+/, '')
+function serveStatic(pathname: string, res: ServerResponse) {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return send(res, 400, { error: 'Bad request' })
+  }
+  const path = normalize(decoded).replace(/^(\.\.[/\\])+/, '')
   let file = join(DIST, path)
-  if (!file.startsWith(DIST) || !existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html')
+  if (!file.startsWith(DIST + sep) || !existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html')
   if (!existsSync(file)) return send(res, 404, { error: 'Not found' })
   res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream', 'Content-Length': statSync(file).size })
-  createReadStream(file).pipe(res)
+  createReadStream(file)
+    .on('error', () => res.destroy())
+    .pipe(res)
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
+  // Nothing a request does may take the process down: answer 500 and carry on.
+  handle(req, res).catch((e) => {
+    console.error(e)
+    if (!res.headersSent) send(res, 500, { error: 'სერვერის შეცდომა' })
+    else res.destroy()
+  })
+})
+
+async function handle(req: IncomingMessage, res: ServerResponse) {
   // The Android app runs on its own origin (http://localhost), so allow cross-origin calls.
   // Auth is a bearer token, not a cookie, so this does not expose sessions to other sites.
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -106,8 +124,13 @@ const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
   if (req.method === 'OPTIONS') return send(res, 204)
 
-  const path = new URL(req.url!, 'http://x').pathname
-  if (!path.startsWith('/api/')) return serveStatic(req, res)
+  let path: string
+  try {
+    path = new URL(req.url!, 'http://x').pathname
+  } catch {
+    return send(res, 400, { error: 'Bad request' })
+  }
+  if (!path.startsWith('/api/')) return serveStatic(path, res)
 
   try {
     for (const [method, re, handler, isPublic] of routes) {
@@ -127,7 +150,10 @@ const server = createServer(async (req, res) => {
     if (status === 500) console.error(e)
     send(res, status, { error: status === 500 ? 'სერვერის შეცდომა' : (e as Error).message })
   }
-})
+}
+
+// Background pipelines run detached from requests: log a stray rejection instead of exiting.
+process.on('unhandledRejection', (e) => console.error('[api] unhandled rejection:', e))
 
 server.listen(PORT, HOST, () => {
   console.log(`[api] listening on http://${HOST}:${PORT}`)

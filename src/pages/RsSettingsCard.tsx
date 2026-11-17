@@ -133,10 +133,12 @@ export function RsSettingsCard() {
     setBusy('name')
     try {
       const { name } = await rsSettings.nameFromTin(f.buyerTin.trim(), typedCreds())
+      // Only the name: being in RS.ge's register says nothing certain about citizenship, so the toggle stays as set.
       setF((x) => ({ ...x, buyerName: name }))
-      setErrors((x) => ({ ...x, buyerName: '' }))
+      setErrors((x) => ({ ...x, buyerTin: '', buyerName: '' }))
     } catch (err) {
-      toast('error', (err as Error).message)
+      // Leave the name as it was; show why next to the number.
+      setErrors((x) => ({ ...x, buyerTin: (err as Error).message }))
     } finally {
       setBusy('')
     }

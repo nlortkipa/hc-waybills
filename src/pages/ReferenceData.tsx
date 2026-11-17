@@ -337,6 +337,9 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
       ) : used ? (
         <p className="mt-2 rounded-lg bg-slate-100 p-2 text-slate-600">გამოიყენება {used} რეისში — ეს რეისები და რეპორტები კვლავ აჩვენებს ამ ჩანაწერს.</p>
       ) : null}
+      {!blocker && col === 'users' && id === user.id && (
+        <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ეს შენი ანგარიშია — წაშლის შემდეგ სისტემიდან გამოხვალ.</p>
+      )}
     </>
   )
 }

@@ -24,8 +24,14 @@ export interface RsCreds {
   sp: string
 }
 
+/** A waybill found on RS.ge. status: 0 saved, 1 active, 2 completed, -1 deleted, -2 cancelled. */
+export interface FoundWaybill {
+  id: number
+  status: number
+  number: string
+}
 
-const rsError = (message: string) => new IntegrationError('RS.ge', message)
+const rsError = (message: string, rejected = false) => new IntegrationError('RS.ge', message, rejected)
 
 /* ------------------------------ XML helpers ------------------------------ */
 
@@ -226,8 +232,10 @@ const live = {
     }
   },
 
+  /** '' when RS.ge doesn't know the number (it answers with the literal text "null"). */
   async nameFromTin(c: RsCreds, tin: string) {
-    return tag(await soap('get_name_from_tin', [...creds(c), ['tin', tin]]), 'get_name_from_tinResult')
+    const name = tag(await soap('get_name_from_tin', [...creds(c), ['tin', tin]], undefined, (x) => !/^(null)?$/i.test(tag(x, 'get_name_from_tinResult'))), 'get_name_from_tinResult')
+    return /^null$/i.test(name) ? '' : name
   },
 
   async saveWaybill(c: RsCreds, seller: { unId: number; userId: number | null }, p: RsWaybillPayload, shipmentId: string): Promise<number> {
@@ -239,7 +247,7 @@ const live = {
       const goodsErr = blocks(xml, 'GOODS')
         .map((g) => Number(tag(g, 'ERROR')))
         .find((n) => n < 0)
-      throw rsError(await describe(status < 0 ? status : (goodsErr ?? status), c))
+      throw rsError(await describe(status < 0 ? status : (goodsErr ?? status), c), true)
     }
     return id
   },
@@ -248,6 +256,27 @@ const live = {
     const number = tag(await soap('send_waybill', [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => /^[^-]/.test(tag(x, 'send_waybillResult'))), 'send_waybillResult')
     if (!number || /^-\d+$/.test(number)) throw rsError(await describe(Number(number) || -1, c))
     return number
+  },
+
+  /**
+   * Waybills of this seller last changed between `from` and `to` (get_waybills_v1; at most 3 days).
+   * Returns the one whose comment carries `ref`, or null when there is none.
+   */
+  async findByRef(c: RsCreds, ref: string, buyerTin: string, from: Date, to: Date, shipmentId: string): Promise<FoundWaybill | null> {
+    const xml = await soap(
+      'get_waybills_v1',
+      [...creds(c), ['buyer_tin', buyerTin], ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]],
+      shipmentId,
+    )
+    // An error comes back as a bare negative number instead of a list.
+    const bare = tag(xml, 'get_waybills_v1Result')
+    if (/^-\d+$/.test(bare)) throw rsError(await describe(Number(bare), c))
+    for (const b of blocks(xml, 'WAYBILL')) {
+      const comment = tag(b, 'WAYBILL_COMMENT') || tag(b, 'COMMENT')
+      if (!comment.includes(ref)) continue
+      return { id: Number(tag(b, 'ID')), status: Number(tag(b, 'STATUS')), number: tag(b, 'WAYBILL_NUMBER') }
+    }
+    return null
   },
 
   /** close_waybill / ref_waybill return 1 on success, negative codes otherwise. */
@@ -278,7 +307,7 @@ async function seller(C: RsCreds) {
   let rs = db.get().rs
   if (!rs.sellerUnId) {
     const r = await live.check(C)
-    db.update((d) => ({ ...d, rs: { ...d.rs, sellerUnId: r.unId, sellerUserId: r.userId, sellerTin: r.tin, sellerName: r.name, checkedAt: new Date().toISOString() } }))
+    db.set('rs', { ...db.get().rs, sellerUnId: r.unId, sellerUserId: r.userId, sellerTin: r.tin, sellerName: r.name, checkedAt: new Date().toISOString() })
     rs = db.get().rs
   }
   return { unId: rs.sellerUnId!, userId: rs.sellerUserId }
@@ -292,6 +321,17 @@ export const rsge = {
   async saveWaybill(p: RsWaybillPayload, shipmentId: string): Promise<number> {
     const c = activeCreds()
     return live.saveWaybill(c, await seller(c), p, shipmentId)
+  },
+
+  /**
+   * Looks for the waybill an earlier save_waybill may have created even though its answer never
+   * arrived (timeout, dropped connection, restart). `ref` is the shipment's tag in COMMENT.
+   */
+  findByRef(ref: string, buyerTin: string, since: Date, shipmentId: string) {
+    const from = new Date(since.getTime() - 10 * 60_000)
+    // get_waybills_v1 accepts at most 3 days.
+    const to = new Date(Math.min(Date.now() + 10 * 60_000, from.getTime() + 3 * 86400_000 - 60_000))
+    return live.findByRef(activeCreds(), ref, buyerTin, from, to, shipmentId)
   },
 
   /** Activates a saved waybill and returns its number. */

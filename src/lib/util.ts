@@ -13,6 +13,20 @@ export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export const nowIso = () => new Date().toISOString()
 
+/*
+ * Every date shown or grouped by day is in Georgian time, whatever the device's time zone.
+ * Georgia is UTC+4 all year (no daylight saving), so a fixed offset is exact.
+ */
+const TBILISI_OFFSET_MS = 4 * 3600_000
+/** A Date whose UTC fields read as the wall clock in Tbilisi. Only for reading fields, not for arithmetic. */
+const tbilisi = (d: Date | string) => new Date(new Date(d).getTime() + TBILISI_OFFSET_MS)
+
+/** `YYYY-MM-DD` of the Georgian calendar day of an instant (default: now). */
+export const tbilisiDay = (d: Date | string = new Date()) => tbilisi(d).toISOString().slice(0, 10)
+
+/** `YYYY-MM-DD HH:MM` in Georgian time, for exports. */
+export const tbilisiStamp = (iso: string) => tbilisi(iso).toISOString().slice(0, 16).replace('T', ' ')
+
 /** Georgian mobile number reduced to its 9 local digits ('+995 575 78 03 23' → '575780323'). */
 export const phoneKey = (v: string) => v.replace(/\D/g, '').replace(/^995(?=\d{9}$)/, '')
 
@@ -29,14 +43,14 @@ export function formatDay(d: Date, utc = false): string {
 
 export function formatDateTime(iso?: string): string {
   if (!iso) return '—'
-  const d = new Date(iso)
-  return `${formatDay(d)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const d = tbilisi(iso)
+  return `${formatDay(d, true)}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
 }
 
 export function formatTime(iso?: string): string {
   if (!iso) return '—'
-  const d = new Date(iso)
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  const d = tbilisi(iso)
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
 }
 
 export function timeAgo(iso: string): string {

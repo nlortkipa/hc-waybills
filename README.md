@@ -44,7 +44,9 @@ flowchart LR
 
 The app is a React + TypeScript front end (Vite, Tailwind) plus a small Node API server (`server/`, no dependencies). The front end runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com). Browsers and the Android app all talk to the same server, which owns the data, enforces roles and runs the RS.ge → SMS pipeline.
 
-> **SMS is mocked** (`server/integrations.ts`). **RS.ge** is called for real (`server/rsge.ts`) with the service user the admin enters. There is no simulator. Data is stored by the server in `server/data/db.json` (override with `HC_DB_FILE`). Delete that file to start over with only the admin.
+> **SMS is mocked** (`server/integrations.ts`). **RS.ge** is called for real (`server/rsge.ts`) with the service user the admin enters. There is no simulator. Data is stored by the server in SQLite at `server/data/hc.db` (Node's built-in `node:sqlite`; override with `HC_DB_FILE`). Delete `hc.db*` to start over with only the admin. On first start an existing `server/data/db.json` (the old storage) is imported and renamed to `db.json.imported`. Back up `hc.db` with `sqlite3 hc.db ".backup copy.db"` (a plain file copy while the server runs can miss the newest changes in `hc.db-wal`).
+
+> **Sessions** end after 30 days without use or 90 days after login. A user is logged out everywhere when their phone number or role changes, or when they're deleted. **Times** are always shown and grouped by day in Georgian time (UTC+4), whatever the device's time zone.
 
 ### Dependencies
 
@@ -86,7 +88,7 @@ The latest build is also saved as `release/hc-portal.apk` and copied into `dist/
 
 The interface is in Georgian.
 
-1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. As admin, add carriers, drivers, trucks and other users (each with their own phone number) in **ცნობარები**. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
+1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. There must always be at least one admin: the last one can't be deleted or given another role, but an admin can delete their own account once another admin exists. As admin, add carriers, drivers, trucks and other users (each with their own phone number) in **ცნობარები**. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
 2. As an operator, open **ახალი რეისი** (new shipment), pick the end address, driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
 3. In **სატესტო პანელი** (mock console): watch every request and response, change SMS latency, force SMS failures (to test retries), and reset the demo data.
 
@@ -102,7 +104,9 @@ Setup (admin, **ცნობარები → RS.ge**):
 2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
 3. Fill in the buyer (tax ID, name; **მოძებნა** looks the name up on RS.ge), unit, price, VAT type and transport fields. They apply to every shipment.
 
-Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry never creates a duplicate) and then `send_waybill` (activates it and returns the waybill number). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. Every call appears in the mock console with the password masked.
+Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybill` (activates it and returns the waybill number). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. Every call appears in the mock console with the password masked.
+
+Duplicate protection: every waybill's `COMMENT` ends with the shipment's tag (`HC:<shipment id>`). The time of each `save_waybill` call is recorded before it is sent. If its answer never arrives (timeout, dropped connection, server restart), the next attempt first searches RS.ge (`get_waybills_v1`, by last-update time) for a waybill with that tag and continues with it instead of saving a second one. If that search fails, the retry stops with an error instead of risking a duplicate.
 
 Mapping notes:
 - RS.ge has no trailer field: the trailer number is written into `COMMENT`.

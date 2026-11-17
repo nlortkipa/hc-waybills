@@ -9,17 +9,17 @@ import { store as db } from './store.ts'
 
 export class IntegrationError extends Error {
   readonly service: ServiceName
-  constructor(service: ServiceName, message: string) {
+  /** The service answered and refused, so nothing was created (as opposed to a timeout or lost answer). */
+  readonly rejected: boolean
+  constructor(service: ServiceName, message: string, rejected = false) {
     super(message)
     this.service = service
+    this.rejected = rejected
   }
 }
 
 export function log(entry: Omit<IntegrationLog, 'id' | 'at'>) {
-  db.update((d) => ({
-    ...d,
-    logs: [{ id: uid('l'), at: nowIso(), ...entry }, ...d.logs].slice(0, 300),
-  }))
+  db.addLog({ id: uid('l'), at: nowIso(), ...entry })
 }
 
 export async function mockCall<T>(opts: {

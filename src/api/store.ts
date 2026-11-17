@@ -22,7 +22,8 @@ const EMPTY: Database = {
 }
 
 let state: Database = EMPTY
-let rev = 0
+/** Opaque revision from the server; '' = nothing loaded yet. */
+let rev = ''
 let loaded = false
 const listeners = new Set<() => void>()
 const notify = () => listeners.forEach((l) => l())
@@ -32,7 +33,7 @@ let inflight: Promise<void> | null = null
 /** Fetches the latest data if anything changed on the server. */
 export function refresh(): Promise<void> {
   if (!getToken()) return Promise.resolve()
-  inflight ??= api<{ rev: number; db: Database } | undefined>('GET', `/api/state?rev=${rev}`)
+  inflight ??= api<{ rev: string; db: Database } | undefined>('GET', `/api/state?rev=${encodeURIComponent(rev)}`)
     .then((r) => {
       if (r) {
         state = r.db
@@ -57,7 +58,7 @@ export const db = {
   },
   clear() {
     state = EMPTY
-    rev = 0
+    rev = ''
     loaded = false
     notify()
   },

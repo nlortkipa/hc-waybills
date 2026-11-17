@@ -6,6 +6,7 @@ import { ShipmentList } from '../components/ShipmentList'
 import { Button, Card, EmptyState, PageHeader, Stat } from '../components/ui'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
+import { tbilisiDay } from '../lib/util'
 
 export function Dashboard() {
   const user = useUser()
@@ -13,8 +14,8 @@ export function Dashboard() {
   const rows = useMemo(() => visibleShipments(d, user), [d, user])
   const carrier = d.carriers.find((c) => c.id === user.carrierId)
 
-  const today = new Date().toDateString()
-  const todays = rows.filter((s) => new Date(s.createdAt).toDateString() === today)
+  const today = tbilisiDay()
+  const todays = rows.filter((s) => tbilisiDay(s.createdAt) === today)
   const waiting = rows.filter((s) => s.status === 'uploading' || s.sms.status === 'running')
   const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed')
   const uploadedToday = todays.filter((s) => s.status === 'uploaded' && s.waybillState !== 'cancelled')
