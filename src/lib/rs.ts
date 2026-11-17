@@ -11,6 +11,7 @@ export const RS_STATUS: Record<number, { label: string; tone: 'blue' | 'green' |
   0: { label: 'შენახული', tone: 'blue' },
   1: { label: 'აქტიური', tone: 'green' },
   2: { label: 'დასრულებული', tone: 'gray' },
+  8: { label: 'გადამზიდავთან', tone: 'blue' },
   [-1]: { label: 'წაშლილი', tone: 'red' },
   [-2]: { label: 'გაუქმებული', tone: 'red' },
 }

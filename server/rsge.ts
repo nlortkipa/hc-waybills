@@ -2,15 +2,17 @@
  * RS.ge electronic waybill (ელექტრონული ზედნადები) client.
  *
  * Protocol: docs/rs-ge/waybill_protocol.pdf (v4.0.4). SOAP 1.1 over HTTPS, no dependencies.
- * Flow for one shipment: save_waybill (returns the waybill ID) → send_waybill (activates it,
- * returns the waybill number). Later: close_waybill (delivered) or ref_waybill (cancel).
+ * Flow for one shipment: save_waybill (returns the waybill ID) → send_waybil_vd (activates it with
+ * the transport start time, returns the waybill number). Later: close_waybill (delivered) or
+ * ref_waybill (cancel; also allowed on a completed waybill). A saved draft that was never
+ * activated can only be deleted (del_waybill): ref_waybill answers 0 and leaves it as it is.
  * Reading back: get_waybill (one waybill as RS.ge has it now) and get_waybills_v1 (what changed
  * in a time window), used to keep shipments in step with changes made on the rs.ge portal.
  *
  * RS.ge has no separate sandbox host: testing is done on the normal endpoint with a test
  * service user. The service user (su / sp) is entered by the admin and stored on the server,
- * the password encrypted (server/secret.ts). Every call that changes something goes to the
- * Every call goes to the integration log, with the password masked. Read-backs are tagged
+ * the password encrypted (server/secret.ts). Every call goes to the integration log, with the
+ * password masked. Read-backs are tagged
  * (readBack) so the log keeps them apart from the uploads.
  */
 import type { IntegrationLog, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
@@ -138,14 +140,21 @@ const creds = ({ su, sp }: RsCreds): Param[] => [
 
 let errorTexts: Map<number, string> | null = null
 
-/** Human text for an RS.ge error code (get_error_codes, cached). Falls back to the code alone. */
-async function describe(code: number, c: RsCreds): Promise<string> {
+/**
+ * Human text for an RS.ge error code (get_error_codes, cached). Falls back to the code alone.
+ * -101 means "the seller in the XML is not this service user's" for save_waybill, and "someone
+ * else's waybill" for the calls that take a waybill ID.
+ */
+async function describe(code: number, c: RsCreds, op?: string): Promise<string> {
   if (code === -100) return 'RS.ge: სერვისის მომხმარებელი ან პაროლი არასწორია (კოდი -100)'
+  if (code === -101 && op === 'save_waybill') return 'RS.ge: გამყიდველი არ ემთხვევა სერვისის მომხმარებელს — RS.ge-ს გვერდზე დააჭირე „კავშირის შემოწმებას“ (კოდი -101)'
   if (code === -101) return 'RS.ge: ზედნადები სხვა გადამხდელს ეკუთვნის (კოდი -101)'
   if (!errorTexts) {
     try {
       const xml = await soap('get_error_codes', creds(c))
-      errorTexts = new Map(blocks(xml, 'ERROR_CODE').map((b) => [Number(tag(b, 'ID')), tag(b, 'TEXT')]))
+      const table = new Map(blocks(xml, 'ERROR_CODE').map((b) => [Number(tag(b, 'ID')), tag(b, 'TEXT')]))
+      // A refusal (e.g. <RESULT><STATUS>-100</STATUS>) has no codes: ask again next time.
+      if (table.size) errorTexts = table
     } catch {
       /* the code alone is still useful */
     }
@@ -298,27 +307,33 @@ const live = {
       const goodsErr = blocks(xml, 'GOODS')
         .map((g) => Number(tag(g, 'ERROR')))
         .find((n) => n < 0)
-      throw rsError(await describe(status < 0 ? status : (goodsErr ?? status), c), true)
+      throw rsError(await describe(status < 0 ? status : (goodsErr ?? status), c, 'save_waybill'), true)
     }
     return id
   },
 
+  /**
+   * Activates a saved waybill and returns its number. send_waybil_vd (sic, one "l") sets the
+   * transport start to now; plain send_waybill would keep the time of save_waybill, which is wrong
+   * when activation is retried later. An already active waybill answers -1 (see activate in logic.ts).
+   */
   async sendWaybill(c: RsCreds, waybillId: number, shipmentId: string): Promise<string> {
-    const number = tag(await soap('send_waybill', [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => /^[^-]/.test(tag(x, 'send_waybillResult'))), 'send_waybillResult')
+    const send = async (op: 'send_waybil_vd' | 'send_waybill', extra: Param[]) =>
+      tag(await soap(op, [...creds(c), ...extra, ['waybill_id', waybillId]], shipmentId, (x) => /^[^-]/.test(tag(x, `${op}Result`))), `${op}Result`)
+    let number = await send('send_waybil_vd', [['begin_date', rsDate()]])
+    // -1034: start before the waybill's creation time (our clock behind RS.ge's) → let RS.ge pick it.
+    if (number === '-1034') number = await send('send_waybill', [])
     if (!number || /^-\d+$/.test(number)) throw rsError(await describe(Number(number) || -1, c))
     return number
   },
 
   /**
-   * Waybills of this seller last changed between `from` and `to` (get_waybills_v1; at most 3 days).
-   * Returns the one whose comment carries `ref`, or null when there is none.
+   * Waybills of this taxpayer last changed between `from` and `to` (get_waybills_v1; at most 3 days;
+   * saved drafts are listed too). Returns the one whose comment carries `ref`, or null when there is none.
+   * No buyer filter: the buyer in the settings may have changed since the earlier attempt.
    */
-  async findByRef(c: RsCreds, ref: string, buyerTin: string, from: Date, to: Date, shipmentId: string): Promise<FoundWaybill | null> {
-    const xml = await soap(
-      'get_waybills_v1',
-      [...creds(c), ['buyer_tin', buyerTin], ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]],
-      shipmentId,
-    )
+  async findByRef(c: RsCreds, ref: string, from: Date, to: Date, shipmentId: string): Promise<FoundWaybill | null> {
+    const xml = await soap('get_waybills_v1', [...creds(c), ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]], shipmentId)
     // An error comes back as a bare negative number instead of a list.
     const bare = tag(xml, 'get_waybills_v1Result')
     if (/^-\d+$/.test(bare)) throw rsError(await describe(Number(bare), c))
@@ -331,7 +346,7 @@ const live = {
   },
 
   /** One waybill as RS.ge has it now. */
-  async getWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, via: 'sync' | 'page'): Promise<RsRemoteWaybill> {
+  async getWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, via?: 'sync' | 'page'): Promise<RsRemoteWaybill> {
     const xml = await soap('get_waybill', [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => /<WAYBILL[\s>]/.test(x), via)
     const [b] = blocks(xml, 'WAYBILL')
     // Errors come back as <RESULT><STATUS>-101</STATUS>…</RESULT>.
@@ -342,20 +357,21 @@ const live = {
   },
 
   /**
-   * IDs of waybills between this taxpayer and `buyerTin` (either direction) last changed between
-   * `from` and `to` (get_waybills_v1; at most 3 days). Used by the background sync.
+   * IDs of this taxpayer's waybills (sold or bought) last changed between `from` and `to`
+   * (get_waybills_v1; at most 3 days). Used by the background sync. Without a buyer filter, so a
+   * waybill whose buyer was corrected on the rs.ge portal is still seen.
    */
-  async changed(c: RsCreds, buyerTin: string, from: Date, to: Date): Promise<{ id: number; status: number; sellerTin: string }[]> {
-    const xml = await soap('get_waybills_v1', [...creds(c), ['buyer_tin', buyerTin], ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]], undefined, (x) => !/^-\d+$/.test(tag(x, 'get_waybills_v1Result')), 'sync')
+  async changed(c: RsCreds, from: Date, to: Date): Promise<{ id: number; status: number; sellerTin: string }[]> {
+    const xml = await soap('get_waybills_v1', [...creds(c), ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]], undefined, (x) => !/^-\d+$/.test(tag(x, 'get_waybills_v1Result')), 'sync')
     const bare = tag(xml, 'get_waybills_v1Result')
     if (/^-\d+$/.test(bare)) throw rsError(await describe(Number(bare), c))
     return blocks(xml, 'WAYBILL').map((b) => ({ id: Number(tag(b, 'ID')), status: Number(tag(b, 'STATUS')), sellerTin: tag(b, 'SELLER_TIN') }))
   },
 
-  /** close_waybill / ref_waybill return 1 on success, negative codes otherwise. */
-  async finish(op: 'close_waybill' | 'ref_waybill', c: RsCreds, waybillId: number, shipmentId: string) {
+  /** close_waybill / ref_waybill / del_waybill return 1 on success, 0 or a negative code otherwise. */
+  async finish(op: 'close_waybill' | 'ref_waybill' | 'del_waybill', c: RsCreds, waybillId: number, shipmentId: string) {
     const r = Number(tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
-    if (r !== 1) throw rsError(await describe(r, c))
+    if (r !== 1) throw rsError(await describe(r || -1, c, op))
   },
 }
 
@@ -401,10 +417,13 @@ export const rsge = {
    * Looks for the waybill an earlier save_waybill may have created even though its answer never
    * arrived (timeout, dropped connection, restart). `ref` is the shipment's tag in COMMENT.
    */
-  findByRef(ref: string, buyerTin: string, since: Date, shipmentId: string) {
+  async findByRef(ref: string, since: Date, shipmentId: string) {
+    const c = activeCreds()
     const from = new Date(since.getTime() - 10 * 60_000)
     const to = new Date(Math.min(Date.now() + 10 * 60_000, from.getTime() + WINDOW_MS))
-    return live.findByRef(activeCreds(), ref, buyerTin, from, to, shipmentId)
+    // A draft changed later (e.g. activated on the portal) has a newer update time: look at the last 3 days too.
+    const recent = to.getTime() < Date.now() ? live.findByRef(c, ref, new Date(Date.now() - WINDOW_MS), new Date(Date.now() + 60_000), shipmentId) : null
+    return (await live.findByRef(c, ref, from, to, shipmentId)) ?? (await recent)
   },
 
   /** Activates a saved waybill and returns its number. */
@@ -413,18 +432,21 @@ export const rsge = {
   /** Completes the waybill (goods delivered). */
   closeWaybill: (waybillId: number, shipmentId: string) => live.finish('close_waybill', activeCreds(), waybillId, shipmentId),
 
-  /** Cancels an activated waybill. */
+  /** Cancels an activated or completed waybill. */
   cancelWaybill: (waybillId: number, shipmentId: string) => live.finish('ref_waybill', activeCreds(), waybillId, shipmentId),
 
-  /** The waybill as RS.ge has it now. `via` says what asked, for the log. */
-  getWaybill: (waybillId: number, shipmentId: string, via: 'sync' | 'page') => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+  /** Deletes a saved draft (never activated). */
+  deleteWaybill: (waybillId: number, shipmentId: string) => live.finish('del_waybill', activeCreds(), waybillId, shipmentId),
 
-  /** IDs of waybills with `buyerTin` changed between `from` and `to`, read in 3-day windows (the RS.ge limit). */
-  async changed(buyerTin: string, from: Date, to: Date) {
+  /** The waybill as RS.ge has it now. `via` tags read-backs in the log; omitted when part of an upload. */
+  getWaybill: (waybillId: number, shipmentId: string, via?: 'sync' | 'page') => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+
+  /** IDs of waybills changed between `from` and `to`, read in 3-day windows (the RS.ge limit). */
+  async changed(from: Date, to: Date) {
     const c = activeCreds()
     const out: { id: number; status: number; sellerTin: string }[] = []
     for (let s = from.getTime(); s < to.getTime(); s += WINDOW_MS) {
-      out.push(...(await live.changed(c, buyerTin, new Date(s), new Date(Math.min(s + WINDOW_MS, to.getTime())))))
+      out.push(...(await live.changed(c, new Date(s), new Date(Math.min(s + WINDOW_MS, to.getTime())))))
     }
     return out
   },

@@ -57,7 +57,10 @@ export function ShipmentDetail() {
   const truck = L.truck(s.truckId)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
-  const canFinish = canAct && s.status === 'uploaded' && !s.waybillState && !!s.rsWaybillId
+  const onRs = canAct && s.status === 'uploaded' && !!s.rsWaybillId
+  const canClose = onRs && !s.waybillState
+  // RS.ge also cancels a completed waybill.
+  const canCancel = onRs && s.waybillState !== 'cancelled'
   const w = s.rsWaybill
   const good = w?.goods[0]
   const r = s.rsRemote
@@ -122,15 +125,15 @@ export function ShipmentDetail() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-        {canFinish && (
-          <>
-            <Button variant="secondary" size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setConfirm('close')}>
-              დასრულება
-            </Button>
-            <Button variant="secondary" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setConfirm('cancel')}>
-              გაუქმება
-            </Button>
-          </>
+        {canClose && (
+          <Button variant="secondary" size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setConfirm('close')}>
+            დასრულება
+          </Button>
+        )}
+        {canCancel && (
+          <Button variant="secondary" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setConfirm('cancel')}>
+            გაუქმება
+          </Button>
         )}
         {s.waybillNumber && (
           <Button
@@ -170,22 +173,6 @@ export function ShipmentDetail() {
                 </li>
               ))}
             </ol>
-          </Card>
-
-          {/* Timeline */}
-          <Card className="p-5 sm:p-6">
-            <h2 className="mb-4 text-sm font-semibold text-slate-900">ისტორია</h2>
-            <ul className="space-y-3">
-              {[...s.events].reverse().map((e, i) => (
-                <li key={i} className="flex gap-3 text-sm">
-                  <span className={cx('mt-1.5 size-2 shrink-0 rounded-full', e.level === 'success' ? 'bg-emerald-500' : e.level === 'error' ? 'bg-rose-500' : 'bg-slate-300')} />
-                  <div className="flex min-w-0 flex-1 flex-wrap justify-between gap-x-4">
-                    <span className={e.level === 'error' ? 'text-rose-700' : 'text-slate-700'}>{e.message}</span>
-                    <span className="text-xs whitespace-nowrap text-slate-400 tabular-nums">{formatDateTime(e.at)}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
           </Card>
         </div>
 
@@ -292,7 +279,7 @@ export function ShipmentDetail() {
         message={
           confirm === 'close'
             ? `ზედნადები №${s.waybillNumber} RS.ge-ზე მოინიშნება მიწოდებულად. ამის შემდეგ მისი შეცვლა აღარ იქნება შესაძლებელი.`
-            : `ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება. ეს მოქმედება შეუქცევადია.`
+            : `ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება${s.waybillState === 'closed' ? ', მიუხედავად იმისა, რომ დასრულებულია' : ''}. ეს მოქმედება შეუქცევადია.`
         }
       />
     </>

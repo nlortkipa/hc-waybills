@@ -1,4 +1,4 @@
-import { Building2, FileText, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
+import { Building2, Pencil, Plus, Search, Trash2, Truck, UserRound, Users, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
@@ -7,7 +7,6 @@ import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import type { Database, Destination } from '../types'
-import { RsSettingsCard } from './RsSettingsCard'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -158,9 +157,7 @@ export function ReferenceData() {
   const d = useDb()
   const toast = useToast()
   const user = useUser()
-  const [tabKey, setTabKey] = useState<RefCollection | 'rs'>('carriers')
-  /** The RS.ge tab is one settings form (cargo + waybill fields), not a list. */
-  const isCargo = tabKey === 'rs'
+  const [tabKey, setTabKey] = useState<RefCollection>('carriers')
   const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0]
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Rec | null>(null)
@@ -199,15 +196,13 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მძღოლები, მანქანები, მომხმარებლები და RS.ge (ტვირთი, მყიდველი, ზედნადები)."
+        subtitle="კარიერები, მძღოლები, მანქანები და მომხმარებლები."
         actions={
-          !isCargo && (
-            <span className="hidden sm:block">
-              <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
-                {tab.singular} დამატება
-              </Button>
-            </span>
-          )
+          <span className="hidden sm:block">
+            <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
+              {tab.singular} დამატება
+            </Button>
+          </span>
         }
       />
 
@@ -229,21 +224,9 @@ export function ReferenceData() {
             <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] text-slate-600 tabular-nums">{active(d[t.key] as { deletedAt?: string }[]).length}</span>
           </button>
         ))}
-        <button
-          onClick={() => setTabKey('rs')}
-          className={cx(
-            'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] transition-all duration-200 sm:h-7 sm:rounded-[7px]',
-            isCargo ? 'bg-brand-600 font-semibold text-white sm:bg-white sm:text-slate-900 sm:shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)] sm:dark:bg-slate-400' : 'bg-surface font-medium text-slate-600 sm:bg-transparent',
-          )}
-        >
-          <FileText className="size-4" />
-          RS.ge
-        </button>
       </div>
 
-      {tabKey === 'rs' && <RsSettingsCard />}
-
-      <div className={cx('mb-4 flex gap-2', isCargo && 'hidden')}>
+      <div className="mb-4 flex gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ძებნა…" className="pl-9" />
@@ -253,7 +236,7 @@ export function ReferenceData() {
         </span>
       </div>
 
-      <Card className={cx('overflow-hidden', isCargo && 'hidden')}>
+      <Card className="overflow-hidden">
         {rows.length === 0 ? (
           <EmptyState icon={<tab.icon className="size-6" />} title="ჩანაწერები ვერ მოიძებნა" />
         ) : (

@@ -2,7 +2,7 @@ import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, RefreshCw, Unp
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { cargo, rsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, ConfirmModal, Field, Input, Select, Toggle } from '../components/ui'
+import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select, Toggle } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
 import { formatDateTime } from '../lib/util'
@@ -113,7 +113,7 @@ function LookupLine({ lookup }: { lookup: Lookup }) {
 /* ------------------------------- Screen ------------------------------- */
 
 /** RS.ge: the service user (connected once) and the waybill defaults applied to every new shipment. Admin only. */
-export function RsSettingsCard() {
+export function RsSettings() {
   const d = useDb()
   const connected = isConnected(d.rs)
   const missing = [
@@ -124,24 +124,27 @@ export function RsSettingsCard() {
   ]
 
   return (
-    <div className="space-y-4">
-      {missing.length > 0 ? (
-        <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-          <div>
-            <p className="font-medium">ზედნადებები ვერ აიტვირთება, სანამ არ შეივსება:</p>
-            <p className="mt-1 text-amber-800">{missing.join(' · ')}</p>
+    <>
+      <PageHeader title="RS.ge" subtitle="სერვისის მომხმარებელი, ტვირთი, მყიდველი და ზედნადების პარამეტრები." />
+      <div className="space-y-4">
+        {missing.length > 0 ? (
+          <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            <div>
+              <p className="font-medium">ზედნადებები ვერ აიტვირთება, სანამ არ შეივსება:</p>
+              <p className="mt-1 text-amber-800">{missing.join(' · ')}</p>
+            </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex gap-3 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 ring-1 ring-emerald-200">
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
-          <p>ყველაფერი შევსებულია — ზედნადებები იტვირთება RS.ge-ზე.</p>
-        </div>
-      )}
-      <ConnectionCard />
-      <DefaultsForm connected={connected} />
-    </div>
+        ) : (
+          <div className="flex gap-3 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 ring-1 ring-emerald-200">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            <p>ყველაფერი შევსებულია — ზედნადებები იტვირთება RS.ge-ზე.</p>
+          </div>
+        )}
+        <ConnectionCard />
+        <DefaultsForm connected={connected} />
+      </div>
+    </>
   )
 }
 

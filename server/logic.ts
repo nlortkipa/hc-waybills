@@ -277,12 +277,6 @@ export async function rsNameFromTin(body: { tin?: string } | undefined, user: Us
  */
 const refTag = (shipmentId: string) => `HC:${shipmentId}`
 
-/** Adds the shipment's tag to a payload that doesn't have it yet (built before tags existed). */
-function withRef(p: RsWaybillPayload, shipmentId: string): RsWaybillPayload {
-  const ref = refTag(shipmentId)
-  return p.comment.includes(ref) ? p : { ...p, comment: [p.comment, ref].filter(Boolean).join('; ') }
-}
-
 /** Builds the waybill for a shipment from the admin's settings and the chosen route, driver and truck. */
 function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'carrierId' | 'destinationId' | 'driverId' | 'truckId' | 'cargo' | 'quantity'>): RsWaybillPayload {
   const rs = d.rs
@@ -405,28 +399,46 @@ export const shipments = {
     }
   },
 
-  /** Completes (close_waybill) or cancels (ref_waybill) an uploaded waybill on RS.ge. */
+  /**
+   * Completes (close_waybill) or cancels (ref_waybill) an uploaded waybill on RS.ge. RS.ge also
+   * cancels a completed waybill, so cancel is allowed after close. The waybill is read back after
+   * the call: the page shows the result at once, and a refusal because it was already done on the
+   * rs.ge portal counts as done.
+   */
   async finish(id: string, action: 'close' | 'cancel', user: User) {
     const s = get(id, user)
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
-    if (s.status !== 'uploaded' || s.waybillState) fail('ზედნადები არ არის აქტიური')
+    if (s.status !== 'uploaded') fail('ზედნადები ჯერ არ არის ატვირთული')
+    if (action === 'close' && s.waybillState) fail(s.waybillState === 'closed' ? 'ზედნადები უკვე დასრულებულია' : 'გაუქმებულ ზედნადებს ვერ დაასრულებ')
+    if (action === 'cancel' && s.waybillState === 'cancelled') fail('ზედნადები უკვე გაუქმებულია')
     if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია — დაასრულე ან გააუქმე RS.ge-ს პორტალიდან')
     if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    const target = action === 'close' ? 'closed' : 'cancelled'
+    let error: Error | undefined
+    let w: RsRemoteWaybill | null = null
     running.add(id)
     try {
-      if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id)
-      else await rsge.cancelWaybill(s.rsWaybillId!, id)
-    } catch (e) {
-      const msg = (e as Error).message
-      patch(id, () => ({}), { level: 'error', message: msg })
-      fail(msg, 502)
+      try {
+        if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id)
+        else await rsge.cancelWaybill(s.rsWaybillId!, id)
+      } catch (e) {
+        error = e as Error
+      }
+      w = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
     } finally {
       running.delete(id)
     }
-    patch(id, () => ({ waybillState: action === 'close' ? 'closed' : 'cancelled' }), {
-      level: 'success',
-      message: action === 'close' ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე` : `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`,
-    })
+    if (error && (!w || stateOf(w.status) !== target)) {
+      patch(id, () => ({}), { level: 'error', message: error.message })
+      if (w) applyRemote(id, w)
+      fail(error.message, 502)
+    }
+    if (!error)
+      patch(id, () => ({ waybillState: target }), {
+        level: 'success',
+        message: action === 'close' ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე` : `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`,
+      })
+    if (w) applyRemote(id, w)
   },
 
   /**
@@ -461,7 +473,7 @@ export const shipments = {
 const REFRESH_FRESH_MS = 15_000
 const reading = new Map<string, Promise<void>>()
 
-const RS_STATUS_TEXT: Record<number, string> = { 0: 'შენახული', 1: 'აქტიური', 2: 'დასრულებული', [-1]: 'წაშლილი', [-2]: 'გაუქმებული' }
+const RS_STATUS_TEXT: Record<number, string> = { 0: 'შენახული', 1: 'აქტიური', 2: 'დასრულებული', 8: 'გადამზიდავთან გადაგზავნილი', [-1]: 'წაშლილი', [-2]: 'გაუქმებული' }
 
 /** waybillState for an RS.ge status: completed → closed, deleted or cancelled → cancelled. */
 const stateOf = (status: number): Shipment['waybillState'] => (status === 2 ? 'closed' : status < 0 ? 'cancelled' : undefined)
@@ -534,10 +546,8 @@ async function runSync() {
     const cursor = start.syncedTo ? Date.parse(start.syncedTo) - SYNC_OVERLAP_MS : tracked.reduce((m, s) => Math.min(m, Date.parse(s.createdAt)), now)
     const from = new Date(Math.max(now - SYNC_MAX_BACK_MS, cursor))
     const to = new Date(now)
-    // get_waybills_v1 lists the waybills with one buyer; normally all shipments share one.
-    const buyers = [...new Set(tracked.map((s) => s.rsWaybill?.buyerTin).filter((t): t is string => !!t))]
     const ids = new Set<number>()
-    for (const b of buyers) for (const w of await rsge.changed(b, from, to)) if (byWaybill.has(w.id)) ids.add(w.id)
+    if (tracked.length) for (const w of await rsge.changed(from, to)) if (byWaybill.has(w.id)) ids.add(w.id)
     for (const wid of ids) {
       const sid = byWaybill.get(wid)!
       applyRemote(sid, await rsge.getWaybill(wid, sid, 'sync'))
@@ -577,43 +587,39 @@ async function runPipeline(id: string) {
     try {
       const notReady = rsNotReady(d)
       if (notReady) throw new Error(notReady)
-      // Shipments from before RS.ge settings existed get their waybill built now.
-      const payload = withRef(s.rsWaybill ?? buildWaybill(d, s), id)
       let waybillId = s.rsWaybillId
-      let number: string | undefined
+      let done: Activated | null = null
       if (!waybillId && s.rsSaveAttemptedAt) {
         // An earlier save_waybill may have reached RS.ge without its answer reaching us. Look first;
         // if that isn't possible, stop rather than risk a second waybill for the same trip.
-        const found = await rsge.findByRef(refTag(id), payload.buyerTin, new Date(s.rsSaveAttemptedAt), id).catch((e: Error) => {
+        const found = await rsge.findByRef(refTag(id), new Date(s.rsSaveAttemptedAt), id).catch((e: Error) => {
           throw new Error(`ვერ შემოწმდა, შეინახა თუ არა წინა მცდელობამ ზედნადები RS.ge-ზე, ამიტომ თავიდან არ გაიგზავნა (${e.message}). სცადე ცოტა ხანში.`)
         })
         // Deleted (-1) or cancelled (-2) ones don't count: a new waybill is right then.
         if (found && found.status >= 0) {
           waybillId = found.id
-          if (found.status >= 1 && found.number) number = found.number
-          patch(id, () => ({ rsWaybill: payload, rsWaybillId: found.id, rsSaveAttemptedAt: undefined }), {
+          if (found.status >= 1 && found.number) done = { number: found.number, status: found.status }
+          patch(id, () => ({ rsWaybillId: found.id, rsSaveAttemptedAt: undefined }), {
             level: 'info',
             message: `RS.ge-ზე ნაპოვნია წინა მცდელობით შენახული ზედნადები (ID ${found.id}) — ახალი არ შეიქმნა`,
           })
         }
       }
-      if (!waybillId) {
-        // Recorded before the call: from here on, a lost answer means "maybe saved".
-        patch(id, () => ({ rsWaybill: payload, rsSaveAttemptedAt: nowIso() }))
-        try {
-          waybillId = await rsge.saveWaybill(payload, id)
-        } catch (e) {
-          // RS.ge answered with a refusal: nothing was created, so the next try needs no lookup.
-          if (e instanceof IntegrationError && e.rejected) patch(id, () => ({ rsSaveAttemptedAt: undefined }))
-          throw e
-        }
-        patch(id, () => ({ rsWaybillId: waybillId, rsSaveAttemptedAt: undefined }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+      if (!waybillId) waybillId = await saveNew(id)
+      done ??= await activate(id, waybillId)
+      if (!done) {
+        // The saved draft was deleted on the rs.ge portal before it was activated.
+        patch(id, () => ({ rsWaybillId: undefined }), { level: 'info', message: `RS.ge-ზე შენახული ზედნადები (ID ${waybillId}) წაშლილია — იქმნება ახალი` })
+        waybillId = await saveNew(id)
+        done = await activate(id, waybillId)
+        if (!done) throw new Error(`RS.ge-ზე ზედნადები (ID ${waybillId}) წაიშალა გააქტიურებამდე`)
       }
-      number ??= await rsge.sendWaybill(waybillId, id)
+      const { number, status } = done
+      const state = stateOf(status)
       patch(
         id,
-        () => ({ status: 'uploaded', waybillNumber: number, rs: { status: 'ok', at: nowIso() } }),
-        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}` },
+        () => ({ status: 'uploaded', waybillNumber: number, waybillState: state, rs: { status: 'ok', at: nowIso() } }),
+        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}${state ? ` (RS.ge-ზე უკვე ${RS_STATUS_TEXT[status]})` : ''}` },
       )
     } catch (e) {
       const msg = (e as Error).message
@@ -625,6 +631,44 @@ async function runPipeline(id: string) {
   // 2. SMS to driver
   s = get(id)
   if (s.sms.status !== 'ok') await sendSms(id)
+}
+
+/**
+ * Saves a new waybill for the shipment and returns its ID. Built from the current settings and
+ * reference data: nothing exists on RS.ge yet, so whatever the admin fixed after a refusal applies.
+ */
+async function saveNew(id: string): Promise<number> {
+  const payload = buildWaybill(db.get(), get(id))
+  // Recorded before the call: from here on, a lost answer means "maybe saved".
+  patch(id, () => ({ rsWaybill: payload, rsSaveAttemptedAt: nowIso() }))
+  let waybillId: number
+  try {
+    waybillId = await rsge.saveWaybill(payload, id)
+  } catch (e) {
+    // RS.ge answered with a refusal: nothing was created, so the next try needs no lookup.
+    if (e instanceof IntegrationError && e.rejected) patch(id, () => ({ rsSaveAttemptedAt: undefined }))
+    throw e
+  }
+  patch(id, () => ({ rsWaybillId: waybillId, rsSaveAttemptedAt: undefined }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+  return waybillId
+}
+
+type Activated = { number: string; status: number }
+
+/**
+ * Activates a saved waybill. When that fails, RS.ge is asked how the waybill stands: if the answer
+ * to an earlier activation was lost, it is already active and send_waybill only says -1, which
+ * would otherwise fail every retry. null: the draft was deleted, a new waybill is needed.
+ */
+async function activate(id: string, waybillId: number): Promise<Activated | null> {
+  try {
+    return { number: await rsge.sendWaybill(waybillId, id), status: 1 }
+  } catch (e) {
+    const w = await rsge.getWaybill(waybillId, id).catch(() => null)
+    if (w && w.status !== 0 && w.number) return { number: w.number, status: w.status }
+    if (w?.status === -1) return null
+    throw e
+  }
 }
 
 async function sendSms(id: string) {
