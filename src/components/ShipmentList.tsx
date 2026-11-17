@@ -1,5 +1,6 @@
 import { ChevronRight, MapPin, Truck as TruckIcon, User as UserIcon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { shipmentQuantity } from '../lib/rs'
 import { formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import type { Shipment } from '../types'
@@ -42,7 +43,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                     <p className="text-slate-800">{x.driver}</p>
                     <p className="font-mono text-xs text-slate-400">{x.plate}</p>
                   </td>
-                  <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{formatTonnes(s.quantity)}</td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{formatTonnes(shipmentQuantity(s))}</td>
                   <td className="px-3 py-3">
                     <StatusBadge status={s.status} />
                   </td>
@@ -87,7 +88,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                 </div>
                 <div className="mt-2.5 flex gap-4 text-xs">
                   <span className="text-slate-500">
-                    დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{formatTonnes(s.quantity)}</b>
+                    დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{formatTonnes(shipmentQuantity(s))}</b>
                   </span>
                 </div>
               </button>

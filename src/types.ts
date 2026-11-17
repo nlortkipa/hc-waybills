@@ -95,8 +95,13 @@ export interface Shipment {
   rsSaveAttemptedAt?: string
   /** What was sent to RS.ge, fixed when the shipment is created so retries send the same waybill. */
   rsWaybill?: RsWaybillPayload
-  /** After upload: the waybill was completed (close_waybill) or cancelled (ref_waybill) on RS.ge. */
+  /** After upload: the waybill was completed or cancelled on RS.ge (from this app or, via rsRemote, anywhere else). */
   waybillState?: 'closed' | 'cancelled'
+  /**
+   * The waybill as RS.ge last reported it (background sync or opening the shipment). Where it differs
+   * from what was sent (someone corrected the waybill on the rs.ge portal), RS.ge is what counts.
+   */
+  rsRemote?: RsRemoteWaybill
   rs: { status: StepStatus; error?: string; at?: string }
   sms: { status: StepStatus; error?: string; at?: string; to?: string; text?: string }
   events: ShipmentEvent[]
@@ -115,6 +120,11 @@ export interface IntegrationLog {
   ok: boolean
   durationMs: number
   shipmentId?: string
+  /**
+   * Set on RS.ge read-backs: 'sync' for the background sync, 'page' for opening a shipment.
+   * They are kept in their own, smaller part of the log so they never push out the uploads.
+   */
+  readBack?: 'sync' | 'page'
 }
 
 /** Cargo and declared quantity applied to every new shipment. Set by an admin. */
@@ -180,6 +190,11 @@ export interface RsSettings {
   /** Reference lists cached from RS.ge by "check connection". */
   units: RsRefItem[]
   transTypes: RsRefItem[]
+
+  /** Background sync with RS.ge: changes up to this moment have been read. Cleared with the service user. */
+  syncedTo?: string
+  /** Why the last background sync failed; cleared by the next successful one. */
+  syncError?: string
 }
 
 /** Everything one waybill needs, in RS.ge terms. Built when a shipment is created. */
@@ -212,6 +227,34 @@ export interface RsWaybillPayload {
     barCode: string
     vatType: 0 | 1 | 2
   }[]
+}
+
+/** A waybill read back from RS.ge (get_waybill). Dates are ISO (UTC). */
+export interface RsRemoteWaybill {
+  /** 0 saved, 1 active, 2 completed, -1 deleted, -2 cancelled. */
+  status: number
+  number: string
+  buyerTin: string
+  buyerName: string
+  startAddress: string
+  endAddress: string
+  driverTin: string
+  driverName: string
+  carNumber: string
+  transportCost: number
+  fullAmount: number
+  /** Sum of the goods quantities (TOTAL_QUANTITY). */
+  quantity: number
+  goods: { name: string; unitTxt: string; quantity: number; price: number; amount: number; barCode: string }[]
+  comment: string
+  activatedAt?: string
+  beginAt?: string
+  deliveredAt?: string
+  closedAt?: string
+  /** Set when the waybill was corrected after activation. */
+  correctedAt?: string
+  /** When RS.ge was asked. */
+  checkedAt: string
 }
 
 export interface Database {

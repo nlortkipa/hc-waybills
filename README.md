@@ -106,9 +106,15 @@ Setup (admin, **ცნობარები → RS.ge**):
 2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
 3. Fill in the buyer (tax ID, name; **მოძებნა** looks the name up on RS.ge), unit, price, VAT type and transport fields. They apply to every shipment.
 
-Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybill` (activates it and returns the waybill number). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. Every call appears in **API მოთხოვნები** with the password masked.
+Per shipment the server calls `save_waybill` (type 2, delivery with transport; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybill` (activates it and returns the waybill number). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. Each of these calls appears in **API მოთხოვნები** with the password masked.
 
 Duplicate protection: every waybill's `COMMENT` ends with the shipment's tag (`HC:<shipment id>`). The time of each `save_waybill` call is recorded before it is sent. If its answer never arrives (timeout, dropped connection, server restart), the next attempt first searches RS.ge (`get_waybills_v1`, by last-update time) for a waybill with that tag and continues with it instead of saving a second one. If that search fails, the retry stops with an error instead of risking a duplicate.
+
+Staying in step with RS.ge: a waybill can also be completed, cancelled or corrected on the rs.ge portal, so the server reads it back. RS.ge's version wins.
+- **Opening a shipment** calls `get_waybill` (at most once every 15 s per shipment). The page's RS.ge card shows the waybill as RS.ge has it now and marks values that differ from what was sent.
+- **Background sync** (every 5 min; `RS_SYNC_MINUTES`, `0` turns it off) asks `get_waybills_v1` which waybills changed since the last sync (in 3-day windows, up to 30 days back), then re-reads the ones that belong to uploaded shipments. A failed sync keeps its place and retries the same window next time. Settings show when it last ran, and **განახლება** runs it now.
+- A change found this way updates the shipment (status → დასრულებული / გაუქმებული; car, driver, route and quantity in lists and reports) and adds an event saying what changed. The snapshot is kept on the shipment (`rsRemote`), so pages and reports still work while RS.ge is down.
+- These read-backs appear in **API მოთხოვნები** with a badge (**სინქრონიზაცია** or **რეისის გახსნა**). The log keeps the last 300 other calls and, separately, the last 100 read-backs, so the frequent syncs never push the uploads out.
 
 Mapping notes:
 - RS.ge has no trailer field: the trailer number is written into `COMMENT`.

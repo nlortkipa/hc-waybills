@@ -11,6 +11,8 @@ import type { ServiceName } from '../types'
 
 const serviceTone: Record<ServiceName, 'blue' | 'violet'> = { 'RS.ge': 'blue', SMS: 'violet' }
 const serviceLabel: Record<ServiceName, string> = { 'RS.ge': 'RS.ge', SMS: 'SMS' }
+/** Who asked for an RS.ge read-back: the background sync, or someone opening a shipment. */
+const readBackLabel = { sync: 'სინქრონიზაცია', page: 'რეისის გახსნა' } as const
 
 export function ApiLog() {
   const d = useDb()
@@ -55,6 +57,7 @@ export function ApiLog() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <Badge tone={serviceTone[l.service]}>{serviceLabel[l.service]}</Badge>
+                        {l.readBack && <Badge tone="gray">{readBackLabel[l.readBack]}</Badge>}
                         {!l.ok && <Badge tone="red">შეცდომა</Badge>}
                       </div>
                       <p className="mt-1 truncate font-mono text-xs text-slate-600">{l.endpoint}</p>

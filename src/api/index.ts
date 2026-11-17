@@ -104,6 +104,10 @@ export const rsSettings = {
   disconnect() {
     return call('DELETE', '/api/rs/connection')
   },
+  /** Reads the changes made on RS.ge now instead of waiting for the background sync. */
+  syncNow() {
+    return call('POST', '/api/rs/sync')
+  },
   /** Taxpayer name for a tax ID / personal number, from RS.ge (stored service user). */
   nameFromTin(tin: string) {
     return api<{ name: string }>('POST', '/api/rs/name', { tin })
@@ -143,6 +147,11 @@ export const shipments = {
   /** Completes (goods delivered) or cancels the shipment's waybill on RS.ge. */
   async finish(id: string, action: 'close' | 'cancel') {
     await call('POST', `/api/shipments/${encodeURIComponent(id)}/${action}`)
+  },
+
+  /** Re-reads the shipment's waybill from RS.ge (status, corrections made on the rs.ge portal). */
+  async refreshFromRs(id: string) {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/rs-refresh`)
   },
 
   isRunning: (id: string) => {

@@ -1,11 +1,12 @@
-import { ArrowLeft, Ban, CheckCheck, Copy, FileText, MessageSquare, RotateCw } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { ArrowLeft, Ban, CheckCheck, Copy, FileText, MessageSquare, RefreshCw, RotateCw } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { shipments } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, StatusBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { cx, formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
+import { plateKey, RS_STATUS } from '../lib/rs'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { StepStatus } from '../types'
@@ -19,6 +20,33 @@ export function ShipmentDetail() {
   const s = d.shipments.find((x) => x.id === id)
   const [confirm, setConfirm] = useState<'close' | 'cancel' | null>(null)
   const [busy, setBusy] = useState(false)
+  const [rsReading, setRsReading] = useState(false)
+  const [rsError, setRsError] = useState('')
+
+  // Opening an uploaded shipment reads its waybill from RS.ge, so changes made on the rs.ge portal show here.
+  const readable = !!s && s.status === 'uploaded' && !!s.rsWaybillId
+  useEffect(() => {
+    if (!readable || !id) return
+    let current = true
+    shipments.refreshFromRs(id).then(
+      () => current && setRsError(''),
+      (e: Error) => current && setRsError(e.message),
+    )
+    return () => {
+      current = false
+    }
+  }, [readable, id])
+  const readRs = async () => {
+    setRsReading(true)
+    try {
+      await shipments.refreshFromRs(s!.id)
+      setRsError('')
+    } catch (e) {
+      setRsError((e as Error).message)
+    } finally {
+      setRsReading(false)
+    }
+  }
 
   if (!s || (user.role === 'operator' && s.carrierId !== user.carrierId)) {
     return <EmptyState icon={<FileText className="size-6" />} title="რეისი ვერ მოიძებნა" action={<Link to="/shipments" className="text-sm font-medium text-brand-600">რეისებზე დაბრუნება</Link>} />
@@ -32,6 +60,9 @@ export function ShipmentDetail() {
   const canFinish = canAct && s.status === 'uploaded' && !s.waybillState && !!s.rsWaybillId
   const w = s.rsWaybill
   const good = w?.goods[0]
+  const r = s.rsRemote
+  const rGood = r?.goods[0]
+  const rStatus = r && (RS_STATUS[r.status] ?? { label: String(r.status), tone: 'gray' as const })
 
   const finish = async () => {
     if (!confirm) return
@@ -175,19 +206,66 @@ export function ShipmentDetail() {
             </dl>
           </Card>
 
-          {w && (
+          {(w || r) && (
             <Card className="p-5">
-              <h2 className="mb-3 text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
-              <dl className="divide-y divide-separator text-sm">
-                <Info k="მყიდველი" v={w.buyerName} />
-                <Info k="მყიდველის ს/ნ" v={w.buyerTin} mono />
-                {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
-                <Info k="ერთეული" v={good && (good.unitTxt || String(good.unitId))} />
-                <Info k="ფასი" v={good && `${good.price.toFixed(2)} ₾`} />
-                <Info k="თანხა" v={good && `${good.amount.toFixed(2)} ₾`} />
-                {w.comment && <Info k="კომენტარი" v={w.comment} />}
-                {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
-              </dl>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
+                <div className="flex items-center gap-1.5">
+                  {rStatus && <Badge tone={rStatus.tone}>{rStatus.label}</Badge>}
+                  {readable && (
+                    <button
+                      type="button"
+                      onClick={() => void readRs()}
+                      disabled={rsReading}
+                      title="RS.ge-დან განახლება"
+                      aria-label="RS.ge-დან განახლება"
+                      className="grid size-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
+                    >
+                      <RefreshCw className={cx('size-3.5', rsReading && 'animate-spin')} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {r ? (
+                <dl className="divide-y divide-separator text-sm">
+                  <Info k="მყიდველი" v={r.buyerName} />
+                  <Info k="მყიდველის ს/ნ" v={r.buyerTin} mono />
+                  <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
+                  <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
+                  <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
+                  <Info k="რაოდენობა" v={`${r.quantity}${rGood?.unitTxt ? ` ${rGood.unitTxt}` : ''}`} changed={r.quantity !== s.quantity} />
+                  {rGood && <Info k="ფასი" v={`${rGood.price.toFixed(2)} ₾`} />}
+                  <Info k="თანხა" v={`${r.fullAmount.toFixed(2)} ₾`} changed={!!w && Math.abs(r.fullAmount - w.goods.reduce((a, g) => a + g.amount, 0)) >= 0.005} />
+                  {r.activatedAt && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
+                  {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
+                  {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
+                  {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
+                  {r.comment && <Info k="კომენტარი" v={r.comment} />}
+                  {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+                </dl>
+              ) : (
+                w && (
+                  <dl className="divide-y divide-separator text-sm">
+                    <Info k="მყიდველი" v={w.buyerName} />
+                    <Info k="მყიდველის ს/ნ" v={w.buyerTin} mono />
+                    {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
+                    <Info k="ერთეული" v={good && (good.unitTxt || String(good.unitId))} />
+                    <Info k="ფასი" v={good && `${good.price.toFixed(2)} ₾`} />
+                    <Info k="თანხა" v={good && `${good.amount.toFixed(2)} ₾`} />
+                    {w.comment && <Info k="კომენტარი" v={w.comment} />}
+                    {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+                  </dl>
+                )
+              )}
+              {readable && (
+                <p className={cx('mt-3 text-xs', rsError ? 'text-amber-700' : 'text-slate-400')}>
+                  {rsError
+                    ? `RS.ge-დან ვერ განახლდა: ${rsError}${r ? ` · ნაჩვენებია ${formatDateTime(r.checkedAt)}-ის მდგომარეობა` : ''}`
+                    : r
+                      ? `RS.ge-დან წაკითხულია ${formatDateTime(r.checkedAt)}`
+                      : 'RS.ge-დან იკითხება…'}
+                </p>
+              )}
             </Card>
           )}
 
@@ -221,11 +299,15 @@ export function ShipmentDetail() {
   )
 }
 
-function Info({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
+/** `changed`: the value differs from what this app sent (the waybill was corrected on RS.ge). */
+function Info({ k, v, mono, changed }: { k: string; v?: string; mono?: boolean; changed?: boolean }) {
   return (
     <div className="flex justify-between gap-4 py-2.5">
       <dt className="shrink-0 text-slate-500">{k}</dt>
-      <dd className={cx('min-w-0 text-right text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</dd>
+      <dd className="min-w-0 text-right">
+        <span className={cx('text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</span>
+        {changed && <span className="block text-xs text-amber-700">შეცვლილია RS.ge-ზე</span>}
+      </dd>
     </div>
   )
 }

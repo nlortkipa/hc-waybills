@@ -4,13 +4,16 @@
  * Protocol: docs/rs-ge/waybill_protocol.pdf (v4.0.4). SOAP 1.1 over HTTPS, no dependencies.
  * Flow for one shipment: save_waybill (returns the waybill ID) → send_waybill (activates it,
  * returns the waybill number). Later: close_waybill (delivered) or ref_waybill (cancel).
+ * Reading back: get_waybill (one waybill as RS.ge has it now) and get_waybills_v1 (what changed
+ * in a time window), used to keep shipments in step with changes made on the rs.ge portal.
  *
  * RS.ge has no separate sandbox host: testing is done on the normal endpoint with a test
  * service user. The service user (su / sp) is entered by the admin and stored on the server,
- * the password encrypted (server/secret.ts). Every call goes to the integration log, with the
- * password masked.
+ * the password encrypted (server/secret.ts). Every call that changes something goes to the
+ * Every call goes to the integration log, with the password masked. Read-backs are tagged
+ * (readBack) so the log keeps them apart from the uploads.
  */
-import type { RsRefItem, RsWaybillPayload } from '../src/types.ts'
+import type { IntegrationLog, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
 import { IntegrationError, log } from './integrations.ts'
 import { store as db } from './store.ts'
 
@@ -71,6 +74,15 @@ export function rsDate(d = new Date()): string {
   return new Date(d.getTime() + 4 * 3600_000).toISOString().slice(0, 19)
 }
 
+/** The reverse of rsDate: an RS.ge dateTime as ISO (UTC); undefined when empty. */
+function fromRsDate(v: string): string | undefined {
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?$/.test(v)) return undefined
+  const t = Date.parse(`${v}+04:00`)
+  return Number.isFinite(t) ? new Date(t).toISOString() : undefined
+}
+
+const numOf = (v: string) => (v === '' || !Number.isFinite(Number(v)) ? 0 : Number(v))
+
 /* --------------------------------- SOAP --------------------------------- */
 
 type Param = [name: string, value: string | number | RawXml]
@@ -78,9 +90,9 @@ type Param = [name: string, value: string | number | RawXml]
 /**
  * Calls one operation and returns the inner XML of its <opResponse>. Logs the exchange;
  * `accepted` decides whether a well-formed answer counts as success in the log (RS.ge reports
- * most errors as negative codes inside an HTTP 200).
+ * most errors as negative codes inside an HTTP 200). `readBack` tags read-backs in the log.
  */
-async function soap(op: string, params: Param[], shipmentId?: string, accepted: (inner: string) => boolean = () => true): Promise<string> {
+async function soap(op: string, params: Param[], shipmentId?: string, accepted: (inner: string) => boolean = () => true, readBack?: IntegrationLog['readBack']): Promise<string> {
   const body = params.map(([k, v]) => (v instanceof RawXml ? `<${k}>${v.xml}</${k}>` : el(k, v))).join('')
   const envelope =
     `<?xml version="1.0" encoding="utf-8"?>` +
@@ -104,14 +116,14 @@ async function soap(op: string, params: Param[], shipmentId?: string, accepted: 
   } catch (e) {
     const timeout = (e as Error).name === 'TimeoutError'
     const message = timeout ? 'RS.ge-მ დროულად არ უპასუხა (timeout)' : `RS.ge მიუწვდომელია: ${(e as Error).message}`
-    log({ service: 'RS.ge', direction: 'out', endpoint: LOG_ENDPOINT(op), request: logged, response: { error: message }, ok: false, durationMs: Date.now() - started, shipmentId })
+    log({ service: 'RS.ge', direction: 'out', endpoint: LOG_ENDPOINT(op), request: logged, response: { error: message }, ok: false, durationMs: Date.now() - started, shipmentId, readBack })
     throw rsError(message)
   }
   const durationMs = Date.now() - started
   const fault = tag(raw, 'faultstring')
   const m = new RegExp(`<${op}Response[^>]*?(?:/>|>([\\s\\S]*)</${op}Response>)`).exec(raw)
   const ok = status === 200 && !fault && !!m && accepted(m[1] ?? '')
-  log({ service: 'RS.ge', direction: 'out', endpoint: LOG_ENDPOINT(op), request: logged, response: { http: status, body: raw.length > 6000 ? raw.slice(0, 6000) + '…' : raw }, ok, durationMs, shipmentId })
+  log({ service: 'RS.ge', direction: 'out', endpoint: LOG_ENDPOINT(op), request: logged, response: { http: status, body: raw.length > 6000 ? raw.slice(0, 6000) + '…' : raw }, ok, durationMs, shipmentId, readBack })
   if (fault) throw rsError(`RS.ge: ${fault}`)
   if (status !== 200 || !m) throw rsError(`RS.ge-მ დააბრუნა მოულოდნელი პასუხი (HTTP ${status})`)
   return m![1] ?? ''
@@ -188,6 +200,45 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
     (p.transporterTin ? el('TRANSPORTER_TIN', p.transporterTin) : '') +
     `</WAYBILL>`
   )
+}
+
+/** A <WAYBILL> from get_waybill. The nested lists are cut out first: their rows have their own ID and STATUS. */
+function parseWaybill(xml: string): RsRemoteWaybill {
+  const head = xml.replace(/<(GOODS_LIST|SUB_WAYBILLS|WOOD_DOCS_LIST)>[\s\S]*?<\/\1>/g, '')
+  const goods = blocks(xml, 'GOODS')
+    // STATUS -1 marks a goods row deleted by a correction.
+    .filter((g) => tag(g, 'STATUS') !== '-1')
+    .map((g) => ({
+      name: tag(g, 'W_NAME'),
+      unitTxt: tag(g, 'UNIT_TXT'),
+      quantity: numOf(tag(g, 'QUANTITY')),
+      price: numOf(tag(g, 'PRICE')),
+      amount: numOf(tag(g, 'AMOUNT')),
+      barCode: tag(g, 'BAR_CODE'),
+    }))
+  const total = tag(head, 'TOTAL_QUANTITY')
+  return {
+    status: numOf(tag(head, 'STATUS')),
+    number: tag(head, 'WAYBILL_NUMBER'),
+    buyerTin: tag(head, 'BUYER_TIN'),
+    buyerName: tag(head, 'BUYER_NAME'),
+    startAddress: tag(head, 'START_ADDRESS'),
+    endAddress: tag(head, 'END_ADDRESS'),
+    driverTin: tag(head, 'DRIVER_TIN'),
+    driverName: tag(head, 'DRIVER_NAME'),
+    carNumber: tag(head, 'CAR_NUMBER'),
+    transportCost: numOf(tag(head, 'TRANSPORT_COAST')),
+    fullAmount: numOf(tag(head, 'FULL_AMOUNT')),
+    quantity: total !== '' ? numOf(total) : Math.round(goods.reduce((a, g) => a + g.quantity, 0) * 1000) / 1000,
+    goods,
+    comment: tag(head, 'COMMENT'),
+    activatedAt: fromRsDate(tag(head, 'ACTIVATE_DATE')),
+    beginAt: fromRsDate(tag(head, 'BEGIN_DATE')),
+    deliveredAt: fromRsDate(tag(head, 'DELIVERY_DATE')),
+    closedAt: fromRsDate(tag(head, 'CLOSE_DATE')),
+    correctedAt: fromRsDate(tag(head, 'CORRECTION_DATE')),
+    checkedAt: new Date().toISOString(),
+  }
 }
 
 /* ------------------------------ Operations ------------------------------ */
@@ -279,6 +330,28 @@ const live = {
     return null
   },
 
+  /** One waybill as RS.ge has it now. */
+  async getWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, via: 'sync' | 'page'): Promise<RsRemoteWaybill> {
+    const xml = await soap('get_waybill', [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => /<WAYBILL[\s>]/.test(x), via)
+    const [b] = blocks(xml, 'WAYBILL')
+    // Errors come back as <RESULT><STATUS>-101</STATUS>…</RESULT>.
+    if (!b) throw rsError(await describe(numOf(tag(xml, 'STATUS')) || -1, c))
+    const w = parseWaybill(b)
+    if (numOf(tag(b.replace(/<(GOODS_LIST|SUB_WAYBILLS|WOOD_DOCS_LIST)>[\s\S]*?<\/\1>/g, ''), 'ID')) !== waybillId) throw rsError('RS.ge-მ სხვა ზედნადები დააბრუნა')
+    return w
+  },
+
+  /**
+   * IDs of waybills between this taxpayer and `buyerTin` (either direction) last changed between
+   * `from` and `to` (get_waybills_v1; at most 3 days). Used by the background sync.
+   */
+  async changed(c: RsCreds, buyerTin: string, from: Date, to: Date): Promise<{ id: number; status: number; sellerTin: string }[]> {
+    const xml = await soap('get_waybills_v1', [...creds(c), ['buyer_tin', buyerTin], ['last_update_date_s', rsDate(from)], ['last_update_date_e', rsDate(to)]], undefined, (x) => !/^-\d+$/.test(tag(x, 'get_waybills_v1Result')), 'sync')
+    const bare = tag(xml, 'get_waybills_v1Result')
+    if (/^-\d+$/.test(bare)) throw rsError(await describe(Number(bare), c))
+    return blocks(xml, 'WAYBILL').map((b) => ({ id: Number(tag(b, 'ID')), status: Number(tag(b, 'STATUS')), sellerTin: tag(b, 'SELLER_TIN') }))
+  },
+
   /** close_waybill / ref_waybill return 1 on success, negative codes otherwise. */
   async finish(op: 'close_waybill' | 'ref_waybill', c: RsCreds, waybillId: number, shipmentId: string) {
     const r = Number(tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
@@ -311,6 +384,9 @@ async function seller(C: RsCreds) {
   return { unId: rs.sellerUnId!, userId: rs.sellerUserId }
 }
 
+/** get_waybills_v1 accepts at most 3 days; a minute less to stay clear of the edge. */
+const WINDOW_MS = 3 * 86400_000 - 60_000
+
 export const rsge = {
   check: (c: RsCreds) => live.check(c),
   nameFromTin: (c: RsCreds, tin: string) => live.nameFromTin(c, tin),
@@ -327,8 +403,7 @@ export const rsge = {
    */
   findByRef(ref: string, buyerTin: string, since: Date, shipmentId: string) {
     const from = new Date(since.getTime() - 10 * 60_000)
-    // get_waybills_v1 accepts at most 3 days.
-    const to = new Date(Math.min(Date.now() + 10 * 60_000, from.getTime() + 3 * 86400_000 - 60_000))
+    const to = new Date(Math.min(Date.now() + 10 * 60_000, from.getTime() + WINDOW_MS))
     return live.findByRef(activeCreds(), ref, buyerTin, from, to, shipmentId)
   },
 
@@ -340,6 +415,19 @@ export const rsge = {
 
   /** Cancels an activated waybill. */
   cancelWaybill: (waybillId: number, shipmentId: string) => live.finish('ref_waybill', activeCreds(), waybillId, shipmentId),
+
+  /** The waybill as RS.ge has it now. `via` says what asked, for the log. */
+  getWaybill: (waybillId: number, shipmentId: string, via: 'sync' | 'page') => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+
+  /** IDs of waybills with `buyerTin` changed between `from` and `to`, read in 3-day windows (the RS.ge limit). */
+  async changed(buyerTin: string, from: Date, to: Date) {
+    const c = activeCreds()
+    const out: { id: number; status: number; sellerTin: string }[] = []
+    for (let s = from.getTime(); s < to.getTime(); s += WINDOW_MS) {
+      out.push(...(await live.changed(c, buyerTin, new Date(s), new Date(Math.min(s + WINDOW_MS, to.getTime())))))
+    }
+    return out
+  },
 }
 
 /** Forget cached error texts (after changing the service user). */

@@ -4,6 +4,7 @@ import { visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
 import { cx, downloadCsv, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
 import { useLookup } from '../lib/lookup'
+import { shipmentQuantity } from '../lib/rs'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 
@@ -27,7 +28,7 @@ export function Reports() {
     [d, user, from, to, carrier],
   )
   const uploaded = useMemo(() => rows.filter((s) => s.status === 'uploaded' && s.waybillState !== 'cancelled'), [rows])
-  const declaredT = uploaded.reduce((a, s) => a + s.quantity, 0)
+  const declaredT = uploaded.reduce((a, s) => a + shipmentQuantity(s), 0)
   const smsSent = rows.filter((s) => s.sms.status === 'ok').length
   const failed = rows.filter((s) => s.status === 'rs_failed' || s.sms.status === 'failed').length
 
@@ -43,7 +44,7 @@ export function Reports() {
     for (const s of uploaded) {
       const b = out.find((x) => x.key === tbilisiDay(s.createdAt))
       if (b) {
-        b.t += s.quantity
+        b.t += shipmentQuantity(s)
         b.n++
       }
     }
@@ -58,7 +59,7 @@ export function Reports() {
       e.n++
       if (s.status === 'uploaded' && s.waybillState !== 'cancelled') {
         e.uploaded++
-        e.t += s.quantity
+        e.t += shipmentQuantity(s)
       }
       if (s.status === 'rs_failed') e.failed++
       m.set(s.carrierId, e)
@@ -71,7 +72,7 @@ export function Reports() {
       ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
       ...rows.map((s) => {
         const x = L.describe(s)
-        return [s.waybillNumber ?? '', tbilisiStamp(s.createdAt), x.carrier, x.route, x.driver, x.plate, x.item, s.quantity, s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
+        return [s.waybillNumber ?? '', tbilisiStamp(s.createdAt), x.carrier, x.route, x.driver, x.plate, x.item, shipmentQuantity(s), s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
       }),
     ])
   }

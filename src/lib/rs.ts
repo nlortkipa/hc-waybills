@@ -1,4 +1,19 @@
-import type { RsSettings } from '../types.ts'
+import type { RsSettings, Shipment } from '../types.ts'
+
+/** Plate number compared the way RS.ge stores it: AA-123-BB = AA123BB. */
+export const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+
+/** The shipment's quantity as RS.ge has it (a correction on the rs.ge portal wins), else as declared. */
+export const shipmentQuantity = (s: Shipment) => s.rsRemote?.quantity ?? s.quantity
+
+/** Label and badge tone of an RS.ge waybill status. */
+export const RS_STATUS: Record<number, { label: string; tone: 'blue' | 'green' | 'gray' | 'red' }> = {
+  0: { label: 'შენახული', tone: 'blue' },
+  1: { label: 'აქტიური', tone: 'green' },
+  2: { label: 'დასრულებული', tone: 'gray' },
+  [-1]: { label: 'წაშლილი', tone: 'red' },
+  [-2]: { label: 'გაუქმებული', tone: 'red' },
+}
 
 /** UNIT_ID meaning "other": the unit name is then sent in UNIT_TXT. */
 export const RS_UNIT_OTHER = 99

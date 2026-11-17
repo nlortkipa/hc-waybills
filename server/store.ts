@@ -25,7 +25,16 @@ const OLD_JSON = ENV_FILE?.endsWith('.json') ? ENV_FILE : join(dirname(FILE), 'd
 /** Data entered before the server existed, shared between browsers by the old dev setup. */
 const LEGACY = join(import.meta.dirname, '..', '.mockdb', 'db.json')
 
+/** Log entries kept: the last LOG_LIMIT calls that do something, plus the last READ_LOG_LIMIT RS.ge read-backs. */
 const LOG_LIMIT = 300
+const READ_LOG_LIMIT = 100
+
+/** The newest entries of each kind, in the order given (newest first). */
+function trimLogs(logs: IntegrationLog[]): IntegrationLog[] {
+  let calls = 0
+  let reads = 0
+  return logs.filter((l) => (l.readBack ? ++reads <= READ_LOG_LIMIT : ++calls <= LOG_LIMIT))
+}
 
 /** A session ends after this long without use, or this long after login, whichever comes first. */
 const SESSION_IDLE_MS = 30 * 86400_000
@@ -113,7 +122,7 @@ function readAll(): Database | null {
     trucks: parseRows(sql.prepare('SELECT data FROM trucks ORDER BY rowid').all()),
     users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),
     shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
-    logs: parseRows(sql.prepare(`SELECT data FROM logs ORDER BY rowid DESC LIMIT ${LOG_LIMIT}`).all()),
+    logs: trimLogs(parseRows(sql.prepare('SELECT data FROM logs ORDER BY rowid DESC').all())),
     cargo: getMeta('cargo')!,
     rs: openRs(getMeta('rs')!),
   }
@@ -143,7 +152,7 @@ function replaceAll(db: Database) {
     for (const t of [...RECORD_COLS, 'shipments', 'logs']) sql.exec(`DELETE FROM ${t}`)
     for (const col of RECORD_COLS) for (const r of db[col]) writeRow(col, r)
     for (const s of db.shipments) writeRow('shipments', s)
-    for (const l of [...db.logs].slice(0, LOG_LIMIT).reverse()) writeLog(l)
+    for (const l of trimLogs(db.logs).reverse()) writeLog(l)
     setMeta('version', db.version)
     sql.prepare("DELETE FROM meta WHERE key = 'settings'").run()
     setMeta('cargo', db.cargo)
@@ -245,9 +254,12 @@ export const store = {
   addLog(entry: IntegrationLog) {
     tx(() => {
       writeLog(entry)
-      sql.prepare(`DELETE FROM logs WHERE rowid NOT IN (SELECT rowid FROM logs ORDER BY rowid DESC LIMIT ${LOG_LIMIT})`).run()
+      // Each kind is trimmed on its own, so frequent read-backs never push out the uploads.
+      const isRead = "json_extract(data, '$.readBack') IS NOT NULL"
+      sql.prepare(`DELETE FROM logs WHERE ${isRead} AND rowid NOT IN (SELECT rowid FROM logs WHERE ${isRead} ORDER BY rowid DESC LIMIT ${READ_LOG_LIMIT})`).run()
+      sql.prepare(`DELETE FROM logs WHERE NOT ${isRead} AND rowid NOT IN (SELECT rowid FROM logs WHERE NOT ${isRead} ORDER BY rowid DESC LIMIT ${LOG_LIMIT})`).run()
     })
-    mem = { ...mem, logs: [entry, ...mem.logs].slice(0, LOG_LIMIT) }
+    mem = { ...mem, logs: trimLogs([entry, ...mem.logs]) }
   },
 
   clearLogs() {

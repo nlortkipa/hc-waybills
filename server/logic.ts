@@ -5,7 +5,7 @@
 import { resolveRoute } from '../src/lib/route.ts'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
-import type { CargoDefaults, Carrier, Database, Driver, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
+import type { CargoDefaults, Carrier, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
 import { IntegrationError, sms } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { store as db } from './store.ts'
@@ -232,8 +232,11 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
   const c: RsCreds = { su, sp }
   const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
   if (su !== prev.su || sp !== prev.sp) resetRsCache()
+  const sameUser = su === prev.su && r.unId === prev.sellerUnId
   db.set('rs', {
     ...db.get().rs,
+    // Another taxpayer's waybills: the background sync starts over.
+    ...(!sameUser && { syncedTo: undefined, syncError: undefined }),
     su,
     sp,
     sellerUnId: r.unId,
@@ -257,7 +260,7 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
 export function disconnectRs(user: User) {
   requireAdmin(user)
   resetRsCache()
-  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined })
+  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined, syncedTo: undefined, syncError: undefined })
 }
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
@@ -426,12 +429,141 @@ export const shipments = {
     })
   },
 
+  /**
+   * Reads the shipment's waybill from RS.ge and records it (opening a shipment calls this). Answers
+   * fast when it was read moments ago, so reopening the page doesn't call RS.ge every time.
+   */
+  async refreshFromRs(id: string, user: User) {
+    const s = get(id, user)
+    if (s.status !== 'uploaded' || !s.rsWaybillId) return
+    if (s.rsRemote && Date.now() - Date.parse(s.rsRemote.checkedAt) < REFRESH_FRESH_MS) return
+    if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული — ნაჩვენებია ბოლოს ნანახი მონაცემები', 409)
+    let p = reading.get(id)
+    if (!p) {
+      p = rsge.getWaybill(s.rsWaybillId!, id, 'page').then((w) => applyRemote(id, w))
+      reading.set(id, p)
+      void p.catch(() => {}).finally(() => reading.delete(id))
+    }
+    await p.catch((e: Error) => fail(e.message, 502))
+  },
+
   /** On server start: finish pipelines interrupted by a restart. */
   resumeAll() {
     db.get()
       .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
       .forEach((s) => void shipments.run(s.id))
   },
+}
+
+/* ------------------------- RS.ge read-back ------------------------- */
+
+/** A waybill read less than this long ago is not read again when the shipment is opened. */
+const REFRESH_FRESH_MS = 15_000
+const reading = new Map<string, Promise<void>>()
+
+const RS_STATUS_TEXT: Record<number, string> = { 0: 'შენახული', 1: 'აქტიური', 2: 'დასრულებული', [-1]: 'წაშლილი', [-2]: 'გაუქმებული' }
+
+/** waybillState for an RS.ge status: completed → closed, deleted or cancelled → cancelled. */
+const stateOf = (status: number): Shipment['waybillState'] => (status === 2 ? 'closed' : status < 0 ? 'cancelled' : undefined)
+
+const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+
+/**
+ * Records the waybill as RS.ge reported it. RS.ge wins over what was sent: a waybill completed,
+ * cancelled or corrected on the rs.ge portal is shown that way here, with an event saying what changed.
+ */
+function applyRemote(id: string, w: RsRemoteWaybill) {
+  // A pipeline or close/cancel in progress records its own outcome; the next read catches up.
+  if (running.has(id)) return
+  const s = db.get().shipments.find((x) => x.id === id)
+  if (!s || s.status !== 'uploaded') return
+  // Compared with the last reading, or with what was sent before the first one.
+  const sent = s.rsWaybill
+  const was = s.rsRemote ?? {
+    carNumber: sent?.carNumber ?? '',
+    driverTin: sent?.driverTin ?? '',
+    driverName: sent?.driverName ?? '',
+    startAddress: sent?.startAddress ?? '',
+    endAddress: sent?.endAddress ?? '',
+    quantity: s.quantity,
+    fullAmount: Math.round((sent?.goods ?? []).reduce((a, g) => a + g.amount, 0) * 100) / 100,
+  }
+  const changes: string[] = []
+  const state = stateOf(w.status)
+  if (state !== s.waybillState) changes.push(`სტატუსი: ${RS_STATUS_TEXT[w.status] ?? w.status}`)
+  if (plateKey(w.carNumber) !== plateKey(was.carNumber)) changes.push(`მანქანა: ${was.carNumber || '—'} → ${w.carNumber || '—'}`)
+  if (w.driverTin !== was.driverTin) changes.push(`მძღოლი: ${was.driverName || was.driverTin} → ${w.driverName || w.driverTin}`)
+  if (w.startAddress.trim() !== was.startAddress.trim()) changes.push(`დაწყების მისამართი: ${w.startAddress || '—'}`)
+  if (w.endAddress.trim() !== was.endAddress.trim()) changes.push(`დასრულების მისამართი: ${w.endAddress || '—'}`)
+  if (w.quantity !== was.quantity) changes.push(`რაოდენობა: ${was.quantity} → ${w.quantity}`)
+  if (Math.abs(w.fullAmount - was.fullAmount) >= 0.005) changes.push(`თანხა: ${was.fullAmount.toFixed(2)} → ${w.fullAmount.toFixed(2)} ₾`)
+  patch(
+    id,
+    (x) => ({ rsRemote: w, waybillState: state, waybillNumber: w.number || x.waybillNumber }),
+    changes.length ? { level: 'info', message: `RS.ge-ზე შეიცვალა — ${changes.join('; ')}` } : undefined,
+  )
+}
+
+/** Minutes between background syncs (RS_SYNC_MINUTES, default 5; 0 turns it off). */
+const SYNC_MS = Math.max(0, Number(process.env.RS_SYNC_MINUTES ?? 5) || 0) * 60_000
+/** The furthest back one sync reads. Older changes still show up when the shipment is opened. */
+const SYNC_MAX_BACK_MS = 30 * 86400_000
+/** Each sync re-reads this much of the previous window, against clock differences between the servers. */
+const SYNC_OVERLAP_MS = 5 * 60_000
+let syncing: Promise<void> | null = null
+
+/**
+ * Background sync: asks RS.ge which waybills changed since the last sync (get_waybills_v1) and
+ * re-reads the ones that belong to uploaded shipments. A failed sync leaves the cursor where it
+ * was, so the next one reads the same changes again.
+ */
+export function syncRs(): Promise<void> {
+  syncing ??= runSync().finally(() => (syncing = null))
+  return syncing
+}
+
+async function runSync() {
+  const start = db.get().rs
+  if (!storedCreds()) return
+  const stillSameUser = () => db.get().rs.su === start.su && db.get().rs.sellerUnId === start.sellerUnId
+  const now = Date.now()
+  try {
+    const tracked = db.get().shipments.filter((s) => s.status === 'uploaded' && s.rsWaybillId)
+    const byWaybill = new Map(tracked.map((s) => [s.rsWaybillId!, s.id]))
+    // First sync: from the oldest tracked shipment, so changes made before syncing existed count too.
+    const cursor = start.syncedTo ? Date.parse(start.syncedTo) - SYNC_OVERLAP_MS : tracked.reduce((m, s) => Math.min(m, Date.parse(s.createdAt)), now)
+    const from = new Date(Math.max(now - SYNC_MAX_BACK_MS, cursor))
+    const to = new Date(now)
+    // get_waybills_v1 lists the waybills with one buyer; normally all shipments share one.
+    const buyers = [...new Set(tracked.map((s) => s.rsWaybill?.buyerTin).filter((t): t is string => !!t))]
+    const ids = new Set<number>()
+    for (const b of buyers) for (const w of await rsge.changed(b, from, to)) if (byWaybill.has(w.id)) ids.add(w.id)
+    for (const wid of ids) {
+      const sid = byWaybill.get(wid)!
+      applyRemote(sid, await rsge.getWaybill(wid, sid, 'sync'))
+    }
+    if (stillSameUser()) db.set('rs', { ...db.get().rs, syncedTo: to.toISOString(), syncError: undefined })
+  } catch (e) {
+    const msg = (e as Error).message
+    console.error('[rs-sync]', msg)
+    if (stillSameUser() && db.get().rs.syncError !== msg) db.set('rs', { ...db.get().rs, syncError: msg })
+  }
+}
+
+/** Starts the background sync (server start). */
+export function startRsSync() {
+  if (!SYNC_MS) return
+  setTimeout(() => void syncRs(), 15_000).unref()
+  setInterval(() => void syncRs(), SYNC_MS).unref()
+}
+
+/** "Sync now" from the settings page. */
+export async function syncRsNow(user: User) {
+  requireAdmin(user)
+  if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
+  await syncRs()
+  const err = db.get().rs.syncError
+  if (err) fail(err, 502)
 }
 
 async function runPipeline(id: string) {

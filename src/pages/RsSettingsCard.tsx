@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, Unplug, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, RefreshCw, Unplug, XCircle } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { cargo, rsSettings } from '../api'
 import { useDb } from '../api/store'
@@ -228,6 +228,7 @@ function ConnectionCard() {
                 სერვისის მომხმარებელი <span className="font-mono">{rs.su}</span>
                 {rs.checkedAt && <> · შემოწმდა {formatDateTime(rs.checkedAt)}</>}
               </p>
+              <SyncLine rs={rs} />
             </div>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -545,5 +546,35 @@ function Section({ title, text, icon, children }: { title: string; text?: string
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
     </Card>
+  )
+}
+
+/** Background sync with RS.ge: when it last read the changes, why it failed, and a "sync now" button. */
+function SyncLine({ rs }: { rs: RsSettings }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    try {
+      await rsSettings.syncNow()
+      toast('success', 'RS.ge-სთან სინქრონიზაცია დასრულდა')
+    } catch (e) {
+      toast('error', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs">
+      {rs.syncError ? (
+        <span className="text-amber-700">სინქრონიზაცია ვერ მოხერხდა: {rs.syncError}</span>
+      ) : (
+        <span className="text-slate-500">{rs.syncedTo ? `RS.ge-ს ცვლილებები წაკითხულია ${formatDateTime(rs.syncedTo)}-მდე` : 'RS.ge-ს ცვლილებები ჯერ არ წაკითხულა'}</span>
+      )}
+      <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
+        <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
+        განახლება
+      </button>
+    </p>
   )
 }
