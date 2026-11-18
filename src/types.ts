@@ -203,6 +203,14 @@ export interface RsSettings {
   sellerUserId: number | null
   sellerTin: string
   sellerName: string
+  /**
+   * Buyer of every waybill. Empty (or the seller's own number): შიდა გადაზიდვა, the buyer is the seller.
+   * Any other number: მიწოდება ტრანსპორტირებით. The name is RS.ge's when RS.ge knows the number
+   * (`buyerForeign` false), else typed by the admin and sent unchecked (`buyerForeign` true).
+   */
+  buyerTin: string
+  buyerName: string
+  buyerForeign: boolean
   checkedAt?: string
 
   /** Optional: tax ID of a separate transport company (TRANSPORTER_TIN). */

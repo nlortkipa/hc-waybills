@@ -4,14 +4,17 @@ import { rsSettings } from '../api'
 import { useDb } from '../api/store'
 import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { RS_TRANS_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
+import { isInternal, RS_TRANS_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
 import { active, formatDateTime } from '../lib/util'
 import type { RsSettings } from '../types'
 
-type Form = Record<'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
+type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
 
 const toForm = (rs: RsSettings): Form => ({
   quantity: rs.quantity ? String(rs.quantity) : '',
+  buyerTin: rs.buyerTin,
+  // Only a name RS.ge doesn't have is the admin's; RS.ge's own is shown from the lookup.
+  buyerName: rs.buyerForeign ? rs.buyerName : '',
   transporterTin: rs.transporterTin,
   transId: String(rs.transId),
   transTxt: rs.transTxt,
@@ -309,6 +312,10 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     setErrors((x) => ({ ...x, [k]: '' }))
   }
   const transporter = useTinName(f.transporterTin.trim(), connected)
+  const buyerTin = f.buyerTin.trim()
+  const internal = isInternal({ buyerTin, sellerTin: rs.sellerTin })
+  // Any number: RS.ge's name when it knows it (not editable), else whatever the admin types.
+  const buyer = useTinName(internal ? '' : buyerTin, connected, true)
 
   const orig = toForm(rs)
   const dirty = (Object.keys(f) as (keyof Form)[]).some((k) => String(f[k]).trim() !== String(orig[k]))
@@ -317,6 +324,11 @@ function DefaultsForm({ connected }: { connected: boolean }) {
 
   const validate = () => {
     const e: Record<string, string> = {}
+    if (!internal) {
+      if (buyer.state === 'loading') e.buyerTin = 'დაელოდე, მოწმდება RS.ge-ზე'
+      else if (buyer.state === 'error') e.buyerTin = buyer.message
+      else if (buyer.state === 'missing' && !f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
+    }
     if (!(Number(f.quantity) > 0)) e.quantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
@@ -334,6 +346,8 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     try {
       await rsSettings.save({
         ...f,
+        buyerTin,
+        buyerName: buyer.state === 'ok' ? buyer.name : f.buyerName.trim(),
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
@@ -353,14 +367,42 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     <form onSubmit={save} noValidate>
       {!connected && <p className="mb-3 ml-1 text-sm text-slate-500">ჯერ დაუკავშირდი RS.ge-ს — ნომრების შემოწმება და ცნობარები მის გარეშე არ მუშაობს.</p>}
       <fieldset disabled={!connected} className="space-y-4 disabled:pointer-events-none disabled:opacity-50">
-        <Section title="ზედნადების ტიპი" text="შიდა გადაზიდვა — ტვირთი გადაადგილდება კომპანიის ობიექტებს შორის, ამიტომ მყიდველი თავად გამყიდველია.">
-          <div className="text-sm text-slate-700 sm:col-span-2">
-            მყიდველი: {rs.sellerTin ? (
-              <>
-                {rs.sellerName} <span className="font-mono text-[13px] text-slate-500">({rs.sellerTin})</span>
-              </>
+        <Section
+          title="მყიდველი"
+          text={
+            internal
+              ? 'იგზავნება შიდა გადაზიდვა: ტვირთი გადაადგილდება კომპანიის ობიექტებს შორის და მყიდველი თავად გამყიდველია. სხვა მყიდველისთვის ჩაწერე მისი ნომერი.'
+              : 'ზედნადები იგზავნება როგორც მიწოდება ტრანსპორტირებით. ერთი და იგივე ყველა რეისზე.'
+          }
+        >
+          <div>
+            <Field label="საიდენტიფიკაციო / პირადი ნომერი (არასავალდებულო)" error={errors.buyerTin} hint={internal && !buyerTin ? 'ცარიელი — შიდა გადაზიდვა' : undefined}>
+              <Input value={f.buyerTin} className="font-mono" invalid={!!errors.buyerTin} onChange={set('buyerTin')} />
+            </Field>
+            {!errors.buyerTin && (buyer.state === 'loading' || buyer.state === 'error') && <LookupLine lookup={buyer} />}
+          </div>
+          <div>
+            {internal ? (
+              <Field label="დასახელება">
+                <FixedValue>{rs.sellerTin ? `${rs.sellerName} (გამყიდველი)` : <span className="text-slate-400">შეივსება RS.ge-სთან დაკავშირებისას</span>}</FixedValue>
+              </Field>
+            ) : buyer.state === 'missing' ? (
+              <Field label="დასახელება" error={errors.buyerName} hint="RS.ge-ზე ვერ მოიძებნა — ჩაწერე ნებისმიერი დასახელება">
+                <Input value={f.buyerName} invalid={!!errors.buyerName} onChange={set('buyerName')} />
+              </Field>
             ) : (
-              <span className="text-slate-500">შეივსება RS.ge-სთან დაკავშირებისას</span>
+              <Field label="დასახელება" hint={buyer.state === 'ok' ? 'RS.ge-ს რეესტრიდან — არ იცვლება' : undefined}>
+                <FixedValue>
+                  {buyer.state === 'ok' ? (
+                    <>
+                      <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                      <span className="truncate">{buyer.name}</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-400">{buyer.state === 'loading' ? 'მოწმდება…' : '—'}</span>
+                  )}
+                </FixedValue>
+              </Field>
             )}
           </div>
         </Section>
@@ -440,6 +482,11 @@ function DefaultsForm({ connected }: { connected: boolean }) {
       </fieldset>
     </form>
   )
+}
+
+/** A value shown where an input would be, but not editable. */
+function FixedValue({ children }: { children: ReactNode }) {
+  return <div className="flex h-11 items-center gap-1.5 rounded-[10px] px-3 text-[16px] text-slate-900 ring-1 ring-slate-500/15 ring-inset sm:text-[15px]">{children}</div>
 }
 
 function Section({ title, text, icon, children }: { title: string; text?: string; icon?: ReactNode; children: ReactNode }) {

@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeUsable } from '../src/lib/route.ts'
-import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits } from '../src/lib/rs.ts'
+import { isInternal, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Driver, Product, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, SmsDelivery, User } from '../src/types.ts'
@@ -302,17 +302,18 @@ export async function syncProductsNow(body: { force?: boolean } | undefined, use
 
 const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
 
-/** Saves the admin's RS.ge settings. An empty password keeps the stored one. */
 /**
- * Saves the waybill defaults (transport, unit, price…). The service user is not part of this: it is
- * set only by connectRs, after RS.ge accepted it. There is no buyer: every waybill is შიდა გადაზიდვა,
- * whose buyer is the seller itself.
+ * Saves the waybill defaults (buyer, transport, price…). The service user is not part of this: it is
+ * set only by connectRs, after RS.ge accepted it. With no buyer the waybill is შიდა გადაზიდვა (the
+ * buyer is the seller). A buyer RS.ge knows always gets RS.ge's name; for one it doesn't, the typed
+ * name is kept and the number is sent unchecked.
  */
 export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   requireAdmin(user)
   const prev = db.get().rs
   const next: RsSettings = {
     ...prev,
+    ...(await resolveBuyer(str(v.buyerTin), str(v.buyerName), prev)),
     transporterTin: str(v.transporterTin),
     transId: num(v.transId, 1),
     transTxt: str(v.transTxt),
@@ -333,6 +334,24 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
   if (!(next.quantity > 0)) fail('დეკლარირებული რაოდენობა უნდა იყოს 0-ზე მეტი')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
   db.set('rs', next)
+}
+
+/**
+ * The buyer as it is stored: RS.ge's name when it knows the number, else the typed one (required).
+ * If RS.ge can't be asked, an unchanged number keeps what was saved, so other settings still save.
+ */
+async function resolveBuyer(tin: string, typedName: string, prev: RsSettings): Promise<Pick<RsSettings, 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
+  if (!tin) return { buyerTin: '', buyerName: '', buyerForeign: false }
+  if (tin.length > 50) fail('მყიდველის ნომერი ძალიან გრძელია')
+  let rsKnown: string
+  try {
+    rsKnown = await rsName(tin)
+  } catch (e) {
+    if (tin === prev.buyerTin && prev.buyerName) return { buyerTin: tin, buyerName: prev.buyerForeign ? typedName || prev.buyerName : prev.buyerName, buyerForeign: prev.buyerForeign }
+    throw e
+  }
+  if (rsKnown) return { buyerTin: tin, buyerName: rsKnown, buyerForeign: false }
+  return { buyerTin: tin, buyerName: typedName || fail('მყიდველი RS.ge-ზე ვერ მოიძებნა — შეიყვანე დასახელება'), buyerForeign: true }
 }
 
 /** Name RS.ge has for the number, '' when it doesn't know it. Needs the stored service user. */
@@ -468,12 +487,11 @@ function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'routeId' | 'driverI
     : { name: s.cargo.description, barCode: s.cargo.code, unitId: RS_UNIT_OTHER, unitTxt: 'ტონა' }
   const amount = Math.round(s.quantity * rs.price * 100) / 100
   return {
-    // შიდა გადაზიდვა: the goods move between the company's own sites, so the buyer is the seller.
-    // (With any other type RS.ge refuses buyer = seller: -1047.)
-    type: 1,
-    buyerTin: rs.sellerTin,
-    buyerForeign: false,
-    buyerName: rs.sellerName,
+    // No buyer: შიდა გადაზიდვა, the goods move between the company's own sites and the buyer is the
+    // seller (with any other type RS.ge refuses buyer = seller: -1047). Otherwise მიწოდება ტრანსპორტირებით.
+    ...(isInternal(rs)
+      ? { type: 1, buyerTin: rs.sellerTin, buyerForeign: false, buyerName: rs.sellerName }
+      : { type: 2, buyerTin: rs.buyerTin, buyerForeign: rs.buyerForeign, buyerName: rs.buyerName }),
     startAddress: route.start,
     endAddress: route.end,
     driverTin: driver.personalId.trim(),

@@ -96,7 +96,7 @@ export const products = {
 /* ------------------------------ RS.ge ------------------------------ */
 
 export const rsSettings = {
-  /** Saves the waybill defaults. A Georgian buyer's name is filled in from RS.ge. Admin only. */
+  /** Saves the waybill defaults. A buyer RS.ge knows always gets RS.ge's name; otherwise the typed one is kept. Admin only. */
   async save(value: Partial<RsSettings>) {
     await call('PUT', '/api/rs', value)
   },

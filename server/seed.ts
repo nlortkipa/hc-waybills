@@ -2,7 +2,7 @@ import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, User } from '../src/types.ts'
 
-export const DB_VERSION = 20
+export const DB_VERSION = 21
 
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
@@ -93,7 +93,7 @@ export function migrate(db: Database): Database | null {
   // v15 → v16: waybills are always შიდა გადაზიდვა, whose buyer is the seller: the buyer settings go.
   if (d.version === 15) {
     const { buyerTin: _t, buyerName: _n, buyerForeign: _f, ...rs } = d.rs as typeof d.rs & { buyerTin?: string; buyerName?: string; buyerForeign?: boolean }
-    d = { ...d, version: 16, rs }
+    d = { ...d, version: 16, rs: rs as RsSettings }
   }
   // v16 → v17: real SMS through smsoffice.ge (it was mocked); the account starts empty.
   if (d.version === 16) d = { ...d, version: 17, sms: defaultSmsSettings() }
@@ -140,5 +140,7 @@ export function migrate(db: Database): Database | null {
     const used = (routeId: string) => d.shipments.find((s) => s.routeId === routeId && live.has(s.productId))?.productId
     d = { ...d, version: 20, routes: d.routes.map((r) => ({ ...r, productId: r.productId || used(r.id) || only })) }
   }
+  // v20 → v21: a buyer can be set again; none (the default) keeps შიდა გადაზიდვა.
+  if (d.version === 20) d = { ...d, version: 21, rs: { ...d.rs, buyerTin: '', buyerName: '', buyerForeign: false } }
   return d.version === DB_VERSION ? d : null
 }

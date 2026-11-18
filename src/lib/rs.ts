@@ -42,6 +42,9 @@ export function defaultRsSettings(): RsSettings {
     sellerUserId: null,
     sellerTin: '',
     sellerName: '',
+    buyerTin: '',
+    buyerName: '',
+    buyerForeign: false,
     transporterTin: '',
     transId: 1,
     transTxt: '',
@@ -58,13 +61,16 @@ export function defaultRsSettings(): RsSettings {
   }
 }
 
+/** True when the waybill goes to the seller itself: no buyer set, or the seller's own number. */
+export const isInternal = (rs: Pick<RsSettings, 'buyerTin' | 'sellerTin'>) => !rs.buyerTin || rs.buyerTin === rs.sellerTin
+
 /**
  * What is still missing before a waybill can be sent. Empty array = ready.
  * The server enforces it; the admin screen shows the same list.
  */
 export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[] {
   const out: string[] = []
-  // The seller doubles as the buyer (შიდა გადაზიდვა); connecting fills it in.
+  // Connecting fills in the seller (also the buyer when none is set: შიდა გადაზიდვა).
   if (!opts.hasCreds || !rs.sellerTin) out.push('სერვისის მომხმარებელი და პაროლი')
   if (!(rs.quantity > 0)) out.push('დეკლარირებული რაოდენობა')
   if (rs.transId === RS_TRANS_OTHER && !rs.transTxt) out.push('ტრანსპორტის ტიპის დასახელება')
