@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
-import { Button, Card, EmptyState, Input, PageHeader, Select, statusMeta } from '../components/ui'
+import { Button, Card, EmptyState, Input, PageHeader, Select, shipmentState } from '../components/ui'
 import { cx } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../api/store'
@@ -13,6 +13,7 @@ import type { ShipmentStatus } from '../types'
 const filters: { key: 'all' | 'active' | 'failed' | ShipmentStatus; label: string }[] = [
   { key: 'all', label: 'ყველა' },
   { key: 'active', label: 'მიმდინარე' },
+  { key: 'saved', label: 'შენახული' },
   { key: 'uploaded', label: 'ატვირთული' },
   { key: 'failed', label: 'შეცდომით' },
 ]
@@ -38,7 +39,7 @@ export function Shipments() {
       if (f !== 'all' && f !== 'active' && f !== 'failed' && s.status !== f) return false
       if (!needle) return true
       const x = L.describe(s)
-      return [s.waybillNumber, x.carrier, x.route, x.driver, x.plate, statusMeta[s.status].label].some((v) => v?.toLowerCase().includes(needle))
+      return [s.waybillNumber, x.carrier, x.route, x.driver, x.plate, shipmentState(s).label, x.item].some((v) => v?.toLowerCase().includes(needle))
     })
   }, [all, q, f, carrier, L])
 

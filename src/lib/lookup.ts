@@ -30,7 +30,8 @@ export function makeLookup(d: Database) {
       const moved = !!rs && !!sent && (rs.startAddress.trim() !== sent.startAddress.trim() || rs.endAddress.trim() !== sent.endAddress.trim())
       return {
         carrier: carriers.get(s.carrierId)?.name ?? '—',
-        route: moved ? routeText({ start: rs!.startAddress, end: rs!.endAddress }) : routeText(r),
+        // As RS.ge has it, else as sent (without transport the end is the start), else the route.
+        route: moved ? routeText({ start: rs!.startAddress, end: rs!.endAddress }) : sent ? routeText({ start: sent.startAddress, end: sent.endAddress }) : routeText(r),
         driver: rs && sent && rs.driverTin !== sent.driverTin ? rs.driverName || rs.driverTin : this.driverName(s.driverId),
         plate: rs && sent && plateKey(rs.carNumber) !== plateKey(sent.carNumber) ? rs.carNumber || '—' : (trucks.get(s.truckId)?.plateNumber ?? '—'),
         item: itemsText(s),

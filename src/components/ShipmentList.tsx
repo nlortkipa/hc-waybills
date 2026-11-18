@@ -4,7 +4,7 @@ import { shipmentQuantity } from '../lib/rs'
 import { formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import type { Shipment } from '../types'
-import { StatusBadge } from './ui'
+import { ShipmentBadge } from './ui'
 
 export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarrier?: boolean }) {
   const L = useLookup()
@@ -45,7 +45,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                   </td>
                   <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{formatTonnes(shipmentQuantity(s))}</td>
                   <td className="px-3 py-3">
-                    <StatusBadge status={s.status} />
+                    <ShipmentBadge s={s} />
                   </td>
                   <td className="pr-4">
                     <ChevronRight className="size-4 text-slate-300" />
@@ -72,7 +72,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                       {showCarrier && ` · ${x.carrier}`}
                     </p>
                   </div>
-                  <StatusBadge status={s.status} />
+                  <ShipmentBadge s={s} />
                 </div>
                 <div className="mt-2.5 space-y-1 text-[13px] text-slate-600">
                   <p className="flex items-center gap-2">

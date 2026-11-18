@@ -7,7 +7,7 @@ import { active, cx, formatDateTime, phoneKey, sameIds } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
-import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
+import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import type { CarrierRoute, Database, RouteGood } from '../types'
 import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 
@@ -106,6 +106,29 @@ const TABS: TabDef[] = [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
+      {
+        key: 'waybillType',
+        label: 'ზედნადების ტიპი',
+        type: 'select',
+        optional: true,
+        options: (d) => [{ value: '', label: `RS.ge-ს პარამეტრებიდან (${waybillTypeLabel(waybillDefaults(d.rs).type)})` }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
+        hint: 'ოპერატორს რეისზე შეუძლია შეცვალოს.',
+      },
+      {
+        key: 'buyerTin',
+        label: 'მყიდველის ს/ნ (არასავალდებულო)',
+        optional: true,
+        mono: true,
+        showIf: (r) => r.waybillType !== '1',
+        hint: 'ცარიელი — RS.ge-ს პარამეტრების მყიდველი. დასახელება RS.ge-დან შეივსება.',
+      },
+      {
+        key: 'buyerName',
+        label: 'მყიდველის დასახელება',
+        optional: true,
+        showIf: (r) => r.waybillType !== '1' && !!r.buyerTin?.trim(),
+        hint: 'მხოლოდ თუ RS.ge-ზე არ არის (უცხოელი მყიდველი).',
+      },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
     subtitle: (r, d) => `${carrierName(d, r.carrierId)} · ${productNames(d, r) || 'პროდუქტი არ არის'}`,
@@ -114,6 +137,18 @@ const TABS: TabDef[] = [
       { label: 'დაწყების მისამართი', render: (r, d) => routeOf(d, r).start || '—' },
       { label: 'დასრულების მისამართი', render: (r, d) => routeOf(d, r).end || '—' },
       { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px]">{r.scaleId || '—'}</span> },
+      {
+        label: 'ზედნადები',
+        render: (r, d) => {
+          const w = waybillDefaults(d.rs, r as unknown as CarrierRoute)
+          return (
+            <span>
+              {waybillTypeLabel(w.type)}
+              {w.type !== 1 && <span className="block text-xs text-slate-500">{w.buyerName || w.buyerTin || 'მყიდველი არ არის'}</span>}
+            </span>
+          )
+        },
+      },
       {
         label: 'პროდუქტები',
         render: (r, d) => {

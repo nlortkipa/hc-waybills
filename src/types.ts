@@ -28,6 +28,42 @@ export interface CarrierRoute extends SoftDeletable {
   scaleId: string
   /** The goods lines of this route's waybills, at least one (none on old routes not set up yet). */
   goods: RouteGood[]
+  /** Waybill type for shipments on this route; missing = from the RS.ge settings (buyer set → 2, else 1). */
+  waybillType?: WaybillType
+  /**
+   * Buyer for shipments on this route; empty = the one in the RS.ge settings. Resolved like the
+   * settings' buyer: RS.ge's name when it knows the number (buyerForeign false), else the typed name.
+   */
+  buyerTin?: string
+  buyerName?: string
+  buyerForeign?: boolean
+}
+
+/**
+ * RS.ge waybill types this app writes: 1 შიდა გადაზიდვა, 2 მიწოდება ტრანსპორტირებით,
+ * 3 მიწოდება ტრანსპორტირების გარეშე, 5 უკან დაბრუნება. (4 დისტრიბუცია and 6 ქვე-ზედნადები are
+ * not used: a truck trip here is always one waybill.)
+ */
+export type WaybillType = 1 | 2 | 3 | 5
+
+/**
+ * What a shipment's waybill says beyond the route, driver, truck and goods: chosen on the shipment
+ * (prefilled from the route, then from the RS.ge settings) and kept, so retries and corrections send the same.
+ */
+export interface ShipmentWaybill {
+  type: WaybillType
+  /** Empty for type 1: the buyer is then the seller. */
+  buyerTin: string
+  buyerName: string
+  buyerForeign: boolean
+  /** Planned start of transport (ISO). Missing = when it is activated. RS.ge allows up to 3 days ahead. */
+  beginAt?: string
+  transportCost: number
+  tranCostPayer: 1 | 2
+  receptionInfo: string
+  receiverInfo: string
+  /** Comment typed for this shipment; the trailer number and the HC tag are added to it. */
+  comment: string
 }
 
 /**
@@ -122,6 +158,7 @@ export interface User extends SoftDeletable {
 export type ShipmentStatus =
   | 'uploading' // sending to RS.ge
   | 'rs_failed' // RS.ge rejected / unreachable
+  | 'saved' // saved on RS.ge as a draft, not activated yet (no number)
   | 'uploaded' // waybill number received
 
 export type StepStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
@@ -139,8 +176,16 @@ export interface Shipment {
   carrierId: string
   /** The route picked (CarrierRoute.id); the addresses are resolved from it. */
   routeId: string
+  /** '' for a waybill without transport (type 3). */
   driverId: string
+  /** '' for a waybill without transport (type 3). */
   truckId: string
+  /** Type, buyer, start time and transport details. Missing on shipments from before they were chosen per shipment. */
+  waybill?: ShipmentWaybill
+  /** Save on RS.ge without activating (შენახვა); cleared when it is activated. */
+  draft?: boolean
+  /** Tax invoice (ანგარიშ-ფაქტურა) written from this waybill on RS.ge. */
+  invoiceId?: number
   /** The waybill's goods lines, at least one. */
   items: ShipmentItem[]
   /** Declared quantity: the sum of the items' quantities. */
@@ -216,6 +261,35 @@ export interface IntegrationLog {
    * They are kept in their own, smaller part of the log so they never push out the uploads.
    */
   readBack?: 'sync' | 'page'
+}
+
+/** One row of RS.ge's waybill lists (get_waybills: issued, get_buyer_waybills: received). Dates ISO (UTC). */
+export interface RsListWaybill {
+  id: number
+  type: number
+  status: number
+  number: string
+  createdAt?: string
+  activatedAt?: string
+  beginAt?: string
+  closedAt?: string
+  deliveredAt?: string
+  buyerTin: string
+  buyerName: string
+  sellerTin: string
+  sellerName: string
+  startAddress: string
+  endAddress: string
+  driverTin: string
+  driverName: string
+  carNumber: string
+  fullAmount: number
+  comment: string
+  /** Buyer's answer: 0 none, 1 confirmed (მივიღე), -1 rejected (არ ვეთანხმები). */
+  confirmed: number
+  corrected: boolean
+  /** The HC shipment this waybill belongs to, when it is one of ours (and the caller may see it). */
+  shipmentId?: string
 }
 
 /** An excise goods code from RS.ge (get_akciz_codes). */
@@ -333,9 +407,29 @@ export interface RsWaybillPayload {
   }[]
 }
 
+/** A goods row of a waybill read back from RS.ge. */
+export interface RsRemoteGood {
+  /** Row ID on RS.ge: a correction updates the row with this ID. Missing on old snapshots. */
+  id?: number
+  name: string
+  unitId?: number
+  unitTxt: string
+  quantity: number
+  quantityExt?: number
+  price: number
+  amount: number
+  barCode: string
+  vatType?: number
+  aId?: number
+}
+
 /** A waybill read back from RS.ge (get_waybill). Dates are ISO (UTC). */
 export interface RsRemoteWaybill {
-  /** 0 saved, 1 active, 2 completed, -1 deleted, -2 cancelled. */
+  /** RS.ge waybill ID. Missing on snapshots taken before it was kept. */
+  id?: number
+  /** Waybill type (1–6). Missing on old snapshots. */
+  type?: number
+  /** 0 saved, 1 active, 2 completed, 8 sent to the transporter, -1 deleted, -2 cancelled. */
   status: number
   number: string
   buyerTin: string
@@ -349,8 +443,23 @@ export interface RsRemoteWaybill {
   fullAmount: number
   /** Sum of the goods quantities (TOTAL_QUANTITY). */
   quantity: number
-  goods: { name: string; unitTxt: string; quantity: number; price: number; amount: number; barCode: string }[]
+  goods: RsRemoteGood[]
   comment: string
+  /* Missing on snapshots taken before they were kept. */
+  sellerTin?: string
+  sellerName?: string
+  transId?: number
+  transTxt?: string
+  tranCostPayer?: number
+  transporterTin?: string
+  receptionInfo?: string
+  receiverInfo?: string
+  /** The amount in words, as RS.ge prints it. */
+  fullAmountText?: string
+  invoiceId?: number
+  /** Buyer's answer: 0 none, 1 confirmed, -1 rejected. */
+  confirmed?: number
+  createdAt?: string
   activatedAt?: string
   beginAt?: string
   deliveredAt?: string

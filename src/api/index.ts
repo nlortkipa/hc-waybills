@@ -4,7 +4,7 @@
  */
 import { canUseCarrier } from '../lib/route'
 import { active, shipmentUses } from '../lib/util'
-import type { Carrier, Database, RsSettings, Shipment, User } from '../types'
+import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, RsSettings, Shipment, ShipmentWaybill, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -154,12 +154,19 @@ export function visibleShipments(d: Database, user: User): Shipment[] {
 /** A goods line: one of the route's lines and the quantity the truck carries. */
 export type NewShipmentItem = { lineId: string; quantity: number; quantityExt?: number }
 
+/** Waybill options sent with a shipment; `beginAt` '' or missing = start when activated. */
+export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string }
+
 export interface NewShipmentInput {
   carrierId: string
   routeId: string
+  /** '' for a waybill without transport (type 3). */
   driverId: string
   truckId: string
   items: NewShipmentItem[]
+  waybill?: WaybillInput
+  /** Save on RS.ge without activating. */
+  draft?: boolean
 }
 
 export const shipments = {
@@ -167,6 +174,21 @@ export const shipments = {
   async create(input: NewShipmentInput, _user: User): Promise<string> {
     const { id } = await call<{ id: string }>('POST', '/api/shipments', input)
     return id
+  },
+
+  /** Changes a shipment: on RS.ge a draft is overwritten and an active waybill corrected. */
+  async edit(id: string, input: NewShipmentInput) {
+    await call('PUT', `/api/shipments/${encodeURIComponent(id)}`, input)
+  },
+
+  /** Activates a draft: now, or from `beginAt` (up to 3 days ahead). */
+  async activate(id: string, beginAt?: string) {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/activate`, { beginAt })
+  },
+
+  /** Writes a tax invoice from the waybill on RS.ge. */
+  async invoice(id: string) {
+    return call<{ invoiceId: number }>('POST', `/api/shipments/${encodeURIComponent(id)}/invoice`)
   },
 
   /** Retries the pipeline (RS.ge → SMS) on the server. */
@@ -178,9 +200,9 @@ export const shipments = {
     await call('POST', `/api/shipments/${encodeURIComponent(id)}/retry-sms`)
   },
 
-  /** Completes (goods delivered) or cancels the shipment's waybill on RS.ge. */
-  async finish(id: string, action: 'close' | 'cancel') {
-    await call('POST', `/api/shipments/${encodeURIComponent(id)}/${action}`)
+  /** Completes (goods delivered, now or on `deliveredAt`), cancels, or deletes (a draft) the shipment's waybill on RS.ge. */
+  async finish(id: string, action: 'close' | 'cancel' | 'delete', deliveredAt?: string) {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/${action}`, { deliveredAt })
   },
 
   /** Re-reads the shipment's waybill from RS.ge (status, corrections made on the rs.ge portal). */
@@ -196,6 +218,26 @@ export const shipments = {
   isRunning: (id: string) => {
     const s = db.get().shipments.find((x) => x.id === id)
     return !!s && (s.status === 'uploading' || s.sms.status === 'running')
+  },
+}
+
+/* ------------------------- RS.ge registry ------------------------- */
+
+export type RsWaybillAction = 'close' | 'cancel' | 'delete' | 'activate' | 'invoice' | 'confirm' | 'reject'
+export type RsWaybillDetail = RsRemoteWaybill & { shipmentId?: string }
+
+export const rsWaybills = {
+  /** The taxpayer's issued or received waybills created in the period, as RS.ge lists them. */
+  list(side: 'issued' | 'received', from: string, to: string) {
+    return api<RsListWaybill[]>('GET', `/api/rs/waybills?side=${side}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+  },
+  /** One waybill as RS.ge has it now. */
+  get(id: number) {
+    return api<RsWaybillDetail>('GET', `/api/rs/waybills/${id}`)
+  },
+  /** An action as on the portal; returns the waybill after it. */
+  act(id: number, action: RsWaybillAction, body?: { beginAt?: string; deliveredAt?: string }) {
+    return call<RsWaybillDetail>('POST', `/api/rs/waybills/${id}/${action}`, body)
   },
 }
 

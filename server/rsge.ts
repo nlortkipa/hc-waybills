@@ -20,7 +20,7 @@
  * password masked. Read-backs are tagged
  * (readBack) so the log keeps them apart from the uploads.
  */
-import type { IntegrationLog, RsAkciz, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
+import type { IntegrationLog, RsAkciz, RsListWaybill, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
 import { IntegrationError, log } from './integrations.ts'
 import { store as db } from './store.ts'
 
@@ -180,19 +180,37 @@ async function describe(code: number, c: RsCreds, op?: string): Promise<string> 
 
 /* ------------------------------ Waybill XML ------------------------------ */
 
-function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number | null }, beginDate: string): string {
-  const goods = p.goods
+/** A goods row as written: a new row (no rsId), an existing one updated by a correction, or one deleted by it. */
+export type XmlGood = RsWaybillPayload['goods'][number] & { rsId?: number; deleted?: boolean }
+
+export interface SaveOpts {
+  /** Transport start written into the waybill (RS.ge dateTime). */
+  beginDate: string
+  /** An existing waybill: a draft is overwritten, an active one corrected. */
+  id?: number
+  /** 0 saved (draft), 1 active (a correction). */
+  status?: 0 | 1
+  /** Rows to write instead of p.goods: corrections carry row IDs and deleted rows. */
+  goods?: XmlGood[]
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100
+
+function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number | null }, o: SaveOpts): string {
+  const rows: XmlGood[] = o.goods ?? p.goods
+  const goods = rows
     .map(
       (g) =>
-        `<GOODS>${el('ID', 0)}${el('W_NAME', g.name)}${el('UNIT_ID', g.unitId)}${el('UNIT_TXT', g.unitTxt)}${el('QUANTITY', g.quantity)}${el('PRICE', g.price)}` +
-        `${el('STATUS', 1)}${el('AMOUNT', g.amount)}${el('BAR_CODE', g.barCode)}${el('A_ID', g.aId ?? 0)}${el('VAT_TYPE', g.vatType)}` +
+        `<GOODS>${el('ID', g.rsId ?? 0)}${el('W_NAME', g.name)}${el('UNIT_ID', g.unitId)}${el('UNIT_TXT', g.unitTxt)}${el('QUANTITY', g.quantity)}${el('PRICE', g.price)}` +
+        // STATUS -1 deletes the row (corrections only).
+        `${el('STATUS', g.deleted ? -1 : 1)}${el('AMOUNT', g.amount)}${el('BAR_CODE', g.barCode)}${el('A_ID', g.aId ?? 0)}${el('VAT_TYPE', g.vatType)}` +
         `${g.quantityExt ? el('QUANTITY_EXT', g.quantityExt) : ''}</GOODS>`,
     )
     .join('')
-  const full = Math.round(p.goods.reduce((a, g) => a + g.amount, 0) * 100) / 100
+  const full = round2(rows.filter((g) => !g.deleted).reduce((a, g) => a + g.amount, 0))
   return (
     `<WAYBILL><SUB_WAYBILLS></SUB_WAYBILLS><GOODS_LIST>${goods}</GOODS_LIST>` +
-    el('ID', 0) +
+    el('ID', o.id ?? 0) +
     el('TYPE', p.type) +
     el('BUYER_TIN', p.buyerTin) +
     // 1 = Georgian citizen / company, 0 = foreign.
@@ -207,15 +225,15 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
     el('RECEPTION_INFO', p.receptionInfo) +
     el('RECEIVER_INFO', p.receiverInfo) +
     el('DELIVERY_DATE', '') +
-    // 0 = saved; send_waybill activates it.
-    el('STATUS', 0) +
+    // 0 = saved (send_waybill activates it); 1 = a correction of an active waybill.
+    el('STATUS', o.status ?? 0) +
     el('SELER_UN_ID', seller.unId) +
     el('PAR_ID', '') +
     el('FULL_AMOUNT', full) +
     el('CAR_NUMBER', p.carNumber) +
     el('WAYBILL_NUMBER', '') +
     el('S_USER_ID', seller.userId ?? '') +
-    el('BEGIN_DATE', beginDate) +
+    el('BEGIN_DATE', o.beginDate) +
     el('TRAN_COST_PAYER', p.tranCostPayer) +
     el('TRANS_ID', p.transId) +
     el('TRANS_TXT', p.transTxt) +
@@ -227,42 +245,99 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
   )
 }
 
+/** get_waybill leaves UNIT_TXT out for RS.ge's own units: the name is taken from the units list. */
+function unitName(unitId: number, txt: string) {
+  return txt || db.get().rs.units.find((u) => u.id === unitId)?.name || ''
+}
+
+const optNum = (v: string) => (v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v))
+
 /** A <WAYBILL> from get_waybill. The nested lists are cut out first: their rows have their own ID and STATUS. */
 function parseWaybill(xml: string): RsRemoteWaybill {
   const head = xml.replace(/<(GOODS_LIST|SUB_WAYBILLS|WOOD_DOCS_LIST)>[\s\S]*?<\/\1>/g, '')
   const goods = blocks(xml, 'GOODS')
     // STATUS -1 marks a goods row deleted by a correction.
     .filter((g) => tag(g, 'STATUS') !== '-1')
-    .map((g) => ({
-      name: tag(g, 'W_NAME'),
-      unitTxt: tag(g, 'UNIT_TXT'),
-      quantity: numOf(tag(g, 'QUANTITY')),
-      price: numOf(tag(g, 'PRICE')),
-      amount: numOf(tag(g, 'AMOUNT')),
-      barCode: tag(g, 'BAR_CODE'),
-    }))
+    .map((g) => {
+      const unitId = numOf(tag(g, 'UNIT_ID'))
+      return {
+        id: optNum(tag(g, 'ID')),
+        name: tag(g, 'W_NAME'),
+        unitId,
+        unitTxt: unitName(unitId, tag(g, 'UNIT_TXT')),
+        quantity: numOf(tag(g, 'QUANTITY')),
+        ...(numOf(tag(g, 'QUANTITY_EXT')) > 0 && { quantityExt: numOf(tag(g, 'QUANTITY_EXT')) }),
+        price: numOf(tag(g, 'PRICE')),
+        amount: numOf(tag(g, 'AMOUNT')),
+        barCode: tag(g, 'BAR_CODE'),
+        vatType: numOf(tag(g, 'VAT_TYPE')),
+        aId: numOf(tag(g, 'A_ID')),
+      }
+    })
   const total = tag(head, 'TOTAL_QUANTITY')
   return {
+    id: optNum(tag(head, 'ID')),
+    type: optNum(tag(head, 'TYPE')),
     status: numOf(tag(head, 'STATUS')),
     number: tag(head, 'WAYBILL_NUMBER'),
     buyerTin: tag(head, 'BUYER_TIN'),
     buyerName: tag(head, 'BUYER_NAME'),
+    sellerTin: tag(head, 'SELLER_TIN'),
+    sellerName: tag(head, 'SELLER_NAME'),
     startAddress: tag(head, 'START_ADDRESS'),
     endAddress: tag(head, 'END_ADDRESS'),
     driverTin: tag(head, 'DRIVER_TIN'),
     driverName: tag(head, 'DRIVER_NAME'),
     carNumber: tag(head, 'CAR_NUMBER'),
     transportCost: numOf(tag(head, 'TRANSPORT_COAST')),
+    transId: optNum(tag(head, 'TRANS_ID')),
+    transTxt: tag(head, 'TRANS_TXT'),
+    tranCostPayer: optNum(tag(head, 'TRAN_COST_PAYER')),
+    transporterTin: tag(head, 'TRANSPORTER_TIN'),
+    receptionInfo: tag(head, 'RECEPTION_INFO'),
+    receiverInfo: tag(head, 'RECEIVER_INFO'),
     fullAmount: numOf(tag(head, 'FULL_AMOUNT')),
+    fullAmountText: tag(head, 'FULL_AMOUNT_TXT'),
     quantity: total !== '' ? numOf(total) : Math.round(goods.reduce((a, g) => a + g.quantity, 0) * 1000) / 1000,
     goods,
     comment: tag(head, 'COMMENT'),
+    invoiceId: numOf(tag(head, 'INVOICE_ID')) || undefined,
+    confirmed: numOf(tag(head, 'IS_CONFIRMED')),
+    createdAt: fromRsDate(tag(head, 'CREATE_DATE')),
     activatedAt: fromRsDate(tag(head, 'ACTIVATE_DATE')),
     beginAt: fromRsDate(tag(head, 'BEGIN_DATE')),
     deliveredAt: fromRsDate(tag(head, 'DELIVERY_DATE')),
     closedAt: fromRsDate(tag(head, 'CLOSE_DATE')),
     correctedAt: fromRsDate(tag(head, 'CORRECTION_DATE')),
     checkedAt: new Date().toISOString(),
+  }
+}
+
+/** A row of get_waybills / get_buyer_waybills. The seller's own list has no seller fields: they are ours. */
+function parseListRow(b: string, own: { tin: string; name: string }): RsListWaybill {
+  return {
+    id: numOf(tag(b, 'ID')),
+    type: numOf(tag(b, 'TYPE')),
+    status: numOf(tag(b, 'STATUS')),
+    number: tag(b, 'WAYBILL_NUMBER'),
+    createdAt: fromRsDate(tag(b, 'CREATE_DATE')),
+    activatedAt: fromRsDate(tag(b, 'ACTIVATE_DATE')),
+    beginAt: fromRsDate(tag(b, 'BEGIN_DATE')),
+    closedAt: fromRsDate(tag(b, 'CLOSE_DATE')),
+    deliveredAt: fromRsDate(tag(b, 'DELIVERY_DATE')),
+    buyerTin: tag(b, 'BUYER_TIN'),
+    buyerName: tag(b, 'BUYER_NAME'),
+    sellerTin: tag(b, 'SELLER_TIN') || own.tin,
+    sellerName: tag(b, 'SELLER_NAME') || own.name,
+    startAddress: tag(b, 'START_ADDRESS'),
+    endAddress: tag(b, 'END_ADDRESS'),
+    driverTin: tag(b, 'DRIVER_TIN'),
+    driverName: tag(b, 'DRIVER_NAME'),
+    carNumber: tag(b, 'CAR_NUMBER'),
+    fullAmount: numOf(tag(b, 'FULL_AMOUNT')),
+    comment: tag(b, 'WAYBILL_COMMENT') || tag(b, 'COMMENT'),
+    confirmed: numOf(tag(b, 'IS_CONFIRMED')),
+    corrected: tag(b, 'IS_CORRECTED') === '1',
   }
 }
 
@@ -324,8 +399,8 @@ const live = {
     return /^null$/i.test(name) ? '' : name
   },
 
-  async saveWaybill(c: RsCreds, seller: { unId: number; userId: number | null }, p: RsWaybillPayload, shipmentId: string): Promise<number> {
-    const xml = await soap('save_waybill', [...creds(c), ['waybill', new RawXml(waybillXml(p, seller, rsDate()))]], shipmentId, (x) => Number(tag(x, 'STATUS')) >= 0 && Number(tag(x, 'ID')) > 0)
+  async saveWaybill(c: RsCreds, seller: { unId: number; userId: number | null }, p: RsWaybillPayload, shipmentId: string | undefined, o: SaveOpts): Promise<number> {
+    const xml = await soap('save_waybill', [...creds(c), ['waybill', new RawXml(waybillXml(p, seller, o))]], shipmentId, (x) => Number(tag(x, 'STATUS')) >= 0 && Number(tag(x, 'ID')) > 0)
     const status = Number(tag(xml, 'STATUS'))
     const id = Number(tag(xml, 'ID'))
     if (status < 0 || !(id > 0)) {
@@ -343,12 +418,14 @@ const live = {
    * transport start to now; plain send_waybill would keep the time of save_waybill, which is wrong
    * when activation is retried later. An already active waybill answers -1 (see activate in logic.ts).
    */
-  async sendWaybill(c: RsCreds, waybillId: number, shipmentId: string): Promise<string> {
+  async sendWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, begin?: Date): Promise<string> {
     const send = async (op: 'send_waybil_vd' | 'send_waybill', extra: Param[]) =>
       tag(await soap(op, [...creds(c), ...extra, ['waybill_id', waybillId]], shipmentId, (x) => /^[^-]/.test(tag(x, `${op}Result`))), `${op}Result`)
-    let number = await send('send_waybil_vd', [['begin_date', rsDate()]])
+    // A planned start still ahead is kept; one already passed (a late activation) becomes now.
+    const start = begin && begin.getTime() > Date.now() ? begin : new Date()
+    let number = await send('send_waybil_vd', [['begin_date', rsDate(start)]])
     // -1034: start before the waybill's creation time (our clock behind RS.ge's) → let RS.ge pick it.
-    if (number === '-1034') number = await send('send_waybill', [])
+    if (number === '-1034' && start.getTime() - Date.now() < 60_000) number = await send('send_waybill', [])
     if (!number || /^-\d+$/.test(number)) throw rsError(await describe(Number(number) || -1, c))
     return number
   },
@@ -372,7 +449,7 @@ const live = {
   },
 
   /** One waybill as RS.ge has it now. */
-  async getWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, via?: 'sync' | 'page'): Promise<RsRemoteWaybill> {
+  async getWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, via?: IntegrationLog['readBack']): Promise<RsRemoteWaybill> {
     const xml = await soap('get_waybill', [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => /<WAYBILL[\s>]/.test(x), via)
     const [b] = blocks(xml, 'WAYBILL')
     // Errors come back as <RESULT><STATUS>-101</STATUS>…</RESULT>.
@@ -420,9 +497,63 @@ const live = {
   },
 
   /** close_waybill / ref_waybill / del_waybill return 1 on success, 0 or a negative code otherwise. */
-  async finish(op: 'close_waybill' | 'ref_waybill' | 'del_waybill', c: RsCreds, waybillId: number, shipmentId: string) {
+  async finish(op: 'close_waybill' | 'ref_waybill' | 'del_waybill', c: RsCreds, waybillId: number, shipmentId: string | undefined) {
     const r = Number(tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
     if (r !== 1) throw rsError(await describe(r || -1, c, op))
+  },
+
+  /** Completes the waybill with the date the goods were delivered (close_waybill_vd). */
+  async closeOn(c: RsCreds, waybillId: number, delivered: Date, shipmentId: string | undefined) {
+    const op = 'close_waybill_vd'
+    const r = Number(tag(await soap(op, [...creds(c), ['delivery_date', rsDate(delivered)], ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
+    // -1 here is usually a delivery date before the start of transport (-1018) or in the future (-1017).
+    if (r === -1) throw rsError('RS.ge-მ ზედნადები არ დაასრულა — მიწოდების თარიღი უნდა იყოს ტრანსპორტირების დაწყების შემდეგ და არა მომავალში (კოდი -1)')
+    if (r !== 1) throw rsError(await describe(r || -1, c, op))
+  },
+
+  /** Writes a tax invoice (ანგარიშ-ფაქტურა) from the waybill (save_invoice) and returns its ID. */
+  async saveInvoice(c: RsCreds, waybillId: number, shipmentId: string | undefined): Promise<number> {
+    const xml = await soap('save_invoice', [...creds(c), ['waybill_id', waybillId], ['in_inv_id', 0]], shipmentId, (x) => tag(x, 'save_invoiceResult') === '1')
+    const r = Number(tag(xml, 'save_invoiceResult'))
+    const inv = Number(tag(xml, 'out_inv_id'))
+    if (r !== 1 || !(inv > 0)) {
+      // -3009: RS.ge's answer when the waybill already has an invoice (or can't have one).
+      if (r === -3009) throw rsError('RS.ge-მ ანგარიშ-ფაქტურა არ გამოწერა — ამ ზედნადებზე ის უკვე გამოწერილია, ან ზედნადები არ არის აქტიური (კოდი -3009)', true)
+      throw rsError(await describe(r || -1, c), true)
+    }
+    return inv
+  },
+
+  /** The buyer's answer to a received waybill: მივიღე (confirm_waybill) or არ ვეთანხმები (reject_waybill). */
+  async answer(c: RsCreds, waybillId: number, accept: boolean) {
+    const op = accept ? 'confirm_waybill' : 'reject_waybill'
+    const ok = tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], undefined, (x) => tag(x, `${op}Result`) === 'true'), `${op}Result`) === 'true'
+    if (!ok) throw rsError(accept ? 'RS.ge-მ ზედნადები არ დაადასტურა' : 'RS.ge-მ ზედნადები არ უარყო')
+  },
+
+  /**
+   * Waybills created between `from` and `to` (at most 72 hours, code -1064): issued (get_waybills) or
+   * received (get_buyer_waybills). Dates left out are sent as missing elements: RS.ge refuses empty ones.
+   */
+  async list(c: RsCreds, side: 'issued' | 'received', from: Date, to: Date, own: { tin: string; name: string }): Promise<RsListWaybill[]> {
+    const op = side === 'issued' ? 'get_waybills' : 'get_buyer_waybills'
+    const params: Param[] = [
+      ...creds(c),
+      ['itypes', ''],
+      [side === 'issued' ? 'buyer_tin' : 'seller_tin', ''],
+      ['statuses', ''],
+      ['car_number', ''],
+      ['create_date_s', rsDate(from)],
+      ['create_date_e', rsDate(to)],
+      ['driver_tin', ''],
+      ['waybill_number', ''],
+      ['s_user_ids', ''],
+      ['comment', ''],
+    ]
+    const xml = await soap(op, params, undefined, (x) => !/^-\d+$/.test(tag(x, `${op}Result`)), 'page')
+    const bare = tag(xml, `${op}Result`)
+    if (/^-\d+$/.test(bare)) throw rsError(await describe(Number(bare), c))
+    return blocks(xml, 'WAYBILL').map((b) => parseListRow(b, own))
   },
 }
 
@@ -453,15 +584,20 @@ async function seller(C: RsCreds) {
 
 /** get_waybills_v1 accepts at most 3 days; a minute less to stay clear of the edge. */
 const WINDOW_MS = 3 * 86400_000 - 60_000
+/** get_waybills / get_buyer_waybills accept at most 72 hours of creation dates (code -1064). */
+const LIST_WINDOW_MS = 72 * 3600_000 - 60_000
 
 export const rsge = {
   check: (c: RsCreds) => live.check(c),
   nameFromTin: (c: RsCreds, tin: string) => live.nameFromTin(c, tin),
 
-  /** Creates the waybill on RS.ge (status: saved) and returns its ID. */
-  async saveWaybill(p: RsWaybillPayload, shipmentId: string): Promise<number> {
+  /**
+   * Saves the waybill on RS.ge and returns its ID: a new one (status: saved), or, with `o.id`, a draft
+   * overwritten or an active waybill corrected.
+   */
+  async saveWaybill(p: RsWaybillPayload, shipmentId: string | undefined, o: SaveOpts = { beginDate: rsDate() }): Promise<number> {
     const c = activeCreds()
-    return live.saveWaybill(c, await seller(c), p, shipmentId)
+    return live.saveWaybill(c, await seller(c), p, shipmentId, o)
   },
 
   /**
@@ -477,20 +613,46 @@ export const rsge = {
     return (await live.findByRef(c, ref, from, to, shipmentId)) ?? (await recent)
   },
 
-  /** Activates a saved waybill and returns its number. */
-  sendWaybill: (waybillId: number, shipmentId: string) => live.sendWaybill(activeCreds(), waybillId, shipmentId),
+  /** Activates a saved waybill and returns its number. `begin`: a planned start of transport (up to 3 days ahead). */
+  sendWaybill: (waybillId: number, shipmentId: string | undefined, begin?: Date) => live.sendWaybill(activeCreds(), waybillId, shipmentId, begin),
 
-  /** Completes the waybill (goods delivered). */
-  closeWaybill: (waybillId: number, shipmentId: string) => live.finish('close_waybill', activeCreds(), waybillId, shipmentId),
+  /** Completes the waybill (goods delivered), now or on the date given. */
+  closeWaybill: (waybillId: number, shipmentId: string | undefined, delivered?: Date) =>
+    delivered ? live.closeOn(activeCreds(), waybillId, delivered, shipmentId) : live.finish('close_waybill', activeCreds(), waybillId, shipmentId),
 
   /** Cancels an activated or completed waybill. */
-  cancelWaybill: (waybillId: number, shipmentId: string) => live.finish('ref_waybill', activeCreds(), waybillId, shipmentId),
+  cancelWaybill: (waybillId: number, shipmentId: string | undefined) => live.finish('ref_waybill', activeCreds(), waybillId, shipmentId),
 
   /** Deletes a saved draft (never activated). */
-  deleteWaybill: (waybillId: number, shipmentId: string) => live.finish('del_waybill', activeCreds(), waybillId, shipmentId),
+  deleteWaybill: (waybillId: number, shipmentId: string | undefined) => live.finish('del_waybill', activeCreds(), waybillId, shipmentId),
+
+  /** Writes a tax invoice from an active or completed waybill; returns the invoice ID. */
+  saveInvoice: (waybillId: number, shipmentId: string | undefined) => live.saveInvoice(activeCreds(), waybillId, shipmentId),
+
+  /** The buyer confirms (მივიღე) or rejects (არ ვეთანხმები) a received waybill. */
+  answer: (waybillId: number, accept: boolean) => live.answer(activeCreds(), waybillId, accept),
 
   /** The waybill as RS.ge has it now. `via` tags read-backs in the log; omitted when part of an upload. */
-  getWaybill: (waybillId: number, shipmentId: string, via?: 'sync' | 'page') => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+  getWaybill: (waybillId: number, shipmentId: string | undefined, via?: IntegrationLog['readBack']) => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+
+  /**
+   * Issued or received waybills created between `from` and `to`, read in windows of 72 hours (the RS.ge
+   * limit), newest first. A waybill that falls on a window's edge is listed once.
+   */
+  async list(side: 'issued' | 'received', from: Date, to: Date): Promise<RsListWaybill[]> {
+    const c = activeCreds()
+    const rs = db.get().rs
+    const own = { tin: rs.sellerTin, name: rs.sellerName }
+    const windows: [Date, Date][] = []
+    for (let e = to.getTime(); e > from.getTime(); e -= LIST_WINDOW_MS) windows.push([new Date(Math.max(from.getTime(), e - LIST_WINDOW_MS)), new Date(e)])
+    const out = new Map<number, RsListWaybill>()
+    // A few windows at a time: fast, without flooding RS.ge.
+    for (let i = 0; i < windows.length; i += 3) {
+      const parts = await Promise.all(windows.slice(i, i + 3).map(([a, b]) => live.list(c, side, a, b, own)))
+      for (const w of parts.flat()) out.set(w.id, w)
+    }
+    return [...out.values()].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || b.id - a.id)
+  },
 
   /** The taxpayer's product list on RS.ge. */
   barCodes: () => live.barCodes(activeCreds()),

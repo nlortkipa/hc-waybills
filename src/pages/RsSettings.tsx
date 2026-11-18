@@ -1,5 +1,6 @@
-import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, RefreshCw, Unplug, XCircle } from 'lucide-react'
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { AlertTriangle, CheckCircle2, FileStack, FileText, PlugZap, RefreshCw, Unplug } from 'lucide-react'
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { rsSettings } from '../api'
 import { useDb } from '../api/store'
 import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
@@ -7,6 +8,7 @@ import { useToast } from '../components/toast'
 import { isInternal, RS_TRANS_OTHER, rsMissing } from '../lib/rs'
 import { active, formatDateTime } from '../lib/util'
 import type { RsSettings } from '../types'
+import { LookupLine, TIN_RE, useTinName } from '../components/TinLookup'
 
 type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
 
@@ -31,76 +33,7 @@ const FALLBACK_TRANS = [
   { id: RS_TRANS_OTHER, name: 'სხვა' },
 ]
 
-/** Georgian tax ID: 9 digits (company) or 11 (personal number). */
-const TIN_RE = /^\d{9}$|^\d{11}$/
-
 const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet && !!rs.sellerUnId
-
-/* ------------------------------ Name lookup ------------------------------ */
-
-/** `missing`: a foreign number RS.ge doesn't know — its name is typed by hand. */
-type Lookup = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; name: string } | { state: 'missing' } | { state: 'error'; message: string }
-
-/** Names already looked up in this session, so re-renders and remounts don't ask RS.ge again. */
-const nameCache = new Map<string, string>()
-
-/**
- * Looks the taxpayer's name up on RS.ge as soon as `tin` is complete: a full Georgian number, or
- * any foreign number. A stored name is never trusted: it may have been typed by hand.
- */
-function useTinName(tin: string, enabled: boolean, foreign = false): Lookup {
-  const [res, setRes] = useState<{ key: string; lookup: Lookup }>({ key: '', lookup: { state: 'idle' } })
-  const valid = enabled && (foreign ? tin !== '' : TIN_RE.test(tin))
-  const key = `${foreign}:${tin}`
-  const preset = nameCache.get(tin)
-  useEffect(() => {
-    if (!valid || preset) return
-    let gone = false
-    const t = setTimeout(() => {
-      rsSettings.nameFromTin(tin, foreign).then(
-        ({ name }) => {
-          if (name) nameCache.set(tin, name)
-          if (!gone) setRes({ key, lookup: name ? { state: 'ok', name } : { state: 'missing' } })
-        },
-        (e: Error) => !gone && setRes({ key, lookup: { state: 'error', message: e.message } }),
-      )
-    }, 300)
-    return () => {
-      gone = true
-      clearTimeout(t)
-    }
-  }, [tin, foreign, key, valid, preset])
-  if (!valid) return { state: 'idle' }
-  if (preset) return { state: 'ok', name: preset }
-  return res.key === key ? res.lookup : { state: 'loading' }
-}
-
-function LookupLine({ lookup }: { lookup: Lookup }) {
-  if (lookup.state === 'idle') return null
-  return (
-    <p className="mt-1 ml-1 flex items-center gap-1.5 text-xs">
-      {lookup.state === 'loading' && (
-        <>
-          <Loader2 className="size-3.5 animate-spin text-slate-400" />
-          <span className="text-slate-500">RS.ge-ზე მოწმდება…</span>
-        </>
-      )}
-      {lookup.state === 'missing' && <span className="text-slate-500">RS.ge-ზე ვერ მოიძებნა — დასახელება შეიყვანე ხელით</span>}
-      {lookup.state === 'ok' && (
-        <>
-          <CheckCircle2 className="size-3.5 text-emerald-500" />
-          <span className="text-slate-900">{lookup.name}</span>
-        </>
-      )}
-      {lookup.state === 'error' && (
-        <>
-          <XCircle className="size-3.5 text-rose-500" />
-          <span className="text-rose-600">{lookup.message}</span>
-        </>
-      )}
-    </p>
-  )
-}
 
 /* ------------------------------- Screen ------------------------------- */
 
@@ -112,7 +45,17 @@ export function RsSettings() {
 
   return (
     <>
-      <PageHeader title="RS.ge" subtitle="სერვისის მომხმარებელი, მყიდველი და ზედნადების პარამეტრები. პროდუქტები — ცნობარებში." />
+      <PageHeader
+        title="RS.ge"
+        subtitle="სერვისის მომხმარებელი, მყიდველი და ზედნადების პარამეტრები. პროდუქტები — ცნობარებში."
+        actions={
+          connected && (
+            <Link to="/waybills" className="pressable inline-flex h-8 items-center gap-1.5 rounded-full bg-fill px-3.5 text-[13px] font-semibold text-brand-600">
+              <FileStack className="size-3.5" /> ზედნადებები RS.ge-ზე
+            </Link>
+          )
+        }
+      />
       <div className="space-y-4">
         {missing.length > 0 ? (
           <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">

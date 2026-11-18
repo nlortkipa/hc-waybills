@@ -1,4 +1,4 @@
-import type { RsSettings, Shipment } from '../types.ts'
+import type { CarrierRoute, RsSettings, Shipment, ShipmentWaybill, WaybillType } from '../types.ts'
 
 /** Plate number compared the way RS.ge stores it: AA-123-BB = AA123BB. */
 export const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
@@ -77,3 +77,47 @@ export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[]
   if (rs.transId === RS_TRANS_OTHER && !rs.transTxt) out.push('ტრანსპორტის ტიპის დასახელება')
   return out
 }
+
+/** Waybill types this app writes, as the RS.ge portal names them. */
+export const WAYBILL_TYPES: { value: WaybillType; label: string; hint: string }[] = [
+  { value: 1, label: 'შიდა გადაზიდვა', hint: 'კომპანიის ობიექტებს შორის — მყიდველი თავად გამყიდველია' },
+  { value: 2, label: 'მიწოდება ტრანსპორტირებით', hint: 'ტვირთი მიდის მყიდველთან' },
+  { value: 3, label: 'ტრანსპორტირების გარეშე', hint: 'მყიდველი ტვირთს ადგილზე იბარებს — მძღოლი და მანქანა არ არის საჭირო' },
+  { value: 5, label: 'უკან დაბრუნება', hint: 'საქონლის დაბრუნება მყიდველისგან' },
+]
+
+/** Label of any RS.ge waybill type, also the ones this app doesn't write. */
+export const waybillTypeLabel = (t?: number) =>
+  WAYBILL_TYPES.find((x) => x.value === t)?.label ?? ({ 4: 'დისტრიბუცია', 6: 'ქვე-ზედნადები' } as Record<number, string>)[t ?? 0] ?? (t ? `ტიპი ${t}` : '—')
+
+/** Types with no transport: no driver, truck or end address (RS.ge wants the end = the start). */
+export const noTransport = (t: number) => t === 3
+
+/** RS.ge accepts a start of transport at most this far ahead (code -1038). */
+export const MAX_DEFER_MS = 3 * 86400_000
+
+/**
+ * The waybill a new shipment on this route starts with: the route's type and buyer, else the
+ * settings' (no buyer → შიდა გადაზიდვა). Transport details come from the settings.
+ */
+export function waybillDefaults(rs: RsSettings, route?: Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>): ShipmentWaybill {
+  const own = !!route?.buyerTin
+  const buyer = own ? { buyerTin: route!.buyerTin!, buyerName: route!.buyerName ?? '', buyerForeign: !!route!.buyerForeign } : { buyerTin: rs.buyerTin, buyerName: rs.buyerName, buyerForeign: rs.buyerForeign }
+  const internal = isInternal({ buyerTin: buyer.buyerTin, sellerTin: rs.sellerTin })
+  const type: WaybillType = route?.waybillType ?? (internal ? 1 : 2)
+  return {
+    type,
+    ...(type === 1 ? { buyerTin: '', buyerName: '', buyerForeign: false } : buyer),
+    transportCost: rs.transportCost,
+    tranCostPayer: rs.tranCostPayer,
+    receptionInfo: rs.receptionInfo,
+    receiverInfo: rs.receiverInfo,
+    comment: rs.comment,
+  }
+}
+
+/** A shipment's waybill options; shipments from before they were kept get them from the settings. */
+export const shipmentWaybill = (s: Pick<Shipment, 'waybill'>, rs: RsSettings, route?: CarrierRoute): ShipmentWaybill => s.waybill ?? waybillDefaults(rs, route)
+
+/** Whether a shipment can still be changed: not while uploading, not once completed, cancelled or invoiced. */
+export const editable = (s: Pick<Shipment, 'waybillState' | 'invoiceId' | 'status'>) => !s.waybillState && !s.invoiceId && (s.status === 'rs_failed' || s.status === 'saved' || s.status === 'uploaded')

@@ -103,3 +103,13 @@ export function downloadCsv(filename: string, rows: (string | number)[][]) {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+/** An instant as a `datetime-local` value (`YYYY-MM-DDTHH:MM`) in Georgian time. */
+export const toTbilisiInput = (d: Date | string = new Date()) => tbilisi(d).toISOString().slice(0, 16)
+
+/** A `datetime-local` value read as Georgian time, as ISO (UTC); '' when empty or invalid. */
+export function fromTbilisiInput(v: string): string {
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v)) return ''
+  const t = Date.parse(`${v}:00+04:00`)
+  return Number.isFinite(t) ? new Date(t).toISOString() : ''
+}

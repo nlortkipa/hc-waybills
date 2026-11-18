@@ -1,32 +1,35 @@
-import { ArrowLeft, Ban, CheckCheck, Copy, FileText, MessageSquare, RefreshCw, RotateCw } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, CopyPlus, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RefreshCw, RotateCw, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { Badge, Button, Card, ConfirmModal, EmptyState, StatusBadge, StepIcon } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, Segmented, ShipmentBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
-import { cx, formatDateTime, formatNumber } from '../lib/util'
+import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { plateKey, RS_STATUS } from '../lib/rs'
+import { editable, MAX_DEFER_MS, plateKey, RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { StepStatus } from '../types'
+
+type Dialog = null | 'activate' | 'close' | 'cancel' | 'delete' | 'invoice'
 
 export function ShipmentDetail() {
   const { id } = useParams()
   const user = useUser()
   const d = useDb()
   const L = useLookup()
+  const nav = useNavigate()
   const toast = useToast()
   const s = d.shipments.find((x) => x.id === id)
-  const [confirm, setConfirm] = useState<'close' | 'cancel' | null>(null)
+  const [dialog, setDialog] = useState<Dialog>(null)
   const [busy, setBusy] = useState(false)
   const [rsReading, setRsReading] = useState(false)
   const [rsError, setRsError] = useState('')
 
-  // Opening an uploaded shipment reads its waybill from RS.ge, so changes made on the rs.ge portal show here.
-  const readable = !!s && s.status === 'uploaded' && !!s.rsWaybillId
+  // Opening a shipment on RS.ge reads its waybill from there, so changes made on the rs.ge portal show here.
+  const readable = !!s && (s.status === 'uploaded' || s.status === 'saved') && !!s.rsWaybillId
   useEffect(() => {
     if (!readable || !id) return
     let current = true
@@ -66,17 +69,19 @@ export function ShipmentDetail() {
   const truck = L.truck(s.truckId)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
-  const onRs = canAct && s.status === 'uploaded' && !!s.rsWaybillId
-  const canClose = onRs && !s.waybillState
-  // RS.ge also cancels a completed waybill.
-  const canCancel = onRs && s.waybillState !== 'cancelled'
+  const live = !s.waybillState
+  const isDraft = s.status === 'saved' && live && !!s.rsWaybillId
+  const isActive = s.status === 'uploaded' && live && !!s.rsWaybillId
+  const onRs = s.status === 'uploaded' && !!s.rsWaybillId
+  const type = s.rsRemote?.type ?? s.rsWaybill?.type ?? s.waybill?.type
+  const begin = s.rsRemote?.beginAt ?? s.waybill?.beginAt
+  const started = !begin || Date.parse(begin) <= Date.now()
+  const canInvoice = canAct && onRs && s.waybillState !== 'cancelled' && type !== 1 && !s.invoiceId
   const w = s.rsWaybill
-  const good = w?.goods[0]
   const sentAmount = w ? w.goods.reduce((a, g) => a + g.amount, 0) : 0
   const r = s.rsRemote
-  const rGood = r?.goods[0]
   // The quantity's unit, when every goods line has the same one.
-  const rUnit = r && new Set(r.goods.map((g) => g.unitTxt)).size === 1 ? rGood?.unitTxt : undefined
+  const rUnit = r && new Set(r.goods.map((g) => g.unitTxt)).size === 1 ? r.goods[0]?.unitTxt : undefined
   const qtyText = (n: number, unit?: string) => `${formatNumber(n, 3)}${unit ? ` ${unit}` : ''}`
   const rStatus = r && (RS_STATUS[r.status] ?? { label: String(r.status), tone: 'gray' as const })
   // 'ok' only means smsoffice.ge accepted it; delivery says whether the phone got it.
@@ -90,13 +95,12 @@ export function ShipmentDetail() {
           : { label: 'გაგზავნილია', tone: 'green' as const }
         : { label: 'იგზავნება', tone: 'blue' as const }
 
-  const finish = async () => {
-    if (!confirm) return
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true)
     try {
-      await shipments.finish(s.id, confirm)
-      toast('success', confirm === 'close' ? 'ზედნადები დასრულდა' : 'ზედნადები გაუქმდა')
-      setConfirm(null)
+      await fn()
+      toast('success', ok)
+      setDialog(null)
     } catch (e) {
       toast('error', (e as Error).message)
     } finally {
@@ -104,12 +108,26 @@ export function ShipmentDetail() {
     }
   }
 
+  const rsDetail =
+    s.status === 'saved'
+      ? s.waybillState === 'cancelled'
+        ? 'RS.ge-ზე შენახული ზედნადები წაიშალა'
+        : `შენახულია RS.ge-ზე (ID ${s.rsWaybillId}) — გასააქტიურებელია`
+      : s.rs.status === 'ok'
+        ? (
+            <>
+              ზედნადები <b className="font-mono">№{s.waybillNumber}</b>
+              {begin && Date.parse(begin) > Date.now() && <> · ტრანსპორტირება იწყება {formatDateTime(begin)}</>}
+            </>
+          )
+        : (s.rs.error ?? (s.rs.status === 'running' ? 'იტვირთება…' : 'მოლოდინში'))
+
   const steps: { title: string; icon: ReactNode; status: StepStatus; detail: ReactNode; action?: ReactNode }[] = [
     {
-      title: 'ზედნადების ატვირთვა RS.ge-ზე',
+      title: s.draft || s.status === 'saved' ? 'ზედნადების შენახვა RS.ge-ზე' : 'ზედნადების ატვირთვა RS.ge-ზე',
       icon: <FileText className="size-4" />,
-      status: s.rs.status,
-      detail: s.rs.status === 'ok' ? <>ზედნადები <b className="font-mono">№{s.waybillNumber}</b></> : s.rs.error ?? (s.rs.status === 'running' ? 'იტვირთება…' : 'მოლოდინში'),
+      status: s.status === 'saved' && live ? 'ok' : s.rs.status,
+      detail: rsDetail,
       action: canAct && s.status === 'rs_failed' && (
         <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.run(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა ცდა
@@ -123,7 +141,14 @@ export function ShipmentDetail() {
       detail:
         s.sms.status === 'ok'
           ? `გაეგზავნა ${s.sms.to}${s.sms.delivery && s.sms.delivery !== 'Pending' ? ` · ${SMS_DELIVERY[s.sms.delivery].label.toLowerCase()}` : ''}`
-          : s.sms.error ?? (s.sms.status === 'running' ? 'იგზავნება…' : s.sms.status === 'skipped' ? 'გამოტოვებულია' : 'მოლოდინში'),
+          : (s.sms.error ??
+            (s.sms.status === 'running'
+              ? 'იგზავნება…'
+              : s.sms.status === 'skipped'
+                ? 'ტრანსპორტირების გარეშე — მძღოლი არ არის'
+                : s.status === 'saved'
+                  ? 'გაიგზავნება გააქტიურებისას'
+                  : 'მოლოდინში')),
       action: canAct && (s.sms.status === 'failed' || smsLost) && (
         <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.retrySms(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა გაგზავნა
@@ -131,6 +156,9 @@ export function ShipmentDetail() {
       ),
     },
   ]
+
+  const printable = (s.status === 'uploaded' || isDraft) && !!s.rsWaybillId
+  const title = s.waybillNumber ? `№ ${s.waybillNumber}` : s.status === 'saved' ? 'შენახული ზედნადები' : 'ზედნადები მოლოდინშია'
 
   return (
     <>
@@ -141,38 +169,68 @@ export function ShipmentDetail() {
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-mono text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{s.waybillNumber ? `№ ${s.waybillNumber}` : 'ზედნადები მოლოდინშია'}</h1>
-            <StatusBadge status={s.status} />
-            {s.waybillState === 'closed' && <Badge tone="gray">დასრულებული</Badge>}
-            {s.waybillState === 'cancelled' && <Badge tone="red">გაუქმებული</Badge>}
+            <h1 className="font-mono text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{title}</h1>
+            <ShipmentBadge s={s} />
+            {type && <Badge tone="gray">{waybillTypeLabel(type)}</Badge>}
+            {s.invoiceId && <Badge tone="blue">ფაქტურა №{s.invoiceId}</Badge>}
           </div>
           <p className="mt-1 text-sm text-slate-500">
             შექმნა {creator ? `${creator.firstName} ${creator.lastName}` : '—'} · {formatDateTime(s.createdAt)} · {x.carrier}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-        {canClose && (
-          <Button variant="secondary" size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setConfirm('close')}>
-            დასრულება
-          </Button>
-        )}
-        {canCancel && (
-          <Button variant="secondary" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setConfirm('cancel')}>
-            გაუქმება
-          </Button>
-        )}
-        {s.waybillNumber && (
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Copy className="size-3.5" />}
-            onClick={() => {
-              navigator.clipboard?.writeText(s.waybillNumber!).then(() => toast('success', 'ზედნადების ნომერი დაკოპირდა'), () => {})
-            }}
-          >
-            № კოპირება
-          </Button>
-        )}
+          {canAct && isDraft && (
+            <Button size="sm" icon={<Play className="size-3.5" />} onClick={() => setDialog('activate')}>
+              გააქტიურება
+            </Button>
+          )}
+          {canAct && isActive && (
+            <Button size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setDialog('close')}>
+              დასრულება
+            </Button>
+          )}
+          {canAct && editable(s) && (
+            <Button variant="secondary" size="sm" icon={<PencilLine className="size-3.5" />} onClick={() => nav(`/shipments/${s.id}/edit`)}>
+              {isActive ? 'კორექტირება' : 'რედაქტირება'}
+            </Button>
+          )}
+          {canInvoice && (
+            <Button variant="secondary" size="sm" icon={<ReceiptText className="size-3.5" />} onClick={() => setDialog('invoice')}>
+              ანგარიშ-ფაქტურა
+            </Button>
+          )}
+          {printable && (
+            <Button variant="secondary" size="sm" icon={<Printer className="size-3.5" />} onClick={() => window.open(`#/print/${s.rsWaybillId}`, '_blank')}>
+              ბეჭდვა
+            </Button>
+          )}
+          {s.waybillNumber && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Copy className="size-3.5" />}
+              onClick={() => {
+                navigator.clipboard?.writeText(s.waybillNumber!).then(() => toast('success', 'ზედნადების ნომერი დაკოპირდა'), () => {})
+              }}
+            >
+              №
+            </Button>
+          )}
+          {canAct && (
+            <Button variant="secondary" size="sm" icon={<CopyPlus className="size-3.5" />} onClick={() => nav(`/new?from=${s.id}`)} title="ახალი რეისი იგივე მონაცემებით">
+              ასლი
+            </Button>
+          )}
+          {canAct && isDraft && (
+            <Button variant="ghost" size="sm" icon={<Trash2 className="size-3.5" />} onClick={() => setDialog('delete')} className="text-rose-600">
+              წაშლა
+            </Button>
+          )}
+          {canAct && onRs && s.waybillState !== 'cancelled' && !s.invoiceId && (
+            <Button variant="ghost" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')} className="text-rose-600">
+              გაუქმება
+            </Button>
+          )}
         </div>
       </div>
 
@@ -200,38 +258,15 @@ export function ShipmentDetail() {
               ))}
             </ol>
           </Card>
-        </div>
-
-        <div className="space-y-6">
-          <Card className="p-5">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">დეტალები</h2>
-            <dl className="divide-y divide-separator text-sm">
-              <Info k="კარიერი" v={x.carrier} />
-              <Info k="მარშრუტი" v={x.route} />
-              <Info k="მძღოლი" v={x.driver} />
-              <Info k="პირადი ნომერი" v={driver?.personalId} mono />
-              <Info k="ტელეფონი" v={driver?.phone} />
-              <Info k="მანქანა" v={truck?.model} />
-              <Info k="სახელმწიფო ნომერი" v={truck?.plateNumber} mono />
-              <Info k="მისაბმელი" v={truck?.trailerNumber || undefined} mono />
-              {s.items.map((i, k) => (
-                <Info
-                  key={k}
-                  k={i.name || 'პროდუქტი'}
-                  sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
-                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
-                />
-              ))}
-              {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}
-            </dl>
-          </Card>
 
           {(w || r) && (
-            <Card className="p-5">
+            <Card className="p-5 sm:p-6">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
                 <div className="flex items-center gap-1.5">
                   {rStatus && <Badge tone={rStatus.tone}>{rStatus.label}</Badge>}
+                  {r?.confirmed === 1 && <Badge tone="green">მყიდველმა დაადასტურა</Badge>}
+                  {r?.confirmed === -1 && <Badge tone="red">მყიდველი არ ეთანხმება</Badge>}
                   {readable && (
                     <button
                       type="button"
@@ -246,36 +281,79 @@ export function ShipmentDetail() {
                   )}
                 </div>
               </div>
-              {r ? (
-                <dl className="divide-y divide-separator text-sm">
-                  <Info k="მყიდველი" v={r.buyerName} />
-                  <Info k="მყიდველის ს/ნ" v={r.buyerTin} mono />
-                  <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
-                  <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
-                  <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
-                  {r.goods.length > 1 && r.goods.map((g, k) => <Info key={k} k={g.name || 'პროდუქტი'} sub={g.barCode} v={qtyText(g.quantity, g.unitTxt)} />)}
-                  <Info k={r.goods.length > 1 ? 'სულ' : 'რაოდენობა'} v={qtyText(r.quantity, rUnit)} changed={r.quantity !== s.quantity} />
-                  {rGood && r.goods.length === 1 && <Info k="ფასი" v={`${rGood.price.toFixed(2)} ₾`} />}
-                  <Info k="თანხა" v={`${r.fullAmount.toFixed(2)} ₾`} changed={!!w && Math.abs(r.fullAmount - sentAmount) >= 0.005} />
-                  {r.activatedAt && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
-                  {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
-                  {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
-                  {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
-                  {r.comment && <Info k="კომენტარი" v={r.comment} />}
-                  {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
-                </dl>
-              ) : (
-                w && (
-                  <dl className="divide-y divide-separator text-sm">
-                    <Info k="მყიდველი" v={w.buyerName} />
-                    <Info k="მყიდველის ს/ნ" v={w.buyerTin} mono />
-                    {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
-                    <Info k="თანხა" v={good && `${sentAmount.toFixed(2)} ₾`} />
-                    {w.comment && <Info k="კომენტარი" v={w.comment} />}
-                    {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
-                  </dl>
-                )
-              )}
+              {/* Goods as RS.ge has them (else as sent). */}
+              <div className="-mx-1 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-500">
+                      <th className="px-1 py-1.5 font-medium">საქონელი</th>
+                      <th className="px-1 py-1.5 text-right font-medium">რაოდ.</th>
+                      <th className="px-1 py-1.5 text-right font-medium">ფასი</th>
+                      <th className="px-1 py-1.5 text-right font-medium">თანხა</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-separator">
+                    {(r?.goods ?? w?.goods ?? []).map((g, k) => (
+                      <tr key={k}>
+                        <td className="px-1 py-2">
+                          <p className="text-slate-900">{g.name}</p>
+                          <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
+                        </td>
+                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{qtyText(g.quantity, g.unitTxt)}</td>
+                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.price.toFixed(2)}</td>
+                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.amount.toFixed(2)} ₾</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-separator font-medium text-slate-900">
+                      <td className="px-1 py-2">სულ</td>
+                      <td className="px-1 py-2 text-right tabular-nums">
+                        {qtyText(r?.quantity ?? s.quantity, rUnit)}
+                        {r && r.quantity !== s.quantity && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
+                      </td>
+                      <td />
+                      <td className="px-1 py-2 text-right tabular-nums">
+                        {(r?.fullAmount ?? sentAmount).toFixed(2)} ₾
+                        {r && w && Math.abs(r.fullAmount - sentAmount) >= 0.005 && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              {r?.fullAmountText && <p className="mt-1 text-xs text-slate-500">{r.fullAmountText}</p>}
+              <dl className="mt-3 divide-y divide-separator text-sm">
+                <Info k="მყიდველი" v={(r ?? w)!.buyerName ? `${(r ?? w)!.buyerName} (${(r ?? w)!.buyerTin})` : (r ?? w)!.buyerTin} />
+                {r ? (
+                  <>
+                    <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
+                    {(r.driverTin || r.carNumber) && (
+                      <>
+                        <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
+                        <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
+                      </>
+                    )}
+                    {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${r.transportCost.toFixed(2)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
+                    {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
+                    {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
+                    {r.createdAt && <Info k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
+                    {r.activatedAt && r.status !== 0 && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
+                    {r.beginAt && r.status !== 0 && <Info k="ტრანსპორტირების დაწყება" v={formatDateTime(r.beginAt)} />}
+                    {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
+                    {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
+                    {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
+                    {r.comment && <Info k="კომენტარი" v={r.comment} />}
+                  </>
+                ) : (
+                  w && (
+                    <>
+                      {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
+                      {w.comment && <Info k="კომენტარი" v={w.comment} />}
+                    </>
+                  )
+                )}
+                {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+              </dl>
               {readable && (
                 <p className={cx('mt-3 text-xs', rsError ? 'text-amber-700' : 'text-slate-400')}>
                   {rsError
@@ -287,6 +365,42 @@ export function ShipmentDetail() {
               )}
             </Card>
           )}
+
+        </div>
+
+        <div className="space-y-6">
+          <Card className="p-5">
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">დეტალები</h2>
+            <dl className="divide-y divide-separator text-sm">
+              <Info k="კარიერი" v={x.carrier} />
+              <Info k="მარშრუტი" v={x.route} />
+              {driver ? (
+                <>
+                  <Info k="მძღოლი" v={x.driver} />
+                  <Info k="პირადი ნომერი" v={driver.personalId} mono />
+                  <Info k="ტელეფონი" v={driver.phone} />
+                </>
+              ) : (
+                <Info k="ტრანსპორტირება" v="გარეშე" />
+              )}
+              {truck && (
+                <>
+                  <Info k="მანქანა" v={truck.model} />
+                  <Info k="სახელმწიფო ნომერი" v={truck.plateNumber} mono />
+                  <Info k="მისაბმელი" v={truck.trailerNumber || undefined} mono />
+                </>
+              )}
+              {s.items.map((i, k) => (
+                <Info
+                  key={k}
+                  k={i.name || 'პროდუქტი'}
+                  sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
+                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
+                />
+              ))}
+              {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}
+            </dl>
+          </Card>
 
           {s.sms.text && (
             <Card className="p-5">
@@ -301,20 +415,144 @@ export function ShipmentDetail() {
         </div>
       </div>
 
+      <ActivateModal open={dialog === 'activate'} busy={busy} onClose={() => setDialog(null)} onConfirm={(beginAt) => void run(() => shipments.activate(s.id, beginAt), 'ზედნადები იტვირთება RS.ge-ზე…')} />
+      <CloseModal open={dialog === 'close'} busy={busy} number={s.waybillNumber} begin={begin} onClose={() => setDialog(null)} onConfirm={(at) => void run(() => shipments.finish(s.id, 'close', at), 'ზედნადები დასრულდა')} />
       <ConfirmModal
-        open={!!confirm}
-        onClose={() => setConfirm(null)}
-        onConfirm={() => void finish()}
+        open={dialog === 'cancel'}
+        onClose={() => setDialog(null)}
+        onConfirm={() => void run(() => shipments.finish(s.id, 'cancel'), 'ზედნადები გაუქმდა')}
         busy={busy}
-        title={confirm === 'close' ? 'დასრულდეს ზედნადები?' : 'გაუქმდეს ზედნადები?'}
-        confirmLabel={confirm === 'close' ? 'დასრულება' : 'გაუქმება'}
-        message={
-          confirm === 'close'
-            ? `ზედნადები №${s.waybillNumber} RS.ge-ზე მოინიშნება მიწოდებულად. ამის შემდეგ მისი შეცვლა აღარ იქნება შესაძლებელი.`
-            : `ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება${s.waybillState === 'closed' ? ', მიუხედავად იმისა, რომ დასრულებულია' : ''}. ეს მოქმედება შეუქცევადია.`
-        }
+        title="გაუქმდეს ზედნადები?"
+        confirmLabel="გაუქმება"
+        message={`ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება${s.waybillState === 'closed' ? ', მიუხედავად იმისა, რომ დასრულებულია' : ''}. ეს მოქმედება შეუქცევადია.`}
       />
+      <ConfirmModal
+        open={dialog === 'delete'}
+        onClose={() => setDialog(null)}
+        onConfirm={() => void run(() => shipments.finish(s.id, 'delete'), 'შენახული ზედნადები წაიშალა')}
+        busy={busy}
+        title="წაიშალოს შენახული ზედნადები?"
+        confirmLabel="წაშლა"
+        message="ზედნადები ჯერ არ არის გააქტიურებული და RS.ge-დან წაიშლება. რეისი დარჩება ისტორიაში."
+      />
+      <Modal
+        open={dialog === 'invoice'}
+        onClose={() => setDialog(null)}
+        title="ანგარიშ-ფაქტურის გამოწერა"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDialog(null)}>
+              გაუქმება
+            </Button>
+            <Button loading={busy} disabled={!started} icon={<ReceiptText className="size-4" />} onClick={() => void run(() => shipments.invoice(s.id), 'ანგარიშ-ფაქტურა გამოიწერა')}>
+              გამოწერა
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-2 text-sm text-slate-600">
+          <p>RS.ge-ზე ზედნადებიდან №{s.waybillNumber} გამოიწერება საგადასახადო ანგარიშ-ფაქტურა მყიდველზე.</p>
+          <p className="rounded-lg bg-amber-50 p-2 text-amber-800">ფაქტურაზე მიბმული ზედნადების კორექტირება და გაუქმება RS.ge-ზე აღარ იქნება შესაძლებელი.</p>
+          {!started && <p className="text-rose-600">ფაქტურა გამოიწერება ტრანსპორტირების დაწყების შემდეგ ({formatDateTime(begin)}).</p>}
+        </div>
+      </Modal>
     </>
+  )
+}
+
+/** Activation of a draft: now, or from a planned time up to 3 days ahead. */
+export function ActivateModal({ open, busy, onClose, onConfirm }: { open: boolean; busy: boolean; onClose: () => void; onConfirm: (beginAt?: string) => void }) {
+  const [mode, setMode] = useState<'now' | 'later'>('now')
+  const [at, setAt] = useState(() => toTbilisiInput(new Date(Date.now() + 3600_000)))
+  const iso = fromTbilisiInput(at)
+  const t = Date.parse(iso)
+  const error = mode === 'later' ? (!iso ? 'აირჩიე დრო' : t < Date.now() ? 'დრო უკვე გავიდა' : t > Date.now() + MAX_DEFER_MS - 5 * 60_000 ? 'მაქსიმუმ 3 დღით ადრე' : '') : ''
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="ზედნადების გააქტიურება"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            გაუქმება
+          </Button>
+          <Button loading={busy} disabled={!!error} icon={mode === 'later' ? <CalendarClock className="size-4" /> : <Play className="size-4" />} onClick={() => onConfirm(mode === 'later' ? iso : undefined)}>
+            გააქტიურება
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm text-slate-600">
+        <p>RS.ge ზედნადებს მიანიჭებს ნომერს და ტრანსპორტირება დაიწყება. მძღოლს SMS გაეგზავნება.</p>
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'now', label: 'ახლავე' },
+            { value: 'later', label: 'დაგეგმილი დაწყება' },
+          ]}
+        />
+        {mode === 'later' && (
+          <div>
+            <Input type="datetime-local" value={at} min={toTbilisiInput()} max={toTbilisiInput(new Date(Date.now() + MAX_DEFER_MS - 10 * 60_000))} invalid={!!error} onChange={(e) => setAt(e.target.value)} />
+            <p className={cx('mt-1 ml-1 text-xs', error ? 'text-rose-600' : 'text-slate-500')}>{error || 'საქართველოს დროით · მაქსიმუმ 3 დღით ადრე'}</p>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+/** Completing a waybill: delivered now, or at an earlier time (not before the start of transport). */
+export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { open: boolean; busy: boolean; number?: string; begin?: string; onClose: () => void; onConfirm: (deliveredAt?: string) => void }) {
+  const [mode, setMode] = useState<'now' | 'at'>('now')
+  const [at, setAt] = useState(() => toTbilisiInput())
+  const iso = fromTbilisiInput(at)
+  const t = Date.parse(iso)
+  const notStarted = !!begin && Date.parse(begin) > Date.now()
+  const error =
+    mode === 'at' ? (!iso ? 'აირჩიე დრო' : t > Date.now() + 60_000 ? 'მიწოდება მომავალში ვერ იქნება' : begin && t < Date.parse(begin) ? 'მიწოდება ტრანსპორტირების დაწყებამდე ვერ იქნება' : '') : ''
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="დასრულდეს ზედნადები?"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            გაუქმება
+          </Button>
+          <Button loading={busy} disabled={!!error || notStarted} icon={<CheckCheck className="size-4" />} onClick={() => onConfirm(mode === 'at' ? iso : undefined)}>
+            დასრულება
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm text-slate-600">
+        <p>ზედნადები №{number} RS.ge-ზე მოინიშნება მიწოდებულად. ამის შემდეგ მისი კორექტირება აღარ იქნება შესაძლებელი.</p>
+        {notStarted ? (
+          <p className="text-rose-600">ტრანსპორტირება ჯერ არ დაწყებულა ({formatDateTime(begin)}) — დასრულება შესაძლებელია მის შემდეგ.</p>
+        ) : (
+          <>
+            <Segmented
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: 'now', label: 'მიწოდებულია ახლა' },
+                { value: 'at', label: 'სხვა დრო' },
+              ]}
+            />
+            {mode === 'at' && (
+              <div>
+                <Input type="datetime-local" value={at} min={begin ? toTbilisiInput(begin) : undefined} max={toTbilisiInput()} invalid={!!error} onChange={(e) => setAt(e.target.value)} />
+                <p className={cx('mt-1 ml-1 text-xs', error ? 'text-rose-600' : 'text-slate-500')}>{error || 'მიწოდების დრო, საქართველოს დროით'}</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Modal>
   )
 }
 

@@ -2,13 +2,13 @@
  * Business rules. Every check that used to run in the browser runs here now, so a
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
-import { canUseCarrier, resolveRoute, routeUsable } from '../src/lib/route.ts'
-import { isInternal, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits } from '../src/lib/rs.ts'
+import { canUseCarrier, resolveRoute, routeText, routeUsable } from '../src/lib/route.ts'
+import { MAX_DEFER_MS, noTransport, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, sameIds, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Driver, Product, RsRemoteWaybill, RsSettings, RsWaybillPayload, RouteGood, Shipment, ShipmentEvent, ShipmentItem, SmsDelivery, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Driver, Product, RsListWaybill, RsRemoteWaybill, RsSettings, RsWaybillPayload, RouteGood, Shipment, ShipmentEvent, ShipmentItem, ShipmentWaybill, SmsDelivery, User, WaybillType } from '../src/types.ts'
 import { IntegrationError } from './integrations.ts'
-import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
+import { resetRsCache, rsDate, rsge, storedCreds, type RsCreds, type XmlGood } from './rsge.ts'
 import { newReference, SENDER_RE, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
@@ -186,9 +186,18 @@ export const refs = {
     if (col === 'routes') {
       const r = rec as CarrierRoute
       const d = db.get()
+      const was = prev as CarrierRoute | undefined
       // Only these fields are kept.
-      Object.assign(r, { carrierId: str(r.carrierId), endAddress: str(r.endAddress).trim(), scaleId: str(r.scaleId).trim(), goods: parseRouteGoods(r.goods, prev as CarrierRoute | undefined) })
-      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'goods'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
+      Object.assign(r, {
+        carrierId: str(r.carrierId),
+        endAddress: str(r.endAddress).trim(),
+        scaleId: str(r.scaleId).trim(),
+        goods: parseRouteGoods(r.goods, was),
+        ...(await routeWaybill(r, was)),
+      })
+      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'goods', 'waybillType', 'buyerTin', 'buyerName', 'buyerForeign'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
+      if (r.waybillType == null) delete r.waybillType
+      if (!r.buyerTin) for (const k of ['buyerTin', 'buyerName', 'buyerForeign'] as const) delete r[k]
       const carrier = d.carriers.find((c) => c.id === r.carrierId)
       if (!carrier || carrier.deletedAt) fail('აირჩიე კარიერი')
       if (!r.endAddress) fail('შეიყვანე დასრულების მისამართი')
@@ -222,6 +231,25 @@ export const refs = {
     if (col === 'carriers') dropCarrierRoutes(id)
     if (col === 'users') db.sessions.deleteForUser(id)
   },
+}
+
+/** A waybill type sent by a client: 1, 2, 3 or 5; anything else is undefined. */
+const waybillType = (v: unknown): WaybillType | undefined => ([1, 2, 3, 5] as const).find((t) => t === Number(v))
+
+/**
+ * A route's own waybill type and buyer (both optional: missing ones come from the RS.ge settings).
+ * The buyer is looked up on RS.ge like the settings' one. Checked against what RS.ge refuses:
+ * a buyer is needed on every type but შიდა გადაზიდვა (-1004), and may not be the seller (-1047).
+ */
+async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Promise<Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
+  const rs = db.get().rs
+  const type = str(r.waybillType) ? (waybillType(r.waybillType) ?? fail('აირჩიე ზედნადების ტიპი')) : undefined
+  const tin = type === 1 ? '' : str(r.buyerTin)
+  if (tin && rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
+  const buyer = tin ? await resolveBuyer(tin, str(r.buyerName), { buyerTin: prev?.buyerTin ?? '', buyerName: prev?.buyerName ?? '', buyerForeign: !!prev?.buyerForeign }) : { buyerTin: '', buyerName: '', buyerForeign: false }
+  const effective = waybillDefaults(rs, { waybillType: type, ...buyer })
+  if (effective.type !== 1 && !effective.buyerTin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება — ჩაწერე აქ ან RS.ge-ს პარამეტრებში')
+  return { waybillType: type, ...buyer }
 }
 
 /* ------------------------------ Products ------------------------------ */
@@ -409,7 +437,9 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
  * The buyer as it is stored: RS.ge's name when it knows the number, else the typed one (required).
  * If RS.ge can't be asked, an unchanged number keeps what was saved, so other settings still save.
  */
-async function resolveBuyer(tin: string, typedName: string, prev: RsSettings): Promise<Pick<RsSettings, 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
+type Buyer = Pick<RsSettings, 'buyerTin' | 'buyerName' | 'buyerForeign'>
+
+async function resolveBuyer(tin: string, typedName: string, prev: Buyer): Promise<Buyer> {
   if (!tin) return { buyerTin: '', buyerName: '', buyerForeign: false }
   if (tin.length > 50) fail('მყიდველის ნომერი ძალიან გრძელია')
   let rsKnown: string
@@ -485,7 +515,8 @@ export async function disconnectRs(user: User) {
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
 export async function rsNameFromTin(body: { tin?: string; foreign?: boolean } | undefined, user: User) {
-  requireAdmin(user)
+  // Operators pick a shipment's buyer too.
+  if (user.role === 'report') fail('მოქმედება ხელმისაწვდომი არ არის', 403)
   const tin = str(body?.tin)
   // A foreign number has no fixed format, and RS.ge not knowing it is an answer, not an error ('').
   if (body?.foreign) return { name: tin && tin.length <= 50 ? await rsName(tin) : fail('არასწორი ნომერი') }
@@ -541,16 +572,21 @@ export async function testSms(body: { phone?: string } | undefined, user: User) 
  */
 const refTag = (shipmentId: string) => `HC:${shipmentId}`
 
+type WaybillSource = Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 'items' | 'waybill'>
+
 /**
- * Builds the waybill for a shipment from the admin's settings and the chosen route, driver, truck and
- * goods lines. Each line is read from the route as it is now, so a retry picks up a fix to it; a line
- * gone from the route is sent as it was when the shipment was made.
+ * Builds the waybill for a shipment from its waybill options (type, buyer, transport details), the
+ * chosen route, driver, truck and goods lines, and the admin's transport settings. Each line is read
+ * from the route as it is now, so a retry picks up a fix to it; a line gone from the route is sent as
+ * it was when the shipment was made.
  */
-function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 'items'>): RsWaybillPayload {
+function buildWaybill(d: Database, s: WaybillSource): RsWaybillPayload {
   const rs = d.rs
   const route = resolveRoute(d, s.routeId)
-  const driver = d.drivers.find((x) => x.id === s.driverId)!
-  const truck = d.trucks.find((x) => x.id === s.truckId)!
+  const w = shipmentWaybill(s, rs, route.route)
+  const driver = d.drivers.find((x) => x.id === s.driverId)
+  const truck = d.trucks.find((x) => x.id === s.truckId)
+  const moving = !noTransport(w.type)
   const goods = s.items.map((i) => {
     // The route's line as it is now (a fix the admin made after a refusal applies), else the item's snapshot.
     const g = (i.lineId && route.route?.goods.find((x) => x.id === i.lineId)) || i
@@ -568,27 +604,26 @@ function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'routeId' | 'driverI
     }
   })
   return {
-    // No buyer: შიდა გადაზიდვა, the goods move between the company's own sites and the buyer is the
-    // seller (with any other type RS.ge refuses buyer = seller: -1047). Otherwise მიწოდება ტრანსპორტირებით.
-    ...(isInternal(rs)
-      ? { type: 1, buyerTin: rs.sellerTin, buyerForeign: false, buyerName: rs.sellerName }
-      : { type: 2, buyerTin: rs.buyerTin, buyerForeign: rs.buyerForeign, buyerName: rs.buyerName }),
+    type: w.type,
+    // შიდა გადაზიდვა: the buyer is the seller (with any other type RS.ge refuses buyer = seller: -1047).
+    ...(w.type === 1 ? { buyerTin: rs.sellerTin, buyerForeign: false, buyerName: rs.sellerName } : { buyerTin: w.buyerTin, buyerForeign: w.buyerForeign, buyerName: w.buyerName }),
     startAddress: route.start,
-    endAddress: route.end,
-    driverTin: driver.personalId.trim(),
-    driverForeign: driver.citizenship === 'foreign',
-    driverName: `${driver.firstName} ${driver.lastName}`,
+    // Without transport RS.ge wants the end to be the start (-1036).
+    endAddress: moving ? route.end : route.start,
+    driverTin: moving && driver ? driver.personalId.trim() : '',
+    driverForeign: moving && driver?.citizenship === 'foreign',
+    driverName: moving && driver ? `${driver.firstName} ${driver.lastName}` : '',
     // RS.ge stores plates without dashes: AA-123-BB → AA123BB.
-    carNumber: truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+    carNumber: moving && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
     transId: rs.transId,
     transTxt: rs.transId === RS_TRANS_OTHER ? rs.transTxt : '',
-    tranCostPayer: rs.tranCostPayer,
-    transportCost: rs.transportCost,
-    transporterTin: rs.transporterTin,
-    receptionInfo: rs.receptionInfo,
-    receiverInfo: rs.receiverInfo,
+    tranCostPayer: w.tranCostPayer,
+    transportCost: moving ? w.transportCost : 0,
+    transporterTin: moving ? rs.transporterTin : '',
+    receptionInfo: w.receptionInfo,
+    receiverInfo: w.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
-    comment: [truck.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, rs.comment, refTag(s.id)].filter(Boolean).join('; '),
+    comment: [moving && truck?.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, w.comment, refTag(s.id)].filter(Boolean).join('; '),
     goods,
   }
 }
@@ -610,10 +645,15 @@ function get(id: string, user?: User) {
   return s
 }
 
+const noReport = (user: User) => user.role === 'report' && fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
+
 const running = new Set<string>()
 
 /** A goods line as the client sends it: one of the route's lines, its quantity and the optional additional quantity. */
 export type NewShipmentItem = { lineId: string; quantity: number; quantityExt?: number }
+
+/** Waybill options as the client sends them; anything left out comes from the route and the settings. */
+export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string | null }
 
 export interface NewShipmentInput {
   carrierId: string
@@ -621,6 +661,9 @@ export interface NewShipmentInput {
   driverId: string
   truckId: string
   items: NewShipmentItem[]
+  waybill?: WaybillInput
+  /** Save on RS.ge without activating. */
+  draft?: boolean
 }
 
 /**
@@ -644,39 +687,180 @@ function parseItems(raw: unknown, route: CarrierRoute): ShipmentItem[] {
   })
 }
 
+const MAX_INFO = 250
+
+/**
+ * A shipment's waybill options: what the client chose, else the route's, else the settings'. The buyer
+ * is looked up on RS.ge (its name wins) unless it is the one already resolved for the route or settings.
+ * `keepBegin`: a correction keeps the start RS.ge already has.
+ */
+async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRoute, prev?: ShipmentWaybill): Promise<ShipmentWaybill> {
+  const rs = db.get().rs
+  const base = prev ?? waybillDefaults(rs, route)
+  const x = raw ?? {}
+  const type = x.type == null ? base.type : (waybillType(x.type) ?? fail('აირჩიე ზედნადების ტიპი'))
+  let buyer: Buyer = { buyerTin: '', buyerName: '', buyerForeign: false }
+  if (type !== 1) {
+    // The route's (or settings') buyer when the type alone was changed and none is typed.
+    const fallback = base.buyerTin ? base : waybillDefaults(rs, { ...route, waybillType: 2 })
+    const tin = x.buyerTin == null ? fallback.buyerTin : str(x.buyerTin)
+    if (!tin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება — ჩაწერე მყიდველის საიდენტიფიკაციო ნომერი')
+    if (tin.length > 50) fail('მყიდველის ნომერი ძალიან გრძელია')
+    if (rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
+    const known = tin === fallback.buyerTin && fallback.buyerName && (!str(x.buyerName) || str(x.buyerName) === fallback.buyerName)
+    buyer = known ? { buyerTin: tin, buyerName: fallback.buyerName, buyerForeign: fallback.buyerForeign } : await resolveBuyer(tin, str(x.buyerName), fallback)
+  }
+  let beginAt: string | undefined
+  if (x.beginAt) {
+    const t = Date.parse(x.beginAt)
+    if (!Number.isFinite(t)) fail('ტრანსპორტირების დაწყების დრო არასწორია')
+    if (t < Date.now() - 5 * 60_000) fail('ტრანსპორტირების დაწყება წარსულში ვერ იქნება')
+    if (t > Date.now() + MAX_DEFER_MS - 5 * 60_000) fail('RS.ge ტრანსპორტირების დაწყებას მაქსიმუმ 3 დღით გადადების საშუალებას იძლევა')
+    // Within a couple of minutes is "now".
+    if (t > Date.now() + 2 * 60_000) beginAt = new Date(t).toISOString()
+  } else if (x.beginAt === undefined && prev?.beginAt && Date.parse(prev.beginAt) > Date.now()) beginAt = prev.beginAt
+  const transportCost = x.transportCost == null ? base.transportCost : num(x.transportCost, NaN)
+  if (!(transportCost >= 0)) fail('ტრანსპორტირების ღირებულება უნდა იყოს 0 ან მეტი')
+  const text = (v: unknown, fallback: string, label: string) => {
+    const t = v == null ? fallback : str(v)
+    if (t.length > MAX_INFO) fail(`${label}: მაქსიმუმ ${MAX_INFO} სიმბოლო`)
+    return t
+  }
+  return {
+    type,
+    ...buyer,
+    ...(beginAt && { beginAt }),
+    transportCost: Math.round(transportCost * 100) / 100,
+    tranCostPayer: x.tranCostPayer == null ? base.tranCostPayer : Number(x.tranCostPayer) === 1 ? 1 : 2,
+    receptionInfo: text(x.receptionInfo, base.receptionInfo, 'მიმწოდებლის ინფორმაცია'),
+    receiverInfo: text(x.receiverInfo, base.receiverInfo, 'მიმღების ინფორმაცია'),
+    comment: text(x.comment, base.comment, 'კომენტარი'),
+  }
+}
+
+/** Route, driver, truck, goods and waybill options of a new or edited shipment, checked. */
+async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?: Shipment) {
+  const input = { carrierId: str(body.carrierId), routeId: str(body.routeId), driverId: str(body.driverId), truckId: str(body.truckId) }
+  if (!canUseCarrier(user, input.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
+  const d = db.get()
+  const carrier = d.carriers.find((c) => c.id === input.carrierId)
+  if (!carrier || carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
+  const picked = d.routes.find((x) => x.id === input.routeId && x.carrierId === input.carrierId)
+  if (!picked || !routeUsable(d.carriers, picked)) fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
+  const waybill = await parseWaybillInput(body.waybill, picked!, prev?.waybill)
+  // A driver or truck kept from before may have been deleted since; a new pick must be live.
+  const usable = <T extends { id: string; deletedAt?: string }>(xs: T[], id: string, was?: string) => xs.some((x) => x.id === id && (!x.deletedAt || id === was))
+  if (noTransport(waybill.type)) {
+    input.driverId = ''
+    input.truckId = ''
+  } else {
+    if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
+    if (!usable(d.trucks, input.truckId, prev?.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
+  }
+  const items = parseItems(body.items, picked!)
+  const quantity = Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000
+  return { ...input, items, quantity, waybill }
+}
+
+/** The shipment's items with what was sent to RS.ge (a product may have been renamed since the shipment was made). */
+function sentItems(s: Shipment, payload: RsWaybillPayload): ShipmentItem[] {
+  return s.items.map((i, k) => {
+    const g = payload.goods[k]
+    const line = i.lineId ? resolveRoute(db.get(), s.routeId).route?.goods.find((x) => x.id === i.lineId) : undefined
+    return { ...i, name: g.name, barCode: g.barCode, unitId: g.unitId, unitTxt: g.unitTxt, price: g.price, vatType: g.vatType, aId: g.aId, aTitle: line ? line.aTitle : i.aTitle }
+  })
+}
+
+/** Start of transport written at save time: the planned one when it is still ahead, else now. */
+const plannedBegin = (s: Pick<Shipment, 'waybill'>) => {
+  const t = s.waybill?.beginAt ? Date.parse(s.waybill.beginAt) : NaN
+  return Number.isFinite(t) && t > Date.now() ? new Date(t) : undefined
+}
+
+/**
+ * The goods rows that turn the waybill RS.ge has (`remote`) into `goods`: rows are matched by bar code
+ * and keep their RS.ge ID (updated in place); new lines get none (added); remote rows left over are
+ * deleted. Overwriting rows by ID is what a correction on the portal does.
+ */
+function rowsFor(goods: RsWaybillPayload['goods'], remote: RsRemoteWaybill): XmlGood[] {
+  const left = remote.goods.filter((g) => g.id)
+  const rows: XmlGood[] = goods.map((g) => {
+    const k = left.findIndex((r) => r.barCode.toLowerCase() === g.barCode.toLowerCase())
+    const match = k >= 0 ? left.splice(k, 1)[0] : undefined
+    return { ...g, ...(match && { rsId: match.id }) }
+  })
+  for (const r of left)
+    rows.push({ rsId: r.id, deleted: true, name: r.name, barCode: r.barCode, unitId: r.unitId ?? RS_UNIT_OTHER, unitTxt: r.unitTxt, quantity: r.quantity, price: r.price, amount: r.amount, vatType: (r.vatType ?? 0) as 0 | 1 | 2, aId: r.aId ?? 0 })
+  return rows
+}
+
+/** What changed between two versions of a shipment, for its history. */
+function describeEdit(d: Database, a: Shipment, b: Pick<Shipment, 'routeId' | 'driverId' | 'truckId' | 'items' | 'quantity' | 'waybill'>) {
+  const out: string[] = []
+  const name = (id: string) => {
+    const x = d.drivers.find((y) => y.id === id)
+    return x ? `${x.firstName} ${x.lastName}` : '—'
+  }
+  const plate = (id: string) => d.trucks.find((y) => y.id === id)?.plateNumber ?? '—'
+  if (a.routeId !== b.routeId) out.push(`მარშრუტი: ${routeText(resolveRoute(d, b.routeId))}`)
+  if (a.driverId !== b.driverId) out.push(`მძღოლი: ${name(a.driverId)} → ${name(b.driverId)}`)
+  if (a.truckId !== b.truckId) out.push(`მანქანა: ${plate(a.truckId)} → ${plate(b.truckId)}`)
+  if (a.quantity !== b.quantity || a.items.length !== b.items.length) out.push(`რაოდენობა: ${a.quantity} → ${b.quantity}`)
+  const wa = a.waybill
+  const wb = b.waybill
+  if (wa && wb) {
+    if (wa.type !== wb.type) out.push('ზედნადების ტიპი შეიცვალა')
+    if (wa.buyerTin !== wb.buyerTin) out.push(`მყიდველი: ${wb.buyerName || wb.buyerTin || 'გამყიდველი'}`)
+    if ((wa.beginAt ?? '') !== (wb.beginAt ?? '')) out.push(`დაწყება: ${wb.beginAt ? tbilisiTime(wb.beginAt) : 'გააქტიურებისას'}`)
+  }
+  return out
+}
+
+/** `YYYY-MM-DD HH:MM` in Georgian time, for history messages. */
+const tbilisiTime = (iso: string) => rsDate(new Date(iso)).replace('T', ' ').slice(0, 16)
+
+/** A planned start of transport sent with an activation; '' or missing = now. */
+function parseBegin(v: unknown): string | undefined {
+  const raw = str(v)
+  if (!raw) return undefined
+  const t = Date.parse(raw)
+  if (!Number.isFinite(t)) fail('ტრანსპორტირების დაწყების დრო არასწორია')
+  if (t < Date.now() - 5 * 60_000) fail('ტრანსპორტირების დაწყება წარსულში ვერ იქნება')
+  if (t > Date.now() + MAX_DEFER_MS - 5 * 60_000) fail('RS.ge ტრანსპორტირების დაწყებას მაქსიმუმ 3 დღით გადადების საშუალებას იძლევა')
+  return t > Date.now() + 2 * 60_000 ? new Date(t).toISOString() : undefined
+}
+
+/** A delivery date sent with "complete": not in the future (RS.ge -1017). Missing = now. */
+function parseDelivered(v: unknown): Date | undefined {
+  const raw = str(v)
+  if (!raw) return undefined
+  const t = Date.parse(raw)
+  if (!Number.isFinite(t)) fail('მიწოდების თარიღი არასწორია')
+  if (t > Date.now() + 60_000) fail('მიწოდების თარიღი მომავალში ვერ იქნება')
+  return new Date(Math.min(t, Date.now()))
+}
+
 export const shipments = {
   /** Creates the record and starts the upload pipeline in the background. */
-  create(body: Partial<NewShipmentInput>, user: User): string {
+  async create(body: Partial<NewShipmentInput>, user: User): Promise<string> {
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა', 403)
-    const input = { carrierId: str(body.carrierId), routeId: str(body.routeId), driverId: str(body.driverId), truckId: str(body.truckId) }
-    if (!canUseCarrier(user, input.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
     const d = db.get()
-    const carrier = d.carriers.find((c) => c.id === input.carrierId)
-    if (!carrier || carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
-    const picked = d.routes.find((x) => x.id === input.routeId && x.carrierId === input.carrierId)
-    if (!picked || !routeUsable(d.carriers, picked)) fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
-    if (!active(d.drivers).some((x) => x.id === input.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
-    if (!active(d.trucks).some((x) => x.id === input.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
-    const items = parseItems(body.items, picked!)
-    const quantity = Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000
     const notReady = rsNotReady(d)
     if (notReady) fail(notReady)
+    const x = await parseShipment(body, user)
     const sid = uid('s')
+    const draft = !!body.draft
     const s: Shipment = {
       id: sid,
       createdAt: nowIso(),
       createdBy: user.id,
-      carrierId: input.carrierId,
-      routeId: input.routeId,
-      driverId: input.driverId,
-      truckId: input.truckId,
-      items,
-      quantity,
-      rsWaybill: buildWaybill(d, { ...input, id: sid, items }),
+      ...x,
+      ...(draft && { draft }),
+      rsWaybill: buildWaybill(db.get(), { ...x, id: sid }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
-      events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
+      events: [{ at: nowIso(), level: 'info', message: draft ? 'მოთხოვნილია ზედნადების შენახვა RS.ge-ზე (გააქტიურების გარეშე)' : 'მოთხოვნილია ზედნადების ატვირთვა' }],
     }
     db.put('shipments', s)
     void shipments.run(s.id)
@@ -686,7 +870,7 @@ export const shipments = {
   /** Runs (or resumes) the pipeline: RS.ge → SMS. Safe to call again for retries. */
   async run(id: string, user?: User) {
     get(id, user)
-    if (user?.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
+    if (user) noReport(user)
     if (running.has(id)) return
     running.add(id)
     try {
@@ -696,9 +880,85 @@ export const shipments = {
     }
   },
 
+  /**
+   * Activates a waybill saved as a draft: from now, or from `beginAt` (up to 3 days ahead). The
+   * pipeline then activates it and texts the driver.
+   */
+  async activate(id: string, body: { beginAt?: string } | undefined, user: User) {
+    const s = get(id, user)
+    noReport(user)
+    if (s.status !== 'saved' || s.waybillState) fail('ზედნადები არ არის შენახულ (გაუაქტიურებელ) მდგომარეობაში')
+    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    const beginAt = parseBegin(body?.beginAt)
+    patch(
+      id,
+      (x) => ({ draft: undefined, status: 'uploading', rs: { status: 'pending' }, waybill: { ...shipmentWaybill(x, db.get().rs, resolveRoute(db.get(), x.routeId).route), beginAt } }),
+      { level: 'info', message: beginAt ? `მოთხოვნილია გააქტიურება, ტრანსპორტირების დაწყება ${tbilisiTime(beginAt)}` : 'მოთხოვნილია გააქტიურება' },
+    )
+    void shipments.run(id)
+  },
+
+  /**
+   * Changes a shipment. Before anything reached RS.ge only the record changes (retry sends it). A
+   * draft on RS.ge is overwritten; an active waybill is corrected (კორექტირება), as on the portal: its
+   * type and start stay, the rest follows the new route, driver, truck, goods and options. The driver
+   * is texted again when the driver or truck changed.
+   */
+  async edit(id: string, body: Partial<NewShipmentInput>, user: User) {
+    const s = get(id, user)
+    noReport(user)
+    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    if (s.waybillState) fail(s.waybillState === 'closed' ? 'დასრულებულ ზედნადებს ვერ შეცვლი' : 'გაუქმებულ ზედნადებს ვერ შეცვლი')
+    if (s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს ვერ შეცვლი')
+    if (s.status === 'uploading') fail('რეისი ახლა იტვირთება — სცადე ცოტა ხანში')
+    if (s.status === 'rs_failed' && !s.rsWaybillId && s.rsSaveAttemptedAt)
+      fail('უცნობია, შეინახა თუ არა წინა მცდელობამ ზედნადები RS.ge-ზე — ჯერ დააჭირე „ხელახლა ცდას“')
+    const active = s.status === 'uploaded'
+    const onRs = !!s.rsWaybillId
+    const x = await parseShipment({ ...body, carrierId: body.carrierId ?? s.carrierId }, user, s)
+    if (active && s.waybill && x.waybill.type !== s.waybill.type) fail('აქტიურ ზედნადებზე ტიპს ვერ შეცვლი (RS.ge)')
+    // An active waybill keeps the start RS.ge has.
+    if (active) {
+      delete x.waybill.beginAt
+      if (s.waybill?.beginAt) x.waybill.beginAt = s.waybill.beginAt
+    }
+    const next: Shipment = { ...s, ...x }
+    const payload = buildWaybill(db.get(), next)
+    const changes = describeEdit(db.get(), s, x)
+    if (!onRs) {
+      patch(id, () => ({ ...x, rsWaybill: payload }), { level: 'info', message: `რეისი შეიცვალა${changes.length ? ` — ${changes.join('; ')}` : ''}` })
+      return
+    }
+    if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული')
+    running.add(id)
+    let remote: RsRemoteWaybill | null = null
+    try {
+      const now = await rsge.getWaybill(s.rsWaybillId!, id).catch((e: Error) => fail(e.message, 502))
+      if (active && now.status !== 1) fail(`RS.ge-ზე ზედნადები ${RS_STATUS_TEXT[now.status] ?? now.status}-ა — შეცვლა შეუძლებელია`)
+      if (!active && now.status !== 0) fail('RS.ge-ზე ზედნადები უკვე აღარ არის შენახულ მდგომარეობაში — განაახლე გვერდი')
+      const begin = active ? (now.beginAt ? new Date(now.beginAt) : new Date()) : (plannedBegin(next) ?? new Date())
+      await rsge
+        .saveWaybill(payload, id, { id: s.rsWaybillId!, status: active ? 1 : 0, beginDate: rsDate(begin), goods: rowsFor(payload.goods, now) })
+        .catch((e: Error) => fail(e.message, 502))
+      remote = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
+    } finally {
+      running.delete(id)
+    }
+    const message = active ? `ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე` : 'RS.ge-ზე შენახული ზედნადები განახლდა'
+    patch(id, (y) => ({ ...x, rsWaybill: payload, items: sentItems({ ...y, ...x }, payload), ...(remote && { rsRemote: remote }) }), {
+      level: 'success',
+      message: `${message}${changes.length ? ` — ${changes.join('; ')}` : ''}`,
+    })
+    // The new driver (or the same one, with another truck) gets the waybill by SMS.
+    if (active && x.driverId && (x.driverId !== s.driverId || x.truckId !== s.truckId)) {
+      patch(id, () => ({ sms: { status: 'pending' } }))
+      void shipments.run(id)
+    }
+  },
+
   async retrySms(id: string, user: User) {
     const s = get(id, user)
-    if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
+    noReport(user)
     // Sent again only when it failed or the phone never got it, so a double click can't text the driver twice.
     if (s.sms.status === 'ok' && !smsUndelivered(s)) fail('SMS უკვე გაიგზავნა')
     if (!s.waybillNumber || running.has(id)) return
@@ -711,27 +971,32 @@ export const shipments = {
   },
 
   /**
-   * Completes (close_waybill) or cancels (ref_waybill) an uploaded waybill on RS.ge. RS.ge also
-   * cancels a completed waybill, so cancel is allowed after close. The waybill is read back after
-   * the call: the page shows the result at once, and a refusal because it was already done on the
-   * rs.ge portal counts as done.
+   * Completes (close_waybill, or close_waybill_vd with the delivery date), cancels (ref_waybill) or,
+   * for a draft, deletes (del_waybill) the waybill on RS.ge. RS.ge also cancels a completed waybill, so
+   * cancel is allowed after close. The waybill is read back after the call: the page shows the result
+   * at once, and a refusal because it was already done on the rs.ge portal counts as done.
    */
-  async finish(id: string, action: 'close' | 'cancel', user: User) {
+  async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User, body?: { deliveredAt?: string }) {
     const s = get(id, user)
-    if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
-    if (s.status !== 'uploaded') fail('ზედნადები ჯერ არ არის ატვირთული')
+    noReport(user)
+    if (action === 'delete') {
+      if (s.status !== 'saved' || s.waybillState) fail('წაიშლება მხოლოდ შენახული (გაუაქტიურებელი) ზედნადები')
+    } else if (s.status !== 'uploaded') fail('ზედნადები ჯერ არ არის გააქტიურებული')
     if (action === 'close' && s.waybillState) fail(s.waybillState === 'closed' ? 'ზედნადები უკვე დასრულებულია' : 'გაუქმებულ ზედნადებს ვერ დაასრულებ')
     if (action === 'cancel' && s.waybillState === 'cancelled') fail('ზედნადები უკვე გაუქმებულია')
+    if (action === 'cancel' && s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს RS.ge ვერ გააუქმებს — ჯერ გააუქმე ფაქტურა RS.ge-ს პორტალზე')
     if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია — დაასრულე ან გააუქმე RS.ge-ს პორტალიდან')
     if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    const delivered = action === 'close' ? parseDelivered(body?.deliveredAt) : undefined
     const target = action === 'close' ? 'closed' : 'cancelled'
     let error: Error | undefined
     let w: RsRemoteWaybill | null = null
     running.add(id)
     try {
       try {
-        if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id)
-        else await rsge.cancelWaybill(s.rsWaybillId!, id)
+        if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id, delivered)
+        else if (action === 'cancel') await rsge.cancelWaybill(s.rsWaybillId!, id)
+        else await rsge.deleteWaybill(s.rsWaybillId!, id)
       } catch (e) {
         error = e as Error
       }
@@ -747,9 +1012,51 @@ export const shipments = {
     if (!error)
       patch(id, () => ({ waybillState: target }), {
         level: 'success',
-        message: action === 'close' ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე` : `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`,
+        message:
+          action === 'close'
+            ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე`
+            : action === 'cancel'
+              ? `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`
+              : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
       })
     if (w) applyRemote(id, w)
+  },
+
+  /**
+   * Writes a tax invoice (ანგარიშ-ფაქტურა) from the waybill on RS.ge. Not for შიდა გადაზიდვა (no sale).
+   * If RS.ge refuses because one exists already (written on the portal), that one is recorded.
+   */
+  async invoice(id: string, user: User) {
+    const s = get(id, user)
+    noReport(user)
+    if (s.status !== 'uploaded' || s.waybillState === 'cancelled') fail('ანგარიშ-ფაქტურა იწერება მხოლოდ აქტიურ ან დასრულებულ ზედნადებზე')
+    if ((s.rsWaybill?.type ?? 1) === 1) fail('შიდა გადაზიდვაზე ანგარიშ-ფაქტურა არ იწერება')
+    if (s.invoiceId) fail(`ანგარიშ-ფაქტურა უკვე გამოწერილია (ID ${s.invoiceId})`)
+    if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია')
+    // RS.ge refuses it (-3009) until the planned start of transport has come.
+    const begin = s.rsRemote?.beginAt ?? s.waybill?.beginAt
+    if (begin && Date.parse(begin) > Date.now()) fail(`ანგარიშ-ფაქტურა გამოიწერება ტრანსპორტირების დაწყების შემდეგ (${tbilisiTime(begin)})`)
+    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    running.add(id)
+    try {
+      let inv: number | undefined
+      let error: Error | undefined
+      try {
+        inv = await rsge.saveInvoice(s.rsWaybillId!, id)
+      } catch (e) {
+        error = e as Error
+      }
+      const w = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
+      inv ??= w?.invoiceId
+      if (!inv) {
+        patch(id, () => ({}), { level: 'error', message: error?.message ?? 'ანგარიშ-ფაქტურა ვერ გამოიწერა' })
+        fail(error?.message ?? 'ანგარიშ-ფაქტურა ვერ გამოიწერა', 502)
+      }
+      patch(id, () => ({ invoiceId: inv, ...(w && { rsRemote: w }) }), { level: 'success', message: `ანგარიშ-ფაქტურა გამოიწერა RS.ge-ზე (ID ${inv})` })
+      return { invoiceId: inv }
+    } finally {
+      running.delete(id)
+    }
   },
 
   /**
@@ -758,7 +1065,7 @@ export const shipments = {
    */
   async refreshFromRs(id: string, user: User) {
     const s = get(id, user)
-    if (s.status !== 'uploaded' || !s.rsWaybillId) return
+    if ((s.status !== 'uploaded' && s.status !== 'saved') || !s.rsWaybillId) return
     if (s.rsRemote && Date.now() - Date.parse(s.rsRemote.checkedAt) < REFRESH_FRESH_MS) return
     if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული — ნაჩვენებია ბოლოს ნანახი მონაცემები', 409)
     let p = reading.get(id)
@@ -800,12 +1107,25 @@ const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
 /**
  * Records the waybill as RS.ge reported it. RS.ge wins over what was sent: a waybill completed,
  * cancelled or corrected on the rs.ge portal is shown that way here, with an event saying what changed.
+ * A draft activated on the portal becomes uploaded here, and its driver is texted.
  */
 function applyRemote(id: string, w: RsRemoteWaybill) {
   // A pipeline or close/cancel in progress records its own outcome; the next read catches up.
   if (running.has(id)) return
   const s = db.get().shipments.find((x) => x.id === id)
-  if (!s || s.status !== 'uploaded') return
+  if (!s || (s.status !== 'uploaded' && s.status !== 'saved')) return
+  const invoice = { invoiceId: w.invoiceId ?? s.invoiceId }
+  if (s.status === 'saved') {
+    if (w.status !== 0 && w.number && w.status > 0) {
+      patch(id, () => ({ ...invoice, rsRemote: w, status: 'uploaded', draft: undefined, waybillNumber: w.number, waybillState: stateOf(w.status), rs: { status: 'ok', at: nowIso() } }), {
+        level: 'success',
+        message: `ზედნადები №${w.number} გააქტიურდა RS.ge-ზე`,
+      })
+      void shipments.run(id)
+    } else if (w.status < 0 && !s.waybillState) patch(id, () => ({ rsRemote: w, waybillState: 'cancelled' }), { level: 'info', message: 'RS.ge-ზე შენახული ზედნადები წაიშალა' })
+    else patch(id, () => ({ rsRemote: w }))
+    return
+  }
   // Compared with the last reading, or with what was sent before the first one.
   const sent = s.rsWaybill
   const was = s.rsRemote ?? {
@@ -816,6 +1136,7 @@ function applyRemote(id: string, w: RsRemoteWaybill) {
     endAddress: sent?.endAddress ?? '',
     quantity: s.quantity,
     fullAmount: Math.round((sent?.goods ?? []).reduce((a, g) => a + g.amount, 0) * 100) / 100,
+    invoiceId: undefined,
   }
   const changes: string[] = []
   const state = stateOf(w.status)
@@ -826,9 +1147,10 @@ function applyRemote(id: string, w: RsRemoteWaybill) {
   if (w.endAddress.trim() !== was.endAddress.trim()) changes.push(`დასრულების მისამართი: ${w.endAddress || '—'}`)
   if (w.quantity !== was.quantity) changes.push(`რაოდენობა: ${was.quantity} → ${w.quantity}`)
   if (Math.abs(w.fullAmount - was.fullAmount) >= 0.005) changes.push(`თანხა: ${was.fullAmount.toFixed(2)} → ${w.fullAmount.toFixed(2)} ₾`)
+  if (w.invoiceId && w.invoiceId !== s.invoiceId) changes.push(`ანგარიშ-ფაქტურა: ID ${w.invoiceId}`)
   patch(
     id,
-    (x) => ({ rsRemote: w, waybillState: state, waybillNumber: w.number || x.waybillNumber }),
+    (x) => ({ ...invoice, rsRemote: w, waybillState: state, waybillNumber: w.number || x.waybillNumber }),
     changes.length ? { level: 'info', message: `RS.ge-ზე შეიცვალა — ${changes.join('; ')}` } : undefined,
   )
 }
@@ -843,8 +1165,8 @@ let syncing: Promise<void> | null = null
 
 /**
  * Background sync: asks RS.ge which waybills changed since the last sync (get_waybills_v1) and
- * re-reads the ones that belong to uploaded shipments. A failed sync leaves the cursor where it
- * was, so the next one reads the same changes again.
+ * re-reads the ones that belong to uploaded shipments or drafts. A failed sync leaves the cursor
+ * where it was, so the next one reads the same changes again.
  */
 export function syncRs(): Promise<void> {
   syncing ??= runSync().finally(() => (syncing = null))
@@ -857,7 +1179,7 @@ async function runSync() {
   const stillSameUser = () => db.get().rs.su === start.su && db.get().rs.sellerUnId === start.sellerUnId
   const now = Date.now()
   try {
-    const tracked = db.get().shipments.filter((s) => s.status === 'uploaded' && s.rsWaybillId)
+    const tracked = db.get().shipments.filter((s) => (s.status === 'uploaded' || s.status === 'saved') && s.rsWaybillId)
     const byWaybill = new Map(tracked.map((s) => [s.rsWaybillId!, s.id]))
     // First sync: from the oldest tracked shipment, so changes made before syncing existed count too.
     const cursor = start.syncedTo ? Date.parse(start.syncedTo) - SYNC_OVERLAP_MS : tracked.reduce((m, s) => Math.min(m, Date.parse(s.createdAt)), now)
@@ -898,7 +1220,7 @@ async function runPipeline(id: string) {
   let s = get(id)
   const d = db.get()
 
-  // 1. RS.ge — save the waybill (→ ID), then activate it (→ number)
+  // 1. RS.ge — save the waybill (→ ID), then activate it (→ number); a draft stops after saving.
   if (s.rs.status !== 'ok') {
     if (s.status === 'rs_failed') patch(id, () => ({}), { level: 'info', message: 'RS.ge-ზე ატვირთვის ხელახალი ცდა' })
     patch(id, () => ({ status: 'uploading', rs: { status: 'running' } }))
@@ -924,6 +1246,10 @@ async function runPipeline(id: string) {
         }
       }
       if (!waybillId) waybillId = await saveNew(id)
+      if (!done && get(id).draft) {
+        patch(id, () => ({ status: 'saved', rs: { status: 'ok', at: nowIso() } }), { level: 'success', message: `ზედნადები შეინახა RS.ge-ზე (ID ${waybillId}) — გასააქტიურებელია` })
+        return
+      }
       done ??= await activate(id, waybillId)
       if (!done) {
         // The saved draft was deleted on the rs.ge portal before it was activated.
@@ -936,7 +1262,7 @@ async function runPipeline(id: string) {
       const state = stateOf(status)
       patch(
         id,
-        () => ({ status: 'uploaded', waybillNumber: number, waybillState: state, rs: { status: 'ok', at: nowIso() } }),
+        () => ({ status: 'uploaded', draft: undefined, waybillNumber: number, waybillState: state, rs: { status: 'ok', at: nowIso() } }),
         { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}${state ? ` (RS.ge-ზე უკვე ${RS_STATUS_TEXT[status]})` : ''}` },
       )
     } catch (e) {
@@ -946,8 +1272,13 @@ async function runPipeline(id: string) {
     }
   }
 
-  // 2. SMS to driver
+  // 2. SMS to driver (a waybill without transport has none)
   s = get(id)
+  if (s.status !== 'uploaded') return
+  if (!s.driverId) {
+    if (s.sms.status === 'pending') patch(id, () => ({ sms: { status: 'skipped' } }))
+    return
+  }
   if (s.sms.status !== 'ok') await sendSms(id)
 }
 
@@ -956,38 +1287,34 @@ async function runPipeline(id: string) {
  * reference data: nothing exists on RS.ge yet, so whatever the admin fixed after a refusal applies.
  */
 async function saveNew(id: string): Promise<number> {
-  const payload = buildWaybill(db.get(), get(id))
+  const s = get(id)
+  const payload = buildWaybill(db.get(), s)
   // Recorded before the call: from here on, a lost answer means "maybe saved".
   // The items keep what was sent (a product may have been renamed since the shipment was created).
-  const items = (s: Shipment) =>
-    s.items.map((i, k) => {
-      const g = payload.goods[k]
-      const line = i.lineId ? resolveRoute(db.get(), s.routeId).route?.goods.find((x) => x.id === i.lineId) : undefined
-      return { ...i, name: g.name, barCode: g.barCode, unitId: g.unitId, unitTxt: g.unitTxt, price: g.price, vatType: g.vatType, aId: g.aId, aTitle: line ? line.aTitle : i.aTitle }
-    })
-  patch(id, (s) => ({ rsWaybill: payload, items: items(s), rsSaveAttemptedAt: nowIso() }))
+  patch(id, (x) => ({ rsWaybill: payload, items: sentItems(x, payload), rsSaveAttemptedAt: nowIso() }))
   let waybillId: number
   try {
-    waybillId = await rsge.saveWaybill(payload, id)
+    waybillId = await rsge.saveWaybill(payload, id, { beginDate: rsDate(plannedBegin(s)) })
   } catch (e) {
     // RS.ge answered with a refusal: nothing was created, so the next try needs no lookup.
     if (e instanceof IntegrationError && e.rejected) patch(id, () => ({ rsSaveAttemptedAt: undefined }))
     throw e
   }
-  patch(id, () => ({ rsWaybillId: waybillId, rsSaveAttemptedAt: undefined }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId}), აქტივაცია…` })
+  patch(id, () => ({ rsWaybillId: waybillId, rsSaveAttemptedAt: undefined }), { level: 'info', message: `RS.ge-ზე ზედნადები შეინახა (ID ${waybillId})${s.draft ? '' : ', აქტივაცია…'}` })
   return waybillId
 }
 
 type Activated = { number: string; status: number }
 
 /**
- * Activates a saved waybill. When that fails, RS.ge is asked how the waybill stands: if the answer
- * to an earlier activation was lost, it is already active and send_waybill only says -1, which
- * would otherwise fail every retry. null: the draft was deleted, a new waybill is needed.
+ * Activates a saved waybill, from the planned start when it is still ahead. When that fails, RS.ge is
+ * asked how the waybill stands: if the answer to an earlier activation was lost, it is already active
+ * and send_waybill only says -1, which would otherwise fail every retry. null: the draft was deleted,
+ * a new waybill is needed.
  */
 async function activate(id: string, waybillId: number): Promise<Activated | null> {
   try {
-    return { number: await rsge.sendWaybill(waybillId, id), status: 1 }
+    return { number: await rsge.sendWaybill(waybillId, id, plannedBegin(get(id))), status: 1 }
   } catch (e) {
     const w = await rsge.getWaybill(waybillId, id).catch(() => null)
     if (w && w.status !== 0 && w.number) return { number: w.number, status: w.status }
@@ -996,15 +1323,88 @@ async function activate(id: string, waybillId: number): Promise<Activated | null
   }
 }
 
+/* ------------------------- RS.ge registry ------------------------- */
+
+/** The registry reads at most this far back in one go (each 72 hours is one RS.ge call). */
+const LIST_MAX_MS = 31 * 86400_000
+
+/** Shipment of each RS.ge waybill ID, among the shipments the user may see. */
+function shipmentByWaybill(user: User) {
+  return new Map(
+    db
+      .get()
+      .shipments.filter((s) => s.rsWaybillId && canUseCarrier(user, s.carrierId))
+      .map((s) => [s.rsWaybillId!, s.id]),
+  )
+}
+
+const listViewer = (user: User) => (user.role === 'operator' ? fail('RS.ge-ს ზედნადებების რეესტრი ხელმისაწვდომია ადმინისტრატორისთვის და რეპორტ მომხმარებლისთვის', 403) : undefined)
+
+export const rsWaybills = {
+  /** Issued or received waybills created in [from, to], as RS.ge lists them, each tied to its shipment when it is one. */
+  async list(q: { side?: string; from?: string; to?: string }, user: User): Promise<RsListWaybill[]> {
+    listViewer(user)
+    if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
+    const side = q.side === 'received' ? 'received' : 'issued'
+    const to = q.to ? new Date(Math.min(Date.parse(q.to), Date.now() + 60_000)) : new Date()
+    const from = q.from ? new Date(Date.parse(q.from)) : new Date(to.getTime() - 3 * 86400_000)
+    if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) fail('პერიოდი არასწორია')
+    if (to.getTime() - from.getTime() > LIST_MAX_MS) fail('პერიოდი მაქსიმუმ 31 დღეა')
+    const rows = await rsge.list(side, from, to).catch((e: Error) => fail(e.message, 502))
+    const mine = shipmentByWaybill(user)
+    return rows.map((r) => ({ ...r, ...(mine.has(r.id) && { shipmentId: mine.get(r.id) }) }))
+  },
+
+  /** One waybill as RS.ge has it now. Operators only see their own shipments' waybills. */
+  async get(waybillId: number, user: User): Promise<RsRemoteWaybill & { shipmentId?: string }> {
+    const sid = shipmentByWaybill(user).get(waybillId)
+    if (user.role === 'operator' && !sid) fail('ზედნადები ვერ მოიძებნა', 404)
+    if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
+    const w = await rsge.getWaybill(waybillId, sid, 'page').catch((e: Error) => fail(e.message, 502))
+    if (sid) applyRemote(sid, w)
+    return { ...w, ...(sid && { shipmentId: sid }) }
+  },
+
+  /**
+   * An action on any waybill of the taxpayer, as on the portal (admin only). One that belongs to a
+   * shipment goes through the shipment, so its record and history follow.
+   */
+  async act(waybillId: number, action: string, body: { beginAt?: string; deliveredAt?: string } | undefined, user: User) {
+    requireAdmin(user)
+    if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
+    const sid = shipmentByWaybill(user).get(waybillId)
+    if (sid) {
+      if (action === 'close' || action === 'cancel' || action === 'delete') await shipments.finish(sid, action, user, body)
+      else if (action === 'activate') await shipments.activate(sid, body, user)
+      else if (action === 'invoice') await shipments.invoice(sid, user)
+    }
+    if (!sid || !['close', 'cancel', 'delete', 'activate', 'invoice'].includes(action)) {
+      const call = (p: Promise<unknown>) => p.catch((e: Error) => fail(e.message, 502))
+      if (action === 'close') await call(rsge.closeWaybill(waybillId, undefined, parseDelivered(body?.deliveredAt)))
+      else if (action === 'cancel') await call(rsge.cancelWaybill(waybillId, undefined))
+      else if (action === 'delete') await call(rsge.deleteWaybill(waybillId, undefined))
+      else if (action === 'activate') {
+        const begin = parseBegin(body?.beginAt)
+        await call(rsge.sendWaybill(waybillId, undefined, begin ? new Date(begin) : undefined))
+      } else if (action === 'invoice') await call(rsge.saveInvoice(waybillId, undefined))
+      else if (action === 'confirm' || action === 'reject') await call(rsge.answer(waybillId, action === 'confirm'))
+      else fail('უცნობი მოქმედება', 404)
+    }
+    return rsWaybills.get(waybillId, user)
+  },
+}
+
 const smsUndelivered = (s: Shipment) => s.sms.delivery === 'Undelivered' || s.sms.delivery === 'Expired'
 
 async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
-  const driver = d.drivers.find((x) => x.id === s.driverId)!
+  const driver = d.drivers.find((x) => x.id === s.driverId)
+  if (!driver) return void patch(id, () => ({ sms: { status: 'skipped' } }))
   const route = resolveRoute(d, s.routeId)
-  const truck = d.trucks.find((x) => x.id === s.truckId)!
-  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}. მანქანა: ${truck.plateNumber}.`
+  const truck = d.trucks.find((x) => x.id === s.truckId)
+  const start = s.waybill?.beginAt && Date.parse(s.waybill.beginAt) > Date.now() ? ` დაწყება: ${rsDate(new Date(s.waybill.beginAt)).slice(11, 16)}.` : ''
+  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}.${truck ? ` მანქანა: ${truck.plateNumber}.` : ''}${start}`
   const failed = (msg: string) => patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso(), to: driver.phone, text } }), { level: 'error', message: msg })
 
   // A send interrupted by a restart: if smsoffice.ge knows the message, it went out. Don't send it twice.
