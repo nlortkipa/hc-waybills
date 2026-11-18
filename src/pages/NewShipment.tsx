@@ -33,7 +33,11 @@ export function NewShipment() {
 
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
-  const item = d.cargo.description ? d.cargo : undefined
+  // The product comes with the route (set by the admin in ცნობარები → მარშრუტები).
+  const liveProducts = active(d.products)
+  const productOf = (productId: string) => liveProducts.find((x) => x.id === productId)
+  const product = route ? productOf(route.productId) : undefined
+  const quantity = d.rs.quantity > 0 ? formatTonnes(d.rs.quantity) : undefined
   // Operators don't see the service user, so only check what they can see; the server checks the rest.
   const rsNotReady = rsMissing(d.rs, { hasCreds: true }).length > 0
 
@@ -44,6 +48,7 @@ export function NewShipment() {
     else if (!route) err.routeId = 'აირჩიე მარშრუტი'
     if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
     if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
+    else if (!product) err.routeId = 'ამ მარშრუტს პროდუქტი არ აქვს ან წაშლილია — მიმართე ადმინისტრატორს'
     setErrors(err)
     if (Object.keys(err).length || !carrier || !route) return
     setBusy(true)
@@ -84,11 +89,23 @@ export function NewShipment() {
               </Field>
             )}
 
-            <Field label="მარშრუტი" error={errors.routeId} hint={carrier && !routes.length ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.' : undefined}>
+            <Field
+              label="მარშრუტი"
+              error={errors.routeId}
+              hint={
+                carrier && !routes.length
+                  ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'
+                  : route
+                    ? product
+                      ? `პროდუქტი: ${product.name}${quantity ? ` · ${quantity}` : ''}`
+                      : 'ამ მარშრუტს პროდუქტი არ აქვს ან წაშლილია — მიმართე ადმინისტრატორს.'
+                    : undefined
+              }
+            >
               <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length}>
                 {routes.map((x) => (
                   <option key={x.id} value={x.id}>
-                    {routeLabel(d.carriers, x)}
+                    {routeLabel(d.carriers, x)} · {productOf(x.productId)?.name ?? 'პროდუქტი არ არის'}
                   </option>
                 ))}
               </Select>
@@ -115,13 +132,8 @@ export function NewShipment() {
               </Field>
             </div>
 
-            <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
-              <span className="text-slate-500">ტვირთი: </span>
-              <span className="font-medium text-slate-900">{item ? `${item.description} · ${formatTonnes(d.cargo.quantity)}` : 'არ არის დაყენებული — მიმართე ადმინისტრატორს'}</span>
-            </div>
-
             {rsNotReady && (
-              <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge პარამეტრები (მყიდველი, ერთეული, ფასი) არ არის შევსებული — მიმართე ადმინისტრატორს.</div>
+              <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge პარამეტრები (რაოდენობა, ფასი, ტრანსპორტი) არ არის შევსებული — მიმართე ადმინისტრატორს.</div>
             )}
 
             <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
@@ -146,8 +158,9 @@ export function NewShipment() {
               <Row k="მძღოლის ტელ." v={driver?.phone} />
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}` : undefined} mono />
               <Row k="მისაბმელი" v={truck?.trailerNumber} mono />
-              <Row k="ტვირთი" v={item?.description} />
-              <Row k="დეკლარირებული" v={item ? formatTonnes(d.cargo.quantity) : undefined} />
+              <Row k="პროდუქტი" v={product?.name} />
+              <Row k="შტრიხკოდი" v={product?.barCode} mono />
+              <Row k="დეკლარირებული" v={quantity} />
             </dl>
           </Card>
           <div className="flex gap-3 rounded-2xl bg-brand-50 p-4 text-sm text-brand-900 ring-1 ring-brand-100">

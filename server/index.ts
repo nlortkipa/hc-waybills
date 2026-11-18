@@ -11,7 +11,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, startRsSync, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, saveRsSettings, shipments, startRsSync, syncProductsNow, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -38,7 +38,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ],
   ['PUT', /^\/api\/refs\/(\w+)$/, ({ params, body, user, token }) => refs.save(refCol(params[0]), body, user, token)],
   ['DELETE', /^\/api\/refs\/(\w+)\/([\w-]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), params[1], user)],
-  ['PUT', /^\/api\/cargo$/, ({ body, user }) => saveCargo(body, user)],
+  // Reads the product list from RS.ge; the result arrives with the next state poll.
+  ['POST', /^\/api\/products\/sync$/, ({ body, user }) => syncProductsNow(body, user)],
   ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
   ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
   ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],

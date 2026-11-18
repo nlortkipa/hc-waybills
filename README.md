@@ -11,7 +11,7 @@ sequenceDiagram
     participant RS as RS.ge (Waybill API)
     participant SMS as smsoffice.ge
 
-    Op->>App: Pick carrier, route, driver, truck
+    Op->>App: Pick carrier, route (with its product), driver, truck
     Op->>App: Click "Upload waybill"
     App->>RS: Create waybill
     RS-->>App: Waybill number
@@ -34,9 +34,10 @@ flowchart LR
 | Entity | Fields |
 |---|---|
 | **Carrier** | Name, start address (one), end addresses (one or more, each with its scale ID) |
-| **Route** | Carrier + one of its end addresses (start → end). Operators pick a route for each shipment |
+| **Route** | Carrier, end address, scale ID and one product (start → end). The same addresses can be opened again for another product. Operators pick a route for each shipment, and the shipment carries the route's product |
 | **Driver** | First/last name, personal ID, phone |
 | **Truck** | Model, plate number, trailer number |
+| **Product** | Name, bar code, unit. Kept in step with the taxpayer's product list on RS.ge (see below). Each route has one |
 | **User** | Name, phone, email, role |
 
 **Roles:** `Admin` · `Operator` (given one or more carriers) · `Report user`
@@ -91,8 +92,8 @@ The latest build is also saved as `release/hc-portal.apk` and copied into `dist/
 
 The interface is in Georgian.
 
-1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. There must always be at least one admin: the last one can't be deleted or given another role, but an admin can delete their own account once another admin exists. As admin, add carriers, then open routes for them in **მარშრუტები** (pick the carrier, then one of its end addresses), and add drivers, trucks and other users (each with their own phone number) in **ცნობარები**. An operator is given one or more carriers and sees those carriers' shipments. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
-2. As an operator, open **ახალი რეისი** (new shipment), pick the carrier (skipped when there is only one), one of its routes, the driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
+1. Log in with a phone number. The only built-in user is the admin, **575780323**; there's no SMS code yet, so a known number logs in immediately. There must always be at least one admin: the last one can't be deleted or given another role, but an admin can delete their own account once another admin exists. As admin, add carriers, then open routes for them in **მარშრუტები** (pick the carrier, type the end address and its scale ID, and pick the product; the start address comes from the carrier), and add drivers, trucks, products and other users (each with their own phone number) in **ცნობარები**. Products need RS.ge to be connected first. An operator is given one or more carriers and sees those carriers' shipments. Roles: **ოპერატორი** (operator) creates shipments, **ადმინისტრატორი** (admin) also manages reference data, **რეპორტ მომხმარებელი** (report user) is read-only.
+2. As an operator, open **ახალი რეისი** (new shipment), pick the carrier (skipped when there is only one), one of its routes (each shows its product), the driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
 3. In **API მოთხოვნები**: watch every RS.ge and SMS request and response (admins can clear the log).
 
 SMS needs an smsoffice.ge account (see below). Without one, the SMS step fails with a message saying so; once it's set up, **ხელახლა გაგზავნა** on the shipment sends it.
@@ -107,7 +108,7 @@ Setup (admin, **RS.ge** tab):
 
 1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and enter its user name (`su`) and password (`sp`). The password is stored only on the server, encrypted (AES-256-GCM) with `HC_SECRET_KEY`, and never sent to browsers.
 2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
-3. Fill in the unit, price, VAT type and transport fields. They apply to every shipment. There is no buyer to fill in: every waybill is შიდა გადაზიდვა (internal transport between the company's own sites), so the buyer is the seller, taken from the connected service user.
+3. Fill in the declared quantity, price, VAT type and transport fields. They apply to every shipment. The product (name, bar code, unit) comes from the shipment's route; products are kept in **ცნობარები → პროდუქტები**. There is no buyer to fill in: every waybill is შიდა გადაზიდვა (internal transport between the company's own sites), so the buyer is the seller, taken from the connected service user.
 
 Per shipment the server calls `save_waybill` (type 1, შიდა გადაზიდვა, buyer = seller; RS.ge refuses buyer = seller on any other type with code -1047; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybil_vd` (sic; activates it with the transport start set to now and returns the waybill number. Plain `send_waybill` would keep the time of the save, which is wrong when activation is retried later). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. RS.ge also cancels a completed waybill, so **გაუქმება** stays available after **დასრულება**. After either one the waybill is read back; if RS.ge refused because it was already done on the rs.ge portal, that counts as done. Each of these calls appears in **API მოთხოვნები** with the password masked.
 
@@ -123,10 +124,17 @@ Staying in step with RS.ge: a waybill can also be completed, cancelled or correc
 - A change found this way updates the shipment (status → დასრულებული / გაუქმებული; car, driver, route and quantity in lists and reports) and adds an event saying what changed. The snapshot is kept on the shipment (`rsRemote`), so pages and reports still work while RS.ge is down.
 - These read-backs appear in **API მოთხოვნები** with a badge (**სინქრონიზაცია** or **რეისის გახსნა**). The log keeps the last 300 other calls and, separately, the last 100 read-backs, so the frequent syncs never push the uploads out.
 
+Products: RS.ge keeps a product list per taxpayer (სასაქონლო კოდები, the bar code base on the rs.ge portal). The products tab is a copy of the connected taxpayer's list and nothing else.
+- **Adding or editing** a product calls `save_bar_code` (it adds, or overwrites the product with that bar code) and changes the copy only if RS.ge really stored it: `save_bar_code` answers 1 even for codes it silently drops (common ones like `67`, `123` or `asd`, apparently because another taxpayer already registered them), so the code is read back with `get_bar_codes` first, and the admin is told to pick another code when it isn't there. **Deleting** calls `delete_bar_code`. The bar code is the product's identity on RS.ge, so it can't be edited: delete the product and add a new one.
+- **Polling:** `get_bar_codes` reads the whole list with the background sync (every `RS_SYNC_MINUTES`), after connecting, after every change made here, and when the products tab or the new-shipment page opens (at most every 30 s). Each read makes the copy equal to RS.ge's list: products added, renamed or deleted on the portal are added, renamed or removed here. The tab shows when the list was last read, and **განახლება** reads it now. If a read fails, the last list read stays and the error is shown.
+- **Another service user** (another taxpayer) removes the previous one's products at once and loads the new one's; nothing is copied between accounts. **Disconnecting** empties the list.
+- Products that shipments used are hidden instead of deleted, so those shipments keep showing them; one that comes back on RS.ge with the same bar code gets its old record back.
+- A waybill takes the product's name, bar code and unit at the time it is saved, so fixing a product and pressing **ხელახლა ცდა** is enough. The shipment keeps the name and bar code it was sent with.
+
 Mapping notes:
 - RS.ge has no trailer field: the trailer number is written into `COMMENT`.
 - Plate numbers are sent without dashes (`AA-123-BB` → `AA123BB`).
-- Quantity is in tonnes; pick a tonne unit, or "other" (99) with the name ტონა (the default).
+- Quantity is in tonnes; give products a tonne unit, or "other" (99) with the name ტონა (the default for a new product).
 - Drivers have a citizenship (Georgian / foreign) → `CHEK_DRIVER_TIN`; foreigners can have a non-11-digit ID.
 - `TRANSPORTER_TIN` is sent only when filled in. RS.ge then expects the transport company to activate the waybill, so leave it empty unless that's how you work.
 
@@ -149,6 +157,6 @@ Per shipment, after RS.ge returns the waybill number, the server sends the drive
 
 ### Mock assumptions to confirm with the client
 
-- Cargo (description, code) and the declared quantity are set once by the admin and sent in the RS.ge `goods_list`.
-- Drivers and trucks are shared across carriers. Only addresses, routes and operators are tied to a carrier.
-- Removing an end address, or deleting a carrier, also removes its routes. Records that shipments use are kept, hidden from pickers, so those shipments still show them.
+- The product is set per route by the admin, not per shipment; the declared quantity, price and VAT type are set once and are the same for every product. A route whose product was removed (here or on RS.ge) can't be used until the admin picks another.
+- Drivers and trucks are shared across carriers. Only the start address, routes and operators are tied to a carrier.
+- Deleting a carrier also removes its routes. Records that shipments use are kept, hidden from pickers, so those shipments still show them.

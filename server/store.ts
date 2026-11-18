@@ -43,9 +43,9 @@ const SESSION_MAX_MS = 90 * 86400_000
 /** last_used_at is written at most this often, so polling doesn't write on every request. */
 const SESSION_TOUCH_MS = 3600_000
 
-type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
+type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users'
 export type StoredCol = RecordCol | 'shipments'
-type MetaKey = 'cargo' | 'rs' | 'sms'
+type MetaKey = 'rs' | 'sms'
 
 mkdirSync(dirname(FILE), { recursive: true })
 const sql = new DatabaseSync(FILE)
@@ -63,6 +63,7 @@ sql.exec(`
   CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS drivers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS trucks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS shipments (id TEXT PRIMARY KEY, carrier_id TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS shipments_created ON shipments (created_at);
@@ -74,7 +75,7 @@ sql.exec(`
 
 /* ------------------------------ Low level ------------------------------ */
 
-const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'users']
+const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'products', 'users']
 
 function getMeta<T>(key: string): T | undefined {
   const row = sql.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
@@ -134,10 +135,12 @@ function readAll(): Database | null {
     routes: parseRows(sql.prepare('SELECT data FROM routes ORDER BY rowid').all()),
     drivers: parseRows(sql.prepare('SELECT data FROM drivers ORDER BY rowid').all()),
     trucks: parseRows(sql.prepare('SELECT data FROM trucks ORDER BY rowid').all()),
+    products: parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()),
     users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),
     shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
     logs: trimLogs(parseRows(sql.prepare('SELECT data FROM logs ORDER BY rowid DESC').all())),
-    cargo: getMeta('cargo')!,
+    // Before v19: the one admin-set cargo, which migrate() turns into a product.
+    ...(version < 19 && { cargo: getMeta('cargo') }),
     rs: openSecret('rs', getMeta<RsSettings>('rs')!),
     // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
     sms: openSecret('sms', getMeta<SmsSettings>('sms') ?? defaultSmsSettings()),
@@ -170,8 +173,7 @@ function replaceAll(db: Database) {
     for (const s of db.shipments) writeRow('shipments', s)
     for (const l of trimLogs(db.logs).reverse()) writeLog(l)
     setMeta('version', db.version)
-    sql.prepare("DELETE FROM meta WHERE key = 'settings'").run()
-    setMeta('cargo', db.cargo)
+    sql.prepare("DELETE FROM meta WHERE key IN ('settings', 'cargo')").run()
     setMeta('rs', db.rs)
     setMeta('sms', db.sms)
     if (!instance) setMeta('instance', (instance = randomBytes(6).toString('base64url')))

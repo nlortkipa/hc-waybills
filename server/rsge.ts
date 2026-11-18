@@ -8,6 +8,11 @@
  * activated can only be deleted (del_waybill): ref_waybill answers 0 and leaves it as it is.
  * Reading back: get_waybill (one waybill as RS.ge has it now) and get_waybills_v1 (what changed
  * in a time window), used to keep shipments in step with changes made on the rs.ge portal.
+ * Products: the taxpayer's product list on RS.ge (get_bar_codes / save_bar_code / delete_bar_code,
+ * "სასაქონლო კოდების აღრიცხვა"). save_bar_code adds or overwrites by bar code; delete_bar_code
+ * also answers 1 for a code that isn't there. save_bar_code also answers 1 for codes it silently
+ * doesn't store (common ones like 67, 123 or asd, apparently because another taxpayer already has
+ * them), so a save is only trusted after reading the code back.
  *
  * RS.ge has no separate sandbox host: testing is done on the normal endpoint with a test
  * service user. The service user (su / sp) is entered by the admin and stored on the server,
@@ -27,6 +32,14 @@ const LOG_ENDPOINT = (op: string) => `POST services.rs.ge/WayBillService › ${o
 export interface RsCreds {
   su: string
   sp: string
+}
+
+/** A product in the taxpayer's RS.ge product list. */
+export interface RsBarCode {
+  barCode: string
+  name: string
+  unitId: number
+  unitTxt: string
 }
 
 /** A waybill found on RS.ge. status: 0 saved, 1 active, 2 completed, -1 deleted, -2 cancelled. */
@@ -368,6 +381,31 @@ const live = {
     return blocks(xml, 'WAYBILL').map((b) => ({ id: Number(tag(b, 'ID')), status: Number(tag(b, 'STATUS')), sellerTin: tag(b, 'SELLER_TIN') }))
   },
 
+  /**
+   * The taxpayer's product list: all of it for an empty `filter`, otherwise the codes containing it
+   * (RS.ge matches parts of codes, not whole ones). Tagged as a read-back in the log.
+   */
+  async barCodes(c: RsCreds, filter = ''): Promise<RsBarCode[]> {
+    const xml = await soap('get_bar_codes', [...creds(c), ['bar_code', filter]], undefined, (x) => tag(x, 'get_bar_codesResult') === '1', 'sync')
+    const r = Number(tag(xml, 'get_bar_codesResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c))
+    return blocks(xml, 'BAR_CODE')
+      .map((b) => ({ barCode: tag(b, 'CODE'), name: tag(b, 'NAME'), unitId: numOf(tag(b, 'UNIT_ID')), unitTxt: tag(b, 'UNIT_TXT') }))
+      .filter((x) => x.barCode)
+  },
+
+  /** Adds the product to RS.ge, or overwrites the one with the same bar code. */
+  async saveBarCode(c: RsCreds, p: RsBarCode) {
+    const params: Param[] = [...creds(c), ['bar_code', p.barCode], ['goods_name', p.name], ['unit_id', p.unitId], ['unit_txt', p.unitTxt], ['a_id', 0]]
+    const r = Number(tag(await soap('save_bar_code', params, undefined, (x) => tag(x, 'save_bar_codeResult') === '1'), 'save_bar_codeResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c), true)
+  },
+
+  async deleteBarCode(c: RsCreds, barCode: string) {
+    const r = Number(tag(await soap('delete_bar_code', [...creds(c), ['bar_code', barCode]], undefined, (x) => tag(x, 'delete_bar_codeResult') === '1'), 'delete_bar_codeResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c), true)
+  },
+
   /** close_waybill / ref_waybill / del_waybill return 1 on success, 0 or a negative code otherwise. */
   async finish(op: 'close_waybill' | 'ref_waybill' | 'del_waybill', c: RsCreds, waybillId: number, shipmentId: string) {
     const r = Number(tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
@@ -440,6 +478,17 @@ export const rsge = {
 
   /** The waybill as RS.ge has it now. `via` tags read-backs in the log; omitted when part of an upload. */
   getWaybill: (waybillId: number, shipmentId: string, via?: 'sync' | 'page') => live.getWaybill(activeCreds(), waybillId, shipmentId, via),
+
+  /** The taxpayer's product list on RS.ge. */
+  barCodes: () => live.barCodes(activeCreds()),
+  /** One product on RS.ge by its exact bar code, or null when RS.ge doesn't have it. */
+  async barCode(barCode: string): Promise<RsBarCode | null> {
+    return (await live.barCodes(activeCreds(), barCode)).find((x) => x.barCode === barCode) ?? null
+  },
+  /** Adds or overwrites a product on RS.ge. Its answer can't be trusted on its own: check with barCode(). */
+  saveBarCode: (p: RsBarCode) => live.saveBarCode(activeCreds(), p),
+  /** Removes a product from RS.ge. */
+  deleteBarCode: (barCode: string) => live.deleteBarCode(activeCreds(), barCode),
 
   /** IDs of waybills changed between `from` and `to`, read in 3-day windows (the RS.ge limit). */
   async changed(from: Date, to: Date) {

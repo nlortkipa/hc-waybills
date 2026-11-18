@@ -15,10 +15,10 @@ const EMPTY: Database = {
   routes: [],
   drivers: [],
   trucks: [],
+  products: [],
   users: [],
   shipments: [],
   logs: [],
-  cargo: { description: '', code: '', quantity: 0 },
   rs: defaultRsSettings(),
   sms: defaultSmsSettings(),
 }

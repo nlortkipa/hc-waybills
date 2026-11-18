@@ -8,32 +8,25 @@ export interface SoftDeletable {
   deletedAt?: string
 }
 
-/** A delivery point of a carrier. */
-export interface Destination extends SoftDeletable {
-  id: string
-  address: string
-  /** ID of the scale at this end address. */
-  scaleId: string
-}
-
 export interface Carrier extends SoftDeletable {
   id: string
   name: string
   /** The single place every shipment of this carrier starts from. */
   startAddress: string
-  /** One or more end addresses. */
-  destinations: Destination[]
 }
 
 /**
- * A route the admin opened for a carrier: its start address → one of its end addresses.
- * Operators pick one of these for each shipment.
+ * A route the admin opened for a carrier: the carrier's start address → the end address typed here,
+ * carrying one product. Operators pick one of these for each shipment, which takes its product.
  */
 export interface CarrierRoute extends SoftDeletable {
   id: string
   carrierId: string
-  /** One of the carrier's destinations. */
-  destinationId: string
+  endAddress: string
+  /** ID of the scale at the end address. */
+  scaleId: string
+  /** The product carried on this route (Product.id); '' when not set yet (routes from before v20). */
+  productId: string
 }
 
 export interface Driver extends SoftDeletable {
@@ -53,7 +46,23 @@ export interface Truck extends SoftDeletable {
   trailerNumber: string
 }
 
-/** Cargo as typed by the admin. Copied onto each shipment when it is created. */
+/**
+ * A product (საქონელი): a copy of one entry of the connected taxpayer's RS.ge product list
+ * (get_bar_codes / save_bar_code), kept equal to it by the sync. The bar code is its identity on
+ * RS.ge, so it can't be changed once saved. The admin gives each route one; shipments take their route's.
+ */
+export interface Product extends SoftDeletable {
+  id: string
+  /** W_NAME / goods_name. */
+  name: string
+  /** Bar code (სასაქონლო კოდი): BAR_CODE on the waybill. */
+  barCode: string
+  /** UNIT_ID from get_waybill_units; 99 = "other", then unitTxt is the unit name. */
+  unitId: number
+  unitTxt: string
+}
+
+/** The product as it was on a shipment. Copied when the shipment is created (and when its waybill is saved). */
 export interface Cargo {
   description: string
   code: string
@@ -88,13 +97,13 @@ export interface Shipment {
   createdAt: string
   createdBy: string
   carrierId: string
-  /** The route picked (CarrierRoute.id). */
+  /** The route picked (CarrierRoute.id); the addresses are resolved from it. */
   routeId: string
-  /** The route's end address, copied when the shipment is created; the addresses are resolved from it. */
-  destinationId: string
   driverId: string
   truckId: string
-  /** Snapshot of the admin-set cargo at creation time. */
+  /** The route's product when the shipment was created (Product.id); '' on shipments made before products existed. */
+  productId: string
+  /** Snapshot of the product's name and bar code. */
   cargo: Cargo
   /** Declared quantity in tonnes. */
   quantity: number
@@ -171,12 +180,6 @@ export interface IntegrationLog {
   readBack?: 'sync' | 'page'
 }
 
-/** Cargo and declared quantity applied to every new shipment. Set by an admin. */
-export interface CargoDefaults extends Cargo {
-  /** Declared quantity in tonnes. */
-  quantity: number
-}
-
 /** An item of an RS.ge reference list (units, transport types). */
 export interface RsRefItem {
   id: number
@@ -213,9 +216,8 @@ export interface RsSettings {
   /** TRANSPORT_COAST (sic): transport cost, GEL. */
   transportCost: number
 
-  /** UNIT_ID from get_waybill_units; 99 = "other", then unitTxt is the unit name. */
-  unitId: number
-  unitTxt: string
+  /** Declared quantity (tonnes) of every new shipment. The operator can't change it. */
+  quantity: number
   /** Price per unit, GEL. AMOUNT = quantity × price. */
   price: number
   /** VAT_TYPE: 0 ordinary, 1 zero-rated, 2 exempt. */
@@ -234,6 +236,9 @@ export interface RsSettings {
   syncedTo?: string
   /** Why the last background sync failed; cleared by the next successful one. */
   syncError?: string
+  /** Products last read from RS.ge (get_bar_codes) at this time, and why the last read failed. */
+  productsSyncedAt?: string
+  productsSyncError?: string
 }
 
 /** Everything one waybill needs, in RS.ge terms. Built when a shipment is created. */
@@ -302,10 +307,10 @@ export interface Database {
   routes: CarrierRoute[]
   drivers: Driver[]
   trucks: Truck[]
+  products: Product[]
   users: User[]
   shipments: Shipment[]
   logs: IntegrationLog[]
-  cargo: CargoDefaults
   rs: RsSettings
   sms: SmsSettings
 }

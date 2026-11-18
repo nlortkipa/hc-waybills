@@ -4,7 +4,7 @@
  */
 import { canUseCarrier } from '../lib/route'
 import { active } from '../lib/util'
-import type { CargoDefaults, Carrier, Database, RsSettings, Shipment, User } from '../types'
+import type { Carrier, Database, RsSettings, Shipment, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -43,7 +43,7 @@ export const auth = {
 
 /* ------------------------- Reference data ------------------------- */
 
-export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
+export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users'
 type RefRecord<K extends RefCollection> = Database[K][number]
 
 export const refs = {
@@ -53,7 +53,7 @@ export const refs = {
 
   /** Number of shipments that reference the record (they keep showing it after deletion). */
   shipmentCount(col: RefCollection, id: string): number {
-    const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
+    const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', products: 'productId', users: 'createdBy' } as const)[col]
     return db.get().shipments.filter((s) => s[k] === id).length
   },
 
@@ -81,12 +81,15 @@ export const refs = {
   },
 }
 
-/* ------------------------------ Cargo ------------------------------ */
+/* ------------------------------ Products ------------------------------ */
 
-export const cargo = {
-  /** Sets the cargo and declared quantity used for every new shipment. Admin only. */
-  async save(value: CargoDefaults, _user?: User) {
-    await call('PUT', '/api/cargo', value)
+export const products = {
+  /**
+   * Reads the product list from RS.ge. Without `force` the server skips it when it read the list
+   * moments ago (pages call this when they open); `force` is the admin's refresh button and reports errors.
+   */
+  sync(force = false) {
+    return call('POST', '/api/products/sync', { force })
   },
 }
 

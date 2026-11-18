@@ -3,10 +3,10 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeUsable } from '../src/lib/route.ts'
-import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
+import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
-import type { CargoDefaults, Carrier, CarrierRoute, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, SmsDelivery, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Driver, Product, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, SmsDelivery, User } from '../src/types.ts'
 import { IntegrationError } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
 import { newReference, SENDER_RE, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
@@ -58,7 +58,7 @@ export function viewFor(user: User): Database {
 
 /* ------------------------- Reference data ------------------------- */
 
-export const REF_COLLECTIONS = ['carriers', 'routes', 'drivers', 'trucks', 'users'] as const
+export const REF_COLLECTIONS = ['carriers', 'routes', 'drivers', 'trucks', 'products', 'users'] as const
 export type RefCollection = (typeof REF_COLLECTIONS)[number]
 type RefRecord = Database[RefCollection][number]
 
@@ -69,7 +69,7 @@ const otherAdmins = (id: string) => active(db.get().users).filter((u) => u.role 
 const LAST_ADMIN = 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
 
 function shipmentCount(col: RefCollection, id: string): number {
-  const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]
+  const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', products: 'productId', users: 'createdBy' } as const)[col]
   return db.get().shipments.filter((s) => s[k] === id).length
 }
 
@@ -79,11 +79,9 @@ function removeOrRetire(col: RefCollection, rec: RefRecord) {
   else db.remove(col, rec.id)
 }
 
-/** Removes a carrier's routes whose end address is gone (or all of them, for a deleted carrier). */
-function dropDeadRoutes(carrierId: string) {
-  const c = db.get().carriers.find((x) => x.id === carrierId)
-  const live = new Set(c && !c.deletedAt ? active(c.destinations).map((x) => x.id) : [])
-  for (const r of active(db.get().routes)) if (r.carrierId === carrierId && !live.has(r.destinationId)) removeOrRetire('routes', r)
+/** Removes the routes of a deleted carrier. */
+function dropCarrierRoutes(carrierId: string) {
+  for (const r of active(db.get().routes)) if (r.carrierId === carrierId) removeOrRetire('routes', r)
 }
 
 export const refs = {
@@ -93,6 +91,7 @@ export const refs = {
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord
     const prev = (db.get()[col] as RefRecord[]).find((r) => r.id === rec.id)
     if (prev?.deletedAt) fail('ჩანაწერი წაშლილია')
+    if (col === 'products') return productLock(() => saveProduct(rec as Product, prev as Product | undefined)).finally(() => void syncProducts())
     let revokeSessions = false
     if (col === 'users') {
       const u = rec as User
@@ -130,37 +129,36 @@ export const refs = {
     }
     if (col === 'carriers') {
       const c = rec as Carrier
-      if (!c.destinations?.length) fail('კარიერს უნდა ჰქონდეს მინიმუმ ერთი დასრულების მისამართი')
-      c.destinations = c.destinations.map((x) => ({ ...x, id: x.id || uid('e') }))
-      // Removed destinations that shipments still point at stay as soft-deleted so history resolves.
-      const kept = new Set(c.destinations.map((x) => x.id))
-      const used = new Set(db.get().shipments.filter((s) => s.carrierId === c.id).map((s) => s.destinationId))
-      const at = nowIso()
-      const gone = ((prev as Carrier | undefined)?.destinations ?? [])
-        .filter((x) => !kept.has(x.id) && used.has(x.id))
-        .map((x) => ({ ...x, deletedAt: x.deletedAt ?? at }))
-      c.destinations = [...c.destinations, ...gone]
+      Object.assign(c, { name: str(c.name).trim(), startAddress: str(c.startAddress).trim() })
+      delete (c as Carrier & { destinations?: unknown }).destinations
+      if (!c.name) fail('შეიყვანე კარიერის დასახელება')
+      if (!c.startAddress) fail('შეიყვანე დაწყების მისამართი')
     }
     if (col === 'routes') {
       const r = rec as CarrierRoute
       const d = db.get()
       // Only these fields are kept.
-      Object.assign(r, { carrierId: str(r.carrierId), destinationId: str(r.destinationId) })
-      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'destinationId'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
-      const { carrier, destination } = resolveRoute(d.carriers, r.carrierId, r.destinationId)
+      Object.assign(r, { carrierId: str(r.carrierId), endAddress: str(r.endAddress).trim(), scaleId: str(r.scaleId).trim(), productId: str(r.productId) })
+      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'productId'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
+      const carrier = d.carriers.find((c) => c.id === r.carrierId)
       if (!carrier || carrier.deletedAt) fail('აირჩიე კარიერი')
-      if (!destination || destination.deletedAt) fail('აირჩიე დასრულების მისამართი')
-      if (active(d.routes).some((x) => x.id !== r.id && x.carrierId === r.carrierId && x.destinationId === r.destinationId)) fail('ეს მარშრუტი უკვე არსებობს')
+      if (!r.endAddress) fail('შეიყვანე დასრულების მისამართი')
+      if (!r.scaleId) fail('შეიყვანე სასწორის ID')
+      if (!active(d.products).some((p) => p.id === r.productId)) fail('აირჩიე პროდუქტი')
+      // The same addresses may be opened again for another product.
+      const same = (x: CarrierRoute) =>
+        x.id !== r.id && x.carrierId === r.carrierId && x.productId === r.productId && x.endAddress.trim().toLowerCase() === r.endAddress.toLowerCase()
+      if (active(d.routes).some(same)) fail('ეს მარშრუტი უკვე არსებობს')
     }
     db.put(col, rec as never)
-    if (col === 'carriers') dropDeadRoutes(rec.id)
     if (revokeSessions) db.sessions.deleteForUser(rec.id, rec.id === by.id ? token : undefined)
     return rec
   },
 
   /** Deletes a record. If shipments reference it, it is soft-deleted so reports keep showing it. */
-  remove(col: RefCollection, id: string, by: User) {
+  async remove(col: RefCollection, id: string, by: User) {
     requireAdmin(by)
+    if (col === 'products') return productLock(() => removeProduct(id)).finally(() => void syncProducts())
     if (col === 'users') {
       const u = db.get().users.find((x) => x.id === id)
       if (u?.role === 'admin' && !u.deletedAt && !otherAdmins(id)) fail(`წაშლა შეუძლებელია: ${LAST_ADMIN}`)
@@ -172,24 +170,132 @@ export const refs = {
     const rec = (db.get()[col] as RefRecord[]).find((r) => r.id === id)
     if (!rec) fail('ჩანაწერი ვერ მოიძებნა', 404)
     removeOrRetire(col, rec!)
-    if (col === 'carriers') dropDeadRoutes(id)
+    if (col === 'carriers') dropCarrierRoutes(id)
     if (col === 'users') db.sessions.deleteForUser(id)
   },
 }
 
-/* ------------------------------ Cargo ------------------------------ */
+/* ------------------------------ Products ------------------------------ */
 
-export function saveCargo(value: CargoDefaults, user: User) {
-  if (user.role !== 'admin') fail('ფიქსირებული ტვირთის შეცვლა შეუძლია მხოლოდ ადმინისტრატორს', 403)
-  const next: CargoDefaults = {
-    description: String(value?.description ?? '').trim(),
-    code: String(value?.code ?? '').trim(),
-    quantity: Number(value?.quantity),
+/*
+ * The product list is a copy of the connected taxpayer's product list on RS.ge, and nothing else:
+ * - adding, editing and deleting go to RS.ge first and change the copy only when RS.ge accepted;
+ * - every sync makes the copy equal to RS.ge's list (added, changed and deleted there → same here);
+ * - another service user (another taxpayer) or no service user at all empties the copy at once,
+ *   so the previous account's products never stay pickable, and the sync then fills it again.
+ * Products that shipments used are retired (hidden), not deleted, so those shipments keep showing them.
+ */
+
+/** Product changes and syncs run one at a time, so a sync never undoes a change it didn't see. */
+let productChain: Promise<unknown> = Promise.resolve()
+function productLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = productChain.then(fn, fn)
+  productChain = run.catch(() => {})
+  return run
+}
+
+const productCreds = () => storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს — პროდუქტები RS.ge-ზე ინახება')
+
+/** Hides every product: they belonged to an account that is no longer connected. */
+function dropAllProducts() {
+  for (const p of active(db.get().products)) removeOrRetire('products', p)
+}
+
+async function saveProduct(input: Product, prev: Product | undefined): Promise<Product> {
+  productCreds()
+  const unitId = Number(input.unitId)
+  const p: Product = {
+    id: input.id,
+    name: str(input.name),
+    barCode: str(input.barCode),
+    unitId,
+    unitTxt: unitId === RS_UNIT_OTHER ? str(input.unitTxt) : (rsUnits(db.get().rs).find((u) => u.id === unitId)?.name ?? ''),
   }
-  if (!next.description) fail('შეიყვანე ტვირთის დასახელება')
-  if (!next.code) fail('შეიყვანე ტვირთის კოდი')
-  if (!(next.quantity > 0)) fail('რაოდენობა უნდა იყოს 0-ზე მეტი')
-  db.set('cargo', next)
+  if (!p.name) fail('შეიყვანე პროდუქტის დასახელება')
+  if (!p.barCode) fail('შეიყვანე შტრიხკოდი')
+  // RS.ge knows a product only by its bar code: a new code would be a different product there.
+  if (prev && prev.barCode !== p.barCode) fail('შტრიხკოდის შეცვლა შეუძლებელია — წაშალე ეს პროდუქტი და დაამატე ახალი')
+  if (!(unitId > 0) || !p.unitTxt) fail(unitId === RS_UNIT_OTHER ? '„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება' : 'აირჩიე საზომი ერთეული')
+  const key = p.barCode.toLowerCase()
+  if (active(db.get().products).some((x) => x.id !== p.id && x.barCode.toLowerCase() === key)) fail('ამ შტრიხკოდით პროდუქტი უკვე არსებობს')
+  // A code already on RS.ge (added on the portal, not synced yet) is overwritten there, as on the portal.
+  await rsge.saveBarCode(p).catch((e: Error) => fail(e.message, 502))
+  // RS.ge answers "saved" even when it drops the code, so only what it reads back counts.
+  const got = await rsge.barCode(p.barCode).catch((e: Error) => fail(`RS.ge-მ შენახვა დაადასტურა, მაგრამ შემოწმება ვერ მოხერხდა: ${e.message}`, 502))
+  if (!got) fail(`RS.ge-მ შტრიხკოდი „${p.barCode}“ არ შეინახა — სავარაუდოდ ის უკვე სხვა გადამხდელს აქვს რეგისტრირებული. გამოიყენე სხვა, უნიკალური შტრიხკოდი.`, 502)
+  if (got!.name !== p.name || got!.unitId !== p.unitId) fail('RS.ge-მ ცვლილება არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
+  db.put('products', p)
+  return p
+}
+
+async function removeProduct(id: string) {
+  const p = db.get().products.find((x) => x.id === id) ?? fail('ჩანაწერი ვერ მოიძებნა', 404)
+  if (p.deletedAt) return
+  productCreds()
+  await rsge.deleteBarCode(p.barCode).catch((e: Error) => fail(e.message, 502))
+  removeOrRetire('products', p)
+}
+
+/** The product list is read again on page open only when the last read is older than this. */
+const PRODUCTS_FRESH_MS = 30_000
+let productSyncQueued: Promise<void> | null = null
+
+/**
+ * Reads RS.ge's product list and makes ours equal to it. Never throws; a failure is stored in
+ * rs.productsSyncError. Calls made while a sync is already running get a fresh one after it, so
+ * a sync started for the previous account is always followed by one for the current account.
+ */
+export function syncProducts(): Promise<void> {
+  if (productSyncQueued) return productSyncQueued
+  const p = productLock(async () => {
+    productSyncQueued = null
+    await runProductSync()
+  })
+  productSyncQueued = p
+  return p
+}
+
+async function runProductSync() {
+  if (!storedCreds()) return dropAllProducts()
+  const su = db.get().rs.su
+  const sameUser = () => db.get().rs.su === su
+  try {
+    const remote = new Map((await rsge.barCodes()).map((x) => [x.barCode, x]))
+    // The account changed while RS.ge answered: this list is the old account's. The next sync reads the new one.
+    if (!sameUser()) return
+    for (const p of active(db.get().products)) {
+      const r = remote.get(p.barCode)
+      remote.delete(p.barCode)
+      if (!r) removeOrRetire('products', p)
+      else if ((r.name || p.name) !== p.name || r.unitId !== p.unitId || r.unitTxt !== p.unitTxt) db.put('products', { ...p, name: r.name || p.name, unitId: r.unitId, unitTxt: r.unitTxt })
+    }
+    // New on RS.ge. A retired product with the same bar code comes back under its old id, so the
+    // shipments that used it point at the live product again.
+    for (const r of remote.values()) {
+      const old = db.get().products.findLast((x) => x.deletedAt && x.barCode === r.barCode)
+      db.put('products', { id: old?.id ?? uid('p'), name: r.name || r.barCode, barCode: r.barCode, unitId: r.unitId, unitTxt: r.unitTxt })
+    }
+    db.set('rs', { ...db.get().rs, productsSyncedAt: nowIso(), productsSyncError: undefined })
+  } catch (e) {
+    const msg = (e as Error).message
+    console.error('[rs-products]', msg)
+    if (sameUser()) db.set('rs', { ...db.get().rs, productsSyncError: msg })
+  }
+}
+
+/**
+ * Asked by the products tab and the new-shipment page when they open (only if the last read is
+ * older than PRODUCTS_FRESH_MS), and by the admin's "refresh" button (`force`).
+ */
+export async function syncProductsNow(body: { force?: boolean } | undefined, user: User) {
+  const force = !!body?.force
+  if (force) requireAdmin(user)
+  if (!storedCreds()) return force ? fail('ჯერ დაუკავშირდი RS.ge-ს') : undefined
+  const last = db.get().rs.productsSyncedAt
+  if (!force && !db.get().rs.productsSyncError && last && Date.now() - Date.parse(last) < PRODUCTS_FRESH_MS) return
+  await syncProducts()
+  const err = db.get().rs.productsSyncError
+  if (force && err) fail(err, 502)
 }
 
 /* ------------------------------ RS.ge ------------------------------ */
@@ -212,8 +318,7 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
     transTxt: str(v.transTxt),
     tranCostPayer: Number(v.tranCostPayer) === 1 ? 1 : 2,
     transportCost: num(v.transportCost),
-    unitId: num(v.unitId, RS_UNIT_OTHER),
-    unitTxt: str(v.unitTxt),
+    quantity: num(v.quantity),
     price: num(v.price),
     vatType: ([0, 1, 2] as const).find((x) => x === Number(v.vatType)) ?? 0,
     receptionInfo: str(v.receptionInfo),
@@ -221,9 +326,11 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
     comment: str(v.comment),
   }
   delete next.spSet
+  // Left over from before v19, when the unit was set here instead of on each product.
+  for (const k of ['unitId', 'unitTxt']) delete (next as unknown as Record<string, unknown>)[k]
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.price < 0 || next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
-  if (next.unitId === RS_UNIT_OTHER && !next.unitTxt) fail('„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება')
+  if (!(next.quantity > 0)) fail('დეკლარირებული რაოდენობა უნდა იყოს 0-ზე მეტი')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
   db.set('rs', next)
 }
@@ -257,10 +364,13 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
   const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
   if (su !== prev.su || sp !== prev.sp) resetRsCache()
   const sameUser = su === prev.su && r.unId === prev.sellerUnId
+  // Another taxpayer: the previous one's products go at once; the sync below loads this one's.
+  if (su !== prev.su) await productLock(async () => dropAllProducts())
   db.set('rs', {
     ...db.get().rs,
     // Another taxpayer's waybills: the background sync starts over.
     ...(!sameUser && { syncedTo: undefined, syncError: undefined }),
+    ...(su !== prev.su && { productsSyncedAt: undefined, productsSyncError: undefined }),
     su,
     sp,
     sellerUnId: r.unId,
@@ -271,14 +381,17 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
     units: r.units.length ? r.units : prev.units,
     transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
   })
+  void syncProducts()
   return { tin: r.tin, name: r.name }
 }
 
 /** Forgets the service user. Waybills already on RS.ge are not touched. */
-export function disconnectRs(user: User) {
+export async function disconnectRs(user: User) {
   requireAdmin(user)
   resetRsCache()
-  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined, syncedTo: undefined, syncError: undefined })
+  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined, syncedTo: undefined, syncError: undefined, productsSyncedAt: undefined, productsSyncError: undefined })
+  // No account, no products: the sync empties the list (it runs after any change in progress).
+  return syncProducts()
 }
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
@@ -339,13 +452,20 @@ export async function testSms(body: { phone?: string } | undefined, user: User) 
  */
 const refTag = (shipmentId: string) => `HC:${shipmentId}`
 
-/** Builds the waybill for a shipment from the admin's settings and the chosen route, driver and truck. */
-function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'carrierId' | 'destinationId' | 'driverId' | 'truckId' | 'cargo' | 'quantity'>): RsWaybillPayload {
+/**
+ * Builds the waybill for a shipment from the admin's settings and the chosen route, driver, truck and
+ * product. The product is read as it is now, so a retry picks up a fix to it; a shipment from before
+ * products existed falls back to its cargo snapshot.
+ */
+function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 'productId' | 'cargo' | 'quantity'>): RsWaybillPayload {
   const rs = d.rs
-  const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
+  const route = resolveRoute(d, s.routeId)
   const driver = d.drivers.find((x) => x.id === s.driverId)!
   const truck = d.trucks.find((x) => x.id === s.truckId)!
-  const unitTxt = rs.unitId === RS_UNIT_OTHER ? rs.unitTxt : (rs.units.find((u) => u.id === rs.unitId)?.name ?? '')
+  const product = d.products.find((x) => x.id === s.productId)
+  const goods = product
+    ? { name: product.name, barCode: product.barCode, unitId: product.unitId, unitTxt: product.unitTxt }
+    : { name: s.cargo.description, barCode: s.cargo.code, unitId: RS_UNIT_OTHER, unitTxt: 'ტონა' }
   const amount = Math.round(s.quantity * rs.price * 100) / 100
   return {
     // შიდა გადაზიდვა: the goods move between the company's own sites, so the buyer is the seller.
@@ -370,7 +490,7 @@ function buildWaybill(d: Database, s: Pick<Shipment, 'id' | 'carrierId' | 'desti
     receiverInfo: rs.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
     comment: [truck.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, rs.comment, refTag(s.id)].filter(Boolean).join('; '),
-    goods: [{ name: s.cargo.description, unitId: rs.unitId, unitTxt, quantity: s.quantity, price: rs.price, amount, barCode: s.cargo.code, vatType: rs.vatType }],
+    goods: [{ ...goods, quantity: s.quantity, price: rs.price, amount, vatType: rs.vatType }],
   }
 }
 
@@ -407,16 +527,17 @@ export const shipments = {
     const input = { carrierId: str(body.carrierId), routeId: str(body.routeId), driverId: str(body.driverId), truckId: str(body.truckId) }
     if (!canUseCarrier(user, input.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
     const d = db.get()
+    const carrier = d.carriers.find((c) => c.id === input.carrierId)
+    if (!carrier || carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
     const picked = d.routes.find((x) => x.id === input.routeId && x.carrierId === input.carrierId)
-    const route = resolveRoute(d.carriers, input.carrierId, picked?.destinationId ?? '')
-    if (!route.carrier || route.carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
     if (!picked || !routeUsable(d.carriers, picked)) fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
-    const destinationId = picked!.destinationId
     if (!active(d.drivers).some((x) => x.id === input.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
     if (!active(d.trucks).some((x) => x.id === input.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
-    // Cargo and declared quantity are fixed by the admin, never taken from the request.
-    const { quantity, ...cargo } = d.cargo
-    if (!cargo.description || !(quantity > 0)) fail('ფიქსირებული ტვირთი არ არის დაყენებული — მიმართე ადმინისტრატორს')
+    // The product comes with the route, never from the request.
+    const product = active(d.products).find((x) => x.id === picked!.productId) ?? fail('ამ მარშრუტს პროდუქტი არ აქვს ან წაშლილია — მიმართე ადმინისტრატორს')
+    const cargo = { description: product.name, code: product.barCode }
+    // The declared quantity is fixed by the admin, never taken from the request.
+    const quantity = d.rs.quantity
     const notReady = rsNotReady(d)
     if (notReady) fail(notReady)
     const sid = uid('s')
@@ -426,12 +547,12 @@ export const shipments = {
       createdBy: user.id,
       carrierId: input.carrierId,
       routeId: input.routeId,
-      destinationId,
       driverId: input.driverId,
       truckId: input.truckId,
+      productId: product.id,
       cargo,
       quantity,
-      rsWaybill: buildWaybill(d, { ...input, destinationId, id: sid, cargo, quantity }),
+      rsWaybill: buildWaybill(d, { ...input, productId: product.id, id: sid, cargo, quantity }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
@@ -639,8 +760,9 @@ async function runSync() {
 /** Starts the background sync (server start). */
 export function startRsSync() {
   if (!SYNC_MS) return
-  setTimeout(() => void syncRs(), 15_000).unref()
-  setInterval(() => void syncRs(), SYNC_MS).unref()
+  const both = () => void syncRs().then(() => syncProducts())
+  setTimeout(both, 15_000).unref()
+  setInterval(both, SYNC_MS).unref()
 }
 
 /** "Sync now" from the settings page. */
@@ -716,7 +838,8 @@ async function runPipeline(id: string) {
 async function saveNew(id: string): Promise<number> {
   const payload = buildWaybill(db.get(), get(id))
   // Recorded before the call: from here on, a lost answer means "maybe saved".
-  patch(id, () => ({ rsWaybill: payload, rsSaveAttemptedAt: nowIso() }))
+  const g = payload.goods[0]
+  patch(id, () => ({ rsWaybill: payload, cargo: { description: g.name, code: g.barCode }, rsSaveAttemptedAt: nowIso() }))
   let waybillId: number
   try {
     waybillId = await rsge.saveWaybill(payload, id)
@@ -753,7 +876,7 @@ async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
   const driver = d.drivers.find((x) => x.id === s.driverId)!
-  const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
+  const route = resolveRoute(d, s.routeId)
   const truck = d.trucks.find((x) => x.id === s.truckId)!
   const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}. მანქანა: ${truck.plateNumber}.`
   const failed = (msg: string) => patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso(), to: driver.phone, text } }), { level: 'error', message: msg })

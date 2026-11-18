@@ -21,7 +21,7 @@ export function makeLookup(d: Database) {
     },
     /** Display values of a shipment. Where its waybill was corrected on RS.ge, RS.ge's values are shown. */
     describe(s: Shipment) {
-      const r = resolveRoute(d.carriers, s.carrierId, s.destinationId)
+      const r = resolveRoute(d, s.routeId)
       const rs = s.rsRemote
       const sent = s.rsWaybill
       const moved = !!rs && !!sent && (rs.startAddress.trim() !== sent.startAddress.trim() || rs.endAddress.trim() !== sent.endAddress.trim())

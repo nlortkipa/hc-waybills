@@ -1,26 +1,22 @@
 import { AlertTriangle, CheckCircle2, FileText, Loader2, PlugZap, RefreshCw, Unplug, XCircle } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { cargo, rsSettings } from '../api'
+import { rsSettings } from '../api'
 import { useDb } from '../api/store'
 import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { RS_TRANS_OTHER, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
-import { formatDateTime } from '../lib/util'
-import type { CargoDefaults, RsSettings } from '../types'
+import { RS_TRANS_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
+import { active, formatDateTime } from '../lib/util'
+import type { RsSettings } from '../types'
 
-type Form = Record<'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'unitId' | 'unitTxt' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment' | 'cargoDescription' | 'cargoCode' | 'cargoQuantity', string>
+type Form = Record<'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
 
-const toForm = (rs: RsSettings, c: CargoDefaults): Form => ({
-  cargoDescription: c.description,
-  cargoCode: c.code,
-  cargoQuantity: c.quantity ? String(c.quantity) : '',
+const toForm = (rs: RsSettings): Form => ({
+  quantity: rs.quantity ? String(rs.quantity) : '',
   transporterTin: rs.transporterTin,
   transId: String(rs.transId),
   transTxt: rs.transTxt,
   tranCostPayer: String(rs.tranCostPayer),
   transportCost: String(rs.transportCost),
-  unitId: String(rs.unitId),
-  unitTxt: rs.unitTxt,
   price: String(rs.price),
   vatType: String(rs.vatType),
   receptionInfo: rs.receptionInfo,
@@ -33,7 +29,6 @@ const FALLBACK_TRANS = [
   { id: 1, name: 'საავტომობილო' },
   { id: RS_TRANS_OTHER, name: 'სხვა' },
 ]
-const FALLBACK_UNITS = [{ id: RS_UNIT_OTHER, name: 'სხვა' }]
 
 /** Georgian tax ID: 9 digits (company) or 11 (personal number). */
 const TIN_RE = /^\d{9}$|^\d{11}$/
@@ -112,16 +107,11 @@ function LookupLine({ lookup }: { lookup: Lookup }) {
 export function RsSettings() {
   const d = useDb()
   const connected = isConnected(d.rs)
-  const missing = [
-    ...(!d.cargo.description ? ['ტვირთის დასახელება'] : []),
-    ...(!d.cargo.code ? ['ტვირთის კოდი'] : []),
-    ...(!(d.cargo.quantity > 0) ? ['რაოდენობა'] : []),
-    ...rsMissing(d.rs, { hasCreds: connected }),
-  ]
+  const missing = [...rsMissing(d.rs, { hasCreds: connected }), ...(!active(d.products).length ? ['პროდუქტი (ცნობარები → პროდუქტები)'] : [])]
 
   return (
     <>
-      <PageHeader title="RS.ge" subtitle="სერვისის მომხმარებელი, ტვირთი, მყიდველი და ზედნადების პარამეტრები." />
+      <PageHeader title="RS.ge" subtitle="სერვისის მომხმარებელი, მყიდველი და ზედნადების პარამეტრები. პროდუქტები — ცნობარებში." />
       <div className="space-y-4">
         {missing.length > 0 ? (
           <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
@@ -310,7 +300,7 @@ function DefaultsForm({ connected }: { connected: boolean }) {
   const d = useDb()
   const rs = d.rs
   const toast = useToast()
-  const [f, setF] = useState<Form>(() => toForm(rs, d.cargo))
+  const [f, setF] = useState<Form>(() => toForm(rs))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
@@ -320,21 +310,16 @@ function DefaultsForm({ connected }: { connected: boolean }) {
   }
   const transporter = useTinName(f.transporterTin.trim(), connected)
 
-  const orig = toForm(rs, d.cargo)
-  const cargoDirty = f.cargoDescription.trim() !== orig.cargoDescription || f.cargoCode.trim() !== orig.cargoCode || Number(f.cargoQuantity) !== d.cargo.quantity
+  const orig = toForm(rs)
   const dirty = (Object.keys(f) as (keyof Form)[]).some((k) => String(f[k]).trim() !== String(orig[k]))
 
-  const units = rs.units.some((u) => u.id === RS_UNIT_OTHER) ? rs.units : [...rs.units, ...FALLBACK_UNITS]
   const transTypes = rs.transTypes.length ? rs.transTypes : FALLBACK_TRANS
 
   const validate = () => {
     const e: Record<string, string> = {}
-    if (!f.cargoDescription.trim()) e.cargoDescription = 'სავალდებულო ველი'
-    if (!f.cargoCode.trim()) e.cargoCode = 'სავალდებულო ველი'
-    if (!(Number(f.cargoQuantity) > 0)) e.cargoQuantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
+    if (!(Number(f.quantity) > 0)) e.quantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
-    if (Number(f.unitId) === RS_UNIT_OTHER && !f.unitTxt.trim()) e.unitTxt = 'სავალდებულო ველი'
     if (Number(f.transId) === RS_TRANS_OTHER && !f.transTxt.trim()) e.transTxt = 'სავალდებულო ველი'
     if (f.price === '' || !(Number(f.price) >= 0)) e.price = 'შეიყვანე 0 ან მეტი'
     if (f.transportCost !== '' && !(Number(f.transportCost) >= 0)) e.transportCost = 'შეიყვანე 0 ან მეტი'
@@ -347,13 +332,12 @@ function DefaultsForm({ connected }: { connected: boolean }) {
     if (!validate()) return
     setBusy(true)
     try {
-      if (cargoDirty) await cargo.save({ description: f.cargoDescription, code: f.cargoCode, quantity: Number(f.cargoQuantity) })
       await rsSettings.save({
         ...f,
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
-        unitId: Number(f.unitId),
+        quantity: Number(f.quantity),
         price: Number(f.price),
         vatType: Number(f.vatType) as 0 | 1 | 2,
       })
@@ -415,35 +399,12 @@ function DefaultsForm({ connected }: { connected: boolean }) {
           </div>
         </Section>
 
-        <Section title="ტვირთი" text="ავტომატურად ემატება ყველა ახალ რეისს — ოპერატორი ამას ვერ ცვლის. უკვე შექმნილი რეისები არ იცვლება.">
-          <div className="sm:col-span-2">
-            <Field label="ტვირთის დასახელება" error={errors.cargoDescription}>
-              <Input value={f.cargoDescription} placeholder="მაგ. ღორღი 0–5 მმ" invalid={!!errors.cargoDescription} onChange={set('cargoDescription')} />
-            </Field>
-          </div>
-          <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.cargoQuantity}>
-            <Input type="number" inputMode="decimal" step="0.1" min="0" value={f.cargoQuantity} invalid={!!errors.cargoQuantity} onChange={set('cargoQuantity')} />
+        <Section title="რაოდენობა და ფასი" text="ერთნაირია ყველა ახალ რეისზე — ოპერატორი მხოლოდ პროდუქტს ირჩევს. პროდუქტები და მათი საზომი ერთეული — ცნობარებში.">
+          <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
+            <Input type="number" inputMode="decimal" step="0.1" min="0" value={f.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
           </Field>
-          <Field label="ტვირთის კოდი (შტრიხკოდი)" error={errors.cargoCode}>
-            <Input value={f.cargoCode} placeholder="CRS-05" className="font-mono" invalid={!!errors.cargoCode} onChange={set('cargoCode')} />
-          </Field>
-          <Field label="საზომი ერთეული">
-            <Select value={f.unitId} onChange={set('unitId')}>
-              {units.map((u) => (
-                <option key={u.id} value={String(u.id)}>
-                  {u.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          {Number(f.unitId) === RS_UNIT_OTHER ? (
-            <Field label="ერთეულის დასახელება" error={errors.unitTxt}>
-              <Input value={f.unitTxt} placeholder="ტონა" invalid={!!errors.unitTxt} onChange={set('unitTxt')} />
-            </Field>
-          ) : (
-            <div className="hidden sm:block" />
-          )}
-          <Field label="ერთეულის ფასი (₾)" error={errors.price} hint={Number(f.price) >= 0 && Number(f.cargoQuantity) > 0 ? `ჯამი რეისზე: ${(Number(f.price) * Number(f.cargoQuantity)).toFixed(2)} ₾` : undefined}>
+          <div className="hidden sm:block" />
+          <Field label="ერთეულის ფასი (₾)" error={errors.price} hint={Number(f.price) >= 0 && Number(f.quantity) > 0 ? `ჯამი რეისზე: ${(Number(f.price) * Number(f.quantity)).toFixed(2)} ₾` : undefined}>
             <Input type="number" inputMode="decimal" min="0" step="0.01" value={f.price} invalid={!!errors.price} onChange={set('price')} />
           </Field>
           <Field label="დაბეგვრის ტიპი">
