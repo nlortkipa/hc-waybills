@@ -1,7 +1,7 @@
-import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, FileCheck2, Info, PencilLine, Plus, Save, X } from 'lucide-react'
+import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, FileCheck2, Info, Loader2, PencilLine, Plus, Save, X } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { shipments, usableCarriers, type NewShipmentInput, type NewShipmentItem } from '../api'
+import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput, type NewShipmentItem } from '../api'
 import { Button, Card, EmptyState, Field, Input, PageHeader, Segmented, Select } from '../components/ui'
 import { LookupLine, useTinName } from '../components/TinLookup'
 import { active, cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
@@ -66,11 +66,21 @@ function seedFrom(d: Database, s: Shipment, keepBegin: boolean): Seed {
   }
 }
 
+/** Waiting for RS.ge's copy of a waybill: its goods and options are read from RS.ge, not stored here. */
+function ReadingFromRs({ s }: { s: Shipment }) {
+  useRsLoad([s])
+  return <EmptyState icon={<Loader2 className="size-6 animate-spin" />} title="ზედნადები იკითხება RS.ge-დან…" text="პროდუქტები და პარამეტრები RS.ge-ზეა — ფორმა გაიხსნება, როგორც კი წაიკითხება." action={<Link to={`/shipments/${s.id}`} className="text-sm font-medium text-brand-600">რეისზე დაბრუნება</Link>} />
+}
+
+/** RS.ge's copy is needed before the form can start from this shipment (its goods are RS.ge's only). */
+const needsRs = (s: Shipment) => rsPending(s) && !s.items.length
+
 export function NewShipment() {
   const d = useDb()
   const user = useUser()
   const [params] = useSearchParams()
   const from = d.shipments.find((x) => x.id === params.get('from') && canUseCarrier(user, x.carrierId))
+  if (from && needsRs(from)) return <ReadingFromRs s={from} />
   // A copy of another shipment: same route, people, goods and options; a new waybill.
   return <ShipmentForm key={from?.id ?? 'new'} seed={from ? seedFrom(d, from, false) : undefined} copiedFrom={from} />
 }
@@ -83,6 +93,7 @@ export function EditShipment() {
   if (!s || !canUseCarrier(user, s.carrierId) || user.role === 'report') {
     return <EmptyState icon={<PencilLine className="size-6" />} title="რეისი ვერ მოიძებნა" action={<Link to="/shipments" className="text-sm font-medium text-brand-600">რეისებზე დაბრუნება</Link>} />
   }
+  if (needsRs(s)) return <ReadingFromRs s={s} />
   if (!editable(s)) {
     return (
       <EmptyState

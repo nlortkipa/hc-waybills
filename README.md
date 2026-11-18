@@ -36,11 +36,32 @@ flowchart LR
 | **Carrier** | Name, start address (one), end addresses (one or more, each with its scale ID) |
 | **Route** | Carrier, end address, scale ID and its goods lines (start → end). Each line's bar code, name and unit are typed in, or filled from the product list with the search button and then still editable (nothing is added to RS.ge's list), with its unit price, VAT type and, for excise goods, the excise code (RS.ge's list, loaded on connect). Operators pick a route for each shipment and type each line's quantity (plus the optional additional quantity, QUANTITY_EXT), removing lines the truck doesn't carry; each line becomes one goods line on the RS.ge waybill. Optionally the route's own waybill type and buyer (looked up on RS.ge like the settings' buyer); empty = from the RS.ge settings |
 | **Driver** | First/last name, personal ID, phone |
-| **Truck** | Model, plate number, trailer number |
-| **Product** | Name, bar code, unit and excise code, kept in step with the taxpayer's product list on RS.ge (see below); plus unit price and VAT type, kept only here. Searching a product on a route's goods line fills all of these in (still editable there) |
+| **Truck** | Plate number on RS.ge's car-number list (the one the rs.ge portal suggests); model and trailer number stored here for it. Plates added on the portal show up as trucks; a stored truck whose plate isn't on RS.ge's list can't be picked until the admin adds it there (button on the trucks tab) |
+| **Product** | RS.ge's product list itself (name, bar code, unit, excise code), read live and never stored here. Searching a product on a route's goods line fills these in (still editable there); price and VAT type are typed on the line |
 | **User** | Name, phone, email, role |
 
 **Roles:** `Admin` · `Operator` (given one or more carriers) · `Report user`
+
+## What is stored, and what is read from RS.ge
+
+The database keeps only what RS.ge doesn't have. Everything RS.ge has is read from it on demand and
+held in the server's memory (`server/rscache.ts`), never written to the database:
+
+| Read from RS.ge (memory only) | Stored here |
+|---|---|
+| Seller (name, tax ID, IDs), units, transport types, excise codes | Service user (password encrypted), waybill defaults |
+| Product list | Routes (with their goods lines and prices), carriers |
+| Car numbers | Truck model and trailer, drivers, users |
+| Each waybill: status, goods, quantities, amounts, buyer, dates, invoice | Shipment: carrier, route, driver, truck, creator, RS.ge waybill ID and number, SMS, history |
+
+A shipment holds what the operator typed only until RS.ge has the waybill; from then on its goods,
+quantities and options are RS.ge's (a correction on the rs.ge portal shows up as it is). Pages ask
+for the waybills they show; while anyone has the app open, RS.ge is asked every minute which
+waybills changed (`RS_CHANGES_SECONDS`) and the ones held are read again, drafts included, so a draft
+activated on the portal gets its SMS. The lists are read again every 5 minutes (`RS_LIST_SECONDS`)
+and whenever their tab opens. With nobody using the app, RS.ge isn't called. If RS.ge can't be
+reached, shipments still list with our side (carrier, route, driver, truck, number, SMS) but without
+RS.ge's details.
 
 ## Running the app
 
@@ -120,7 +141,7 @@ Everything the rs.ge portal's waybill form does is available here (verified agai
 |---|---|---|
 | ზედნადების ტიპი | Per shipment: შიდა გადაზიდვა (1), ტრანსპორტირებით (2), ტრანსპორტირების გარეშე (3: no driver, truck or SMS; the end address is the start, as RS.ge requires: -1036), უკან დაბრუნება (5). Default: the route's, else the settings'. 4 დისტრიბუცია / 6 ქვე-ზედნადები are not offered (one truck trip = one waybill) | `save_waybill` TYPE |
 | მყიდველი | Per shipment, looked up on RS.ge as typed (operators may look up too) | `get_name_from_tin` |
-| შენახვა / გააქტიურება | **მხოლოდ შენახვა** saves a draft (status **შენახული**); the shipment page then offers **რედაქტირება**, **გააქტიურება** and **წაშლა** (`del_waybill`). A draft activated on the portal is picked up by the sync and the driver is texted then | `save_waybill`, `send_waybil_vd`, `del_waybill` |
+| შენახვა / გააქტიურება | **მხოლოდ შენახვა** saves a draft (status **შენახული**); the shipment page then offers **რედაქტირება**, **გააქტიურება** and **წაშლა** (`del_waybill`). A draft activated on the portal is noticed when RS.ge is next asked for changes, and the driver is texted then | `save_waybill`, `send_waybil_vd`, `del_waybill` |
 | გააქტიურების თარიღი | Start of transport now or planned, up to 3 days ahead (-1038). A planned start that has passed by a retry becomes now | `send_waybil_vd` begin_date |
 | კორექტირება | **კორექტირება** on an active waybill: change route, driver, truck, quantities, lines (rows keep their RS.ge ID, removed ones are sent with STATUS -1, new ones with ID 0) and the extra fields. Type and start can't change on an active waybill (-1046). A new driver or truck re-sends the SMS. Not after completion (-1027) or once an invoice is attached (-1042) | `save_waybill` with ID and STATUS 1 |
 | დასრულება | Delivered now, or at an earlier time (not before the start: -1018, not in the future: -1017) | `close_waybill` / `close_waybill_vd` |
@@ -138,18 +159,19 @@ Duplicate protection: every waybill's `COMMENT` ends with the shipment's tag (`H
 
 Lost activation: RS.ge answers `-1` to `send_waybill` for a waybill that is already active, so when activation fails the server reads the waybill (`get_waybill`). If it is active, its number is taken and the upload counts as done. If the draft was deleted on the rs.ge portal, a new waybill is saved.
 
-Staying in step with RS.ge: a waybill can also be completed, cancelled or corrected on the rs.ge portal, so the server reads it back. RS.ge's version wins.
-- **Opening a shipment** calls `get_waybill` (at most once every 15 s per shipment). The page's RS.ge card shows the waybill as RS.ge has it now and marks values that differ from what was sent.
-- **Background sync** (every 5 min; `RS_SYNC_MINUTES`, `0` turns it off) asks `get_waybills_v1` which of the taxpayer's waybills changed since the last sync (in 3-day windows, up to 30 days back; no buyer filter, so a buyer corrected on the portal is still seen), then re-reads the ones that belong to uploaded shipments. A failed sync keeps its place and retries the same window next time. Settings show when it last ran, and **განახლება** runs it now.
-- A change found this way updates the shipment (status → დასრულებული / გაუქმებული; car, driver, route and quantity in lists and reports) and adds an event saying what changed. The snapshot is kept on the shipment (`rsRemote`), so pages and reports still work while RS.ge is down.
-- These read-backs appear in **API მოთხოვნები** with a badge (**სინქრონიზაცია** or **რეისის გახსნა**). The log keeps the last 300 other calls and, separately, the last 100 read-backs, so the frequent syncs never push the uploads out.
+Staying in step with RS.ge: a waybill can also be completed, cancelled or corrected on the rs.ge portal, and RS.ge's version is the only one: nothing of it is stored here (see "What is stored" above).
+- **Pages ask for what they show.** Lists, the dashboard and reports ask for the waybills they list that aren't held yet (`get_waybill`, three at a time); they arrive with the next state poll. **Opening a shipment** reads its waybill again (at most once every 15 s). Changing a waybill (correction, complete, cancel, invoice) reads it first when none is held.
+- **Changes:** while anyone has the app open, `get_waybills_v1` is asked every minute (`RS_CHANGES_SECONDS`) which of the taxpayer's waybills changed (no buyer filter, so a buyer corrected on the portal is still seen), and the held ones (and drafts) are read again. After more than 3 days without asking, what is held is dropped and read again when shown. Settings show when changes were last checked, and **განახლება** checks now.
+- A change found this way adds an event to the shipment saying what changed (compared with the copy read before; right after a restart there is nothing to compare with). A draft activated on the portal becomes uploaded here and its driver is texted.
+- These read-backs appear in **API მოთხოვნები** with a badge (**სინქრონიზაცია** or **რეისის გახსნა**). The log keeps the last 300 other calls and, separately, the last 100 read-backs, so the frequent reads never push the uploads out.
 
-Products: RS.ge keeps a product list per taxpayer (სასაქონლო კოდები, the bar code base on the rs.ge portal). The products tab is a copy of the connected taxpayer's list and nothing else.
-- **Adding or editing** a product calls `save_bar_code` (it adds, or overwrites the product with that bar code) and changes the copy only if RS.ge really stored it: `save_bar_code` answers 1 even for codes it silently drops (common ones like `67`, `123` or `asd`, apparently because another taxpayer already registered them), so the code is read back with `get_bar_codes` first, and the admin is told to pick another code when it isn't there. **Deleting** calls `delete_bar_code`. The bar code is the product's identity on RS.ge, so it can't be edited: delete the product and add a new one.
-- **Polling:** `get_bar_codes` reads the whole list with the background sync (every `RS_SYNC_MINUTES`), after connecting, after every change made here, and when the products tab or the new-shipment page opens (at most every 30 s). Each read makes the copy equal to RS.ge's list: products added, renamed or deleted on the portal are added, renamed or removed here. The tab shows when the list was last read, and **განახლება** reads it now. If a read fails, the last list read stays and the error is shown.
-- **Another service user** (another taxpayer) removes the previous one's products at once and loads the new one's; nothing is copied between accounts. **Disconnecting** empties the list.
-- Products that shipments used are hidden instead of deleted, so those shipments keep showing them; one that comes back on RS.ge with the same bar code gets its old record back.
-- A waybill takes the product's name, bar code and unit at the time it is saved, so fixing a product and pressing **ხელახლა ცდა** is enough. The shipment keeps the name and bar code it was sent with.
+Products: RS.ge keeps a product list per taxpayer (სასაქონლო კოდები, the bar code base on the rs.ge portal). The products tab shows that list, read live; nothing of it is stored here, and a product's id is its bar code.
+- **Adding or editing** a product calls `save_bar_code` (it adds, or overwrites the product with that bar code) and counts as done only if RS.ge really stored it: `save_bar_code` answers 1 even for codes it silently drops (common ones like `67`, `123` or `asd`, apparently because another taxpayer already registered them), so the code is read back with `get_bar_codes` first, and the admin is told to pick another code when it isn't there. **Deleting** calls `delete_bar_code`. The bar code is the product's identity on RS.ge, so it can't be edited: delete the product and add a new one.
+- **Reading:** `get_bar_codes` reads the whole list every 5 minutes while the app is in use (`RS_LIST_SECONDS`), after connecting, after every change made here, and when the products tab or the new-shipment page opens (at most every 30 s). The tab shows when the list was last read, and **განახლება** reads it now. If a read fails, the last list read stays and the error is shown.
+- **Another service user** (another taxpayer) or **disconnecting** forgets everything read from RS.ge at once.
+- A route's goods line is a copy of what was picked (and stays as written if the product is deleted on RS.ge), so a waybill takes the line's name, bar code and unit.
+
+Trucks: plates live on the taxpayer's car-number list on RS.ge (`get_car_numbers` / `save_car_numbers` / `delete_car_numbers`); the model and trailer number are stored here. Adding a truck saves its plate there (checked by reading the list back), deleting one removes it (unless another truck has the same plate). A plate added on the portal is a truck here at once, with its record made when a shipment first uses it.
 
 Mapping notes:
 - RS.ge has no trailer field: the trailer number is written into `COMMENT`.

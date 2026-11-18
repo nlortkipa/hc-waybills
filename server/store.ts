@@ -1,6 +1,9 @@
 /**
  * The database: SQLite through Node's built-in node:sqlite (no dependencies).
  *
+ * Only what RS.ge doesn't have is stored. RS.ge's data (products, car numbers, waybills, the seller)
+ * is read from RS.ge on demand and kept in memory (server/rscache.ts).
+ *
  * Each record is one row holding its JSON, so a change writes only the rows it touches,
  * inside a transaction. A copy of the data is kept in memory for fast reads; every write
  * goes to SQLite first and reaches the copy only after it committed.
@@ -13,10 +16,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { Database, IntegrationLog, RsSettings, SmsSettings } from '../src/types.ts'
+import { RS_LIVE_FIELDS, type IntegrationLog, type RsSettings, type SmsSettings, type StoredDatabase as Database } from '../src/types.ts'
 import { decrypt, encrypt, isEncrypted } from './secret.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
-import { createSeed, migrate } from './seed.ts'
+import { createSeed, migrate, storedShipment } from './seed.ts'
 
 const DATA = join(import.meta.dirname, 'data')
 /** HC_DB_FILE used to name the JSON file; a .json value now means "the .db next to it". */
@@ -43,7 +46,7 @@ const SESSION_MAX_MS = 90 * 86400_000
 /** last_used_at is written at most this often, so polling doesn't write on every request. */
 const SESSION_TOUCH_MS = 3600_000
 
-type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users'
+type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
 export type StoredCol = RecordCol | 'shipments'
 type MetaKey = 'rs' | 'sms'
 
@@ -63,7 +66,6 @@ sql.exec(`
   CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS drivers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS trucks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS shipments (id TEXT PRIMARY KEY, carrier_id TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS shipments_created ON shipments (created_at);
@@ -75,7 +77,7 @@ sql.exec(`
 
 /* ------------------------------ Low level ------------------------------ */
 
-const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'products', 'users']
+const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'users']
 
 function getMeta<T>(key: string): T | undefined {
   const row = sql.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
@@ -90,6 +92,8 @@ const SECRET_FIELD: Record<string, { field: string; what: string }> = {
   sms: { field: 'apiKey', what: 'SMS API key — enter it again in the SMS settings' },
 }
 function seal(key: string, value: unknown) {
+  // What RS.ge says about the account is never stored: it is read again from RS.ge.
+  if (key === 'rs' && value) value = Object.fromEntries(Object.entries(value).filter(([k]) => !(RS_LIVE_FIELDS as readonly string[]).includes(k)))
   const s = SECRET_FIELD[key]
   if (!s || !value) return value
   const v = value as Record<string, string>
@@ -126,6 +130,8 @@ function writeLog(l: IntegrationLog) {
 
 const parseRows = <T,>(rows: unknown[]) => (rows as { data: string }[]).map((r) => JSON.parse(r.data) as T)
 
+const tableExists = (name: string) => !!sql.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)
+
 function readAll(): Database | null {
   const version = getMeta<number>('version')
   if (version == null) return null
@@ -135,12 +141,13 @@ function readAll(): Database | null {
     routes: parseRows(sql.prepare('SELECT data FROM routes ORDER BY rowid').all()),
     drivers: parseRows(sql.prepare('SELECT data FROM drivers ORDER BY rowid').all()),
     trucks: parseRows(sql.prepare('SELECT data FROM trucks ORDER BY rowid').all()),
-    products: parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()),
     users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),
     shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
     logs: trimLogs(parseRows(sql.prepare('SELECT data FROM logs ORDER BY rowid DESC').all())),
     // Before v19: the one admin-set cargo, which migrate() turns into a product.
     ...(version < 19 && { cargo: getMeta('cargo') }),
+    // Before v24 products were stored; migrate() reads them to point route lines at their bar codes.
+    ...(version < 24 && { products: tableExists('products') ? parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()) : [] }),
     rs: openSecret('rs', getMeta<RsSettings>('rs')!),
     // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
     sms: openSecret('sms', getMeta<SmsSettings>('sms') ?? defaultSmsSettings()),
@@ -169,8 +176,10 @@ function tx(fn: () => void, bump = true) {
 function replaceAll(db: Database) {
   tx(() => {
     for (const t of [...RECORD_COLS, 'shipments', 'logs']) sql.exec(`DELETE FROM ${t}`)
+    // Products are RS.ge's only since v24.
+    sql.exec('DROP TABLE IF EXISTS products')
     for (const col of RECORD_COLS) for (const r of db[col]) writeRow(col, r)
-    for (const s of db.shipments) writeRow('shipments', s)
+    for (const s of db.shipments) writeRow('shipments', storedShipment(s))
     for (const l of trimLogs(db.logs).reverse()) writeLog(l)
     setMeta('version', db.version)
     sql.prepare("DELETE FROM meta WHERE key IN ('settings', 'cargo')").run()
@@ -247,6 +256,7 @@ export const store = {
 
   /** Inserts or replaces one record. */
   put<C extends StoredCol>(col: C, rec: Database[C][number]) {
+    if (col === 'shipments') rec = storedShipment(rec as Database['shipments'][number]) as Database[C][number]
     tx(() => writeRow(col, rec))
     const list = mem[col] as { id: string }[]
     const exists = list.some((r) => r.id === rec.id)

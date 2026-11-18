@@ -8,6 +8,8 @@
  * activated can only be deleted (del_waybill): ref_waybill answers 0 and leaves it as it is.
  * Reading back: get_waybill (one waybill as RS.ge has it now) and get_waybills_v1 (what changed
  * in a time window), used to keep shipments in step with changes made on the rs.ge portal.
+ * Trucks: the taxpayer's car-number list (get_car_numbers / save_car_numbers / delete_car_numbers),
+ * the same list the rs.ge portal offers when a waybill is typed in.
  * Products: the taxpayer's product list on RS.ge (get_bar_codes / save_bar_code / delete_bar_code,
  * "სასაქონლო კოდების აღრიცხვა"). save_bar_code adds or overwrites by bar code; delete_bar_code
  * also answers 1 for a code that isn't there. save_bar_code also answers 1 for codes it silently
@@ -19,10 +21,27 @@
  * the password encrypted (server/secret.ts). Every call goes to the integration log, with the
  * password masked. Read-backs are tagged
  * (readBack) so the log keeps them apart from the uploads.
+ *
+ * What RS.ge says about the service user (the seller, its units, transport types and excise codes)
+ * is kept in memory only (`account`): read on connect, or on first need after a restart.
  */
 import type { IntegrationLog, RsAkciz, RsListWaybill, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
 import { IntegrationError, log } from './integrations.ts'
 import { store as db } from './store.ts'
+
+/** The connected service user as RS.ge describes it. Memory only. */
+export interface RsAccount {
+  /** The su it belongs to: a different stored su makes it stale. */
+  su: string
+  unId: number
+  userId: number | null
+  tin: string
+  name: string
+  units: RsRefItem[]
+  transTypes: RsRefItem[]
+  akciz: RsAkciz[]
+  checkedAt: string
+}
 
 const URL = process.env.RS_WAYBILL_URL ?? 'https://services.rs.ge/WayBillService/WayBillService.asmx'
 const NS = 'http://tempuri.org/'
@@ -247,7 +266,7 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
 
 /** get_waybill leaves UNIT_TXT out for RS.ge's own units: the name is taken from the units list. */
 function unitName(unitId: number, txt: string) {
-  return txt || db.get().rs.units.find((u) => u.id === unitId)?.name || ''
+  return txt || account?.units.find((u) => u.id === unitId)?.name || ''
 }
 
 const optNum = (v: string) => (v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v))
@@ -282,6 +301,8 @@ function parseWaybill(xml: string): RsRemoteWaybill {
     number: tag(head, 'WAYBILL_NUMBER'),
     buyerTin: tag(head, 'BUYER_TIN'),
     buyerName: tag(head, 'BUYER_NAME'),
+    // CHEK_BUYER_TIN: 1 Georgian, 0 foreign.
+    buyerForeign: tag(head, 'CHEK_BUYER_TIN') === '0',
     sellerTin: tag(head, 'SELLER_TIN'),
     sellerName: tag(head, 'SELLER_NAME'),
     startAddress: tag(head, 'START_ADDRESS'),
@@ -496,6 +517,24 @@ const live = {
     if (r !== 1) throw rsError(await describe(r || -1, c), true)
   },
 
+  /** The taxpayer's car numbers, as RS.ge stores them (no dashes). Tagged as a read-back in the log. */
+  async carNumbers(c: RsCreds): Promise<string[]> {
+    const xml = await soap('get_car_numbers', creds(c), undefined, (x) => tag(x, 'get_car_numbersResult') === '1', 'sync')
+    const r = Number(tag(xml, 'get_car_numbersResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c))
+    return blocks(xml, 'CAR_NUMBER').map((b) => unesc(b.trim())).filter(Boolean)
+  },
+
+  async saveCarNumber(c: RsCreds, carNumber: string) {
+    const r = Number(tag(await soap('save_car_numbers', [...creds(c), ['car_number', carNumber]], undefined, (x) => tag(x, 'save_car_numbersResult') === '1'), 'save_car_numbersResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c), true)
+  },
+
+  async deleteCarNumber(c: RsCreds, carNumber: string) {
+    const r = Number(tag(await soap('delete_car_numbers', [...creds(c), ['car_number', carNumber]], undefined, (x) => tag(x, 'delete_car_numbersResult') === '1'), 'delete_car_numbersResult'))
+    if (r !== 1) throw rsError(await describe(r || -1, c), true)
+  },
+
   /** close_waybill / ref_waybill / del_waybill return 1 on success, 0 or a negative code otherwise. */
   async finish(op: 'close_waybill' | 'ref_waybill' | 'del_waybill', c: RsCreds, waybillId: number, shipmentId: string | undefined) {
     const r = Number(tag(await soap(op, [...creds(c), ['waybill_id', waybillId]], shipmentId, (x) => tag(x, `${op}Result`) === '1'), `${op}Result`))
@@ -571,15 +610,28 @@ function activeCreds(): RsCreds {
   return c
 }
 
-/** Seller IDs of the service user: from the last "check connection", or looked up now. */
+/* The service user as RS.ge describes it: memory only, read again after a restart. */
+let account: RsAccount | null = null
+let accountLoad: Promise<RsAccount> | null = null
+/** Why the account info couldn't be read the last time it was tried. */
+let accountError: string | undefined
+let accountListener = () => {}
+
+/** Called whenever the account info (or its error) changes: the API's state revision follows it. */
+export function onAccountChange(fn: () => void) {
+  accountListener = fn
+}
+
+function setAccount(a: RsAccount | null) {
+  account = a
+  accountError = undefined
+  accountListener()
+}
+
+/** Seller IDs of the service user: known since connecting, or looked up now. */
 async function seller(C: RsCreds) {
-  let rs = db.get().rs
-  if (!rs.sellerUnId) {
-    const r = await live.check(C)
-    db.set('rs', { ...db.get().rs, sellerUnId: r.unId, sellerUserId: r.userId, sellerTin: r.tin, sellerName: r.name, checkedAt: new Date().toISOString() })
-    rs = db.get().rs
-  }
-  return { unId: rs.sellerUnId!, userId: rs.sellerUserId }
+  const a = await rsge.loadAccount(C)
+  return { unId: a.unId, userId: a.userId }
 }
 
 /** get_waybills_v1 accepts at most 3 days; a minute less to stay clear of the edge. */
@@ -589,6 +641,42 @@ const LIST_WINDOW_MS = 72 * 3600_000 - 60_000
 
 export const rsge = {
   check: (c: RsCreds) => live.check(c),
+
+  /** The account info for the stored service user, if it has been read since the server started. */
+  account: (): RsAccount | null => (account && account.su === db.get().rs.su ? account : null),
+  accountError: () => accountError,
+
+  /** Records what a successful check returned (connecting). */
+  setAccount(su: string, r: Awaited<ReturnType<typeof live.check>>) {
+    setAccount({ su, unId: r.unId, userId: r.userId, tin: r.tin, name: r.name, units: r.units, transTypes: r.transTypes, akciz: r.akciz, checkedAt: new Date().toISOString() })
+  },
+
+  /** The account info, read from RS.ge when it isn't known yet. One read at a time. */
+  async loadAccount(c: RsCreds = activeCreds()): Promise<RsAccount> {
+    const known = rsge.account()
+    if (known && known.su === c.su) return known
+    accountLoad ??= live
+      .check(c)
+      .then((r) => {
+        rsge.setAccount(c.su, r)
+        return account!
+      })
+      .catch((e: Error) => {
+        accountError = e.message
+        accountListener()
+        throw e
+      })
+      .finally(() => (accountLoad = null))
+    return accountLoad
+  },
+
+  /** Excise codes again, when connecting couldn't load them. */
+  async reloadAkciz() {
+    const a = rsge.account()
+    if (!a || a.akciz.length) return
+    const akciz = await live.akciz(activeCreds())
+    if (akciz.length && rsge.account() === a) setAccount({ ...a, akciz })
+  },
   nameFromTin: (c: RsCreds, tin: string) => live.nameFromTin(c, tin),
 
   /**
@@ -641,8 +729,8 @@ export const rsge = {
    */
   async list(side: 'issued' | 'received', from: Date, to: Date): Promise<RsListWaybill[]> {
     const c = activeCreds()
-    const rs = db.get().rs
-    const own = { tin: rs.sellerTin, name: rs.sellerName }
+    const a = await rsge.loadAccount(c)
+    const own = { tin: a.tin, name: a.name }
     const windows: [Date, Date][] = []
     for (let e = to.getTime(); e > from.getTime(); e -= LIST_WINDOW_MS) windows.push([new Date(Math.max(from.getTime(), e - LIST_WINDOW_MS)), new Date(e)])
     const out = new Map<number, RsListWaybill>()
@@ -667,6 +755,13 @@ export const rsge = {
   /** Removes a product from RS.ge. */
   deleteBarCode: (barCode: string) => live.deleteBarCode(activeCreds(), barCode),
 
+  /** The taxpayer's car numbers on RS.ge. */
+  carNumbers: () => live.carNumbers(activeCreds()),
+  /** Adds a car number to RS.ge's list. Check with carNumbers(): like bar codes, the answer alone isn't proof. */
+  saveCarNumber: (carNumber: string) => live.saveCarNumber(activeCreds(), carNumber),
+  /** Removes a car number from RS.ge's list. */
+  deleteCarNumber: (carNumber: string) => live.deleteCarNumber(activeCreds(), carNumber),
+
   /** IDs of waybills changed between `from` and `to`, read in 3-day windows (the RS.ge limit). */
   async changed(from: Date, to: Date) {
     const c = activeCreds()
@@ -678,8 +773,10 @@ export const rsge = {
   },
 }
 
-/** Forget cached error texts (after changing the service user). */
+/** Forget cached error texts and the account info (after changing or removing the service user). */
 export function resetRsCache() {
   errorTexts = null
+  accountLoad = null
+  setAccount(null)
 }
 

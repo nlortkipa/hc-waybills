@@ -73,7 +73,7 @@ export interface ShipmentWaybill {
  */
 export interface RouteGood {
   id: string
-  /** The list product it was filled from, while the bar code is still that product's; '' otherwise. */
+  /** The RS.ge product (its bar code) it was filled from, while the bar code is still that; '' otherwise. */
   productId: string
   /** W_NAME. */
   name: string
@@ -102,6 +102,13 @@ export interface Driver extends SoftDeletable {
   citizenship?: 'GE' | 'foreign'
 }
 
+/**
+ * A truck. Its plate number lives in the taxpayer's car-number list on RS.ge (get_car_numbers); only
+ * what RS.ge has no place for (model, trailer) is stored here, keyed to the plate. In the view, every
+ * plate on RS.ge is a truck: one without a record here has the id `rs-<PLATE>` and empty extras (the
+ * record is made when a shipment first uses it). A record whose plate is gone from RS.ge is shown as
+ * deleted. While RS.ge's list can't be read, the records here are shown as they are.
+ */
 export interface Truck extends SoftDeletable {
   id: string
   model: string
@@ -110,12 +117,13 @@ export interface Truck extends SoftDeletable {
 }
 
 /**
- * A product (საქონელი): a copy of one entry of the connected taxpayer's RS.ge product list
- * (get_bar_codes / save_bar_code), kept equal to it by the sync. The bar code is its identity on
- * RS.ge, so it can't be changed once saved. Price and VAT type are kept here only (RS.ge's list has
- * no such fields). Picking a product for a route's goods line fills the line with all of it.
+ * A product (საქონელი): one entry of the connected taxpayer's RS.ge product list (get_bar_codes /
+ * save_bar_code), read from RS.ge and never stored here. The bar code is its identity on RS.ge (and
+ * its id here), so it can't be changed once saved. Picking a product for a route's goods line fills
+ * the line with it; the line's price and VAT type are typed on the route.
  */
 export interface Product extends SoftDeletable {
+  /** = barCode. */
   id: string
   /** W_NAME / goods_name. */
   name: string
@@ -126,15 +134,12 @@ export interface Product extends SoftDeletable {
   unitTxt: string
   /** A_ID: excise code (RsAkciz.id) on RS.ge; 0 or missing = not excise goods. */
   aId?: number
-  /** Price per unit, GEL, for goods lines filled from this product. Not on RS.ge; missing = not set. */
-  price?: number
-  /** VAT_TYPE for goods lines filled from this product. Not on RS.ge; missing = 0 (ordinary). */
-  vatType?: 0 | 1 | 2
 }
 
 /**
  * One goods line of a shipment's waybill: a route goods line (lineId) with the quantity the operator
- * typed. The rest is a snapshot of the line, refreshed when the waybill is saved.
+ * typed. The rest is a snapshot of the line, refreshed when the waybill is saved. Once the waybill is
+ * on RS.ge, the lines are RS.ge's goods rows (matched to the route's lines by bar code).
  */
 export interface ShipmentItem extends Omit<RouteGood, 'id'> {
   /** RouteGood.id; '' on shipments from before route goods lines existed. */
@@ -169,6 +174,13 @@ export interface ShipmentEvent {
   message: string
 }
 
+/**
+ * A shipment (რეისი). Stored here is only what RS.ge doesn't know: who made it for which carrier,
+ * route, driver and truck, the RS.ge waybill ID, the driver's SMS and the history. What the operator
+ * typed (goods, quantities, waybill options) is stored only until the waybill is on RS.ge; after that
+ * RS.ge has it, and the server fills those fields from RS.ge in every view (see server/rscache.ts),
+ * along with the fields marked "from RS.ge". They are missing while RS.ge's copy can't be read.
+ */
 export interface Shipment {
   id: string
   createdAt: string
@@ -180,17 +192,18 @@ export interface Shipment {
   driverId: string
   /** '' for a waybill without transport (type 3). */
   truckId: string
-  /** Type, buyer, start time and transport details. Missing on shipments from before they were chosen per shipment. */
+  /** Type, buyer, start time and transport details. Stored until the waybill is on RS.ge, then from RS.ge. */
   waybill?: ShipmentWaybill
   /** Save on RS.ge without activating (შენახვა); cleared when it is activated. */
   draft?: boolean
-  /** Tax invoice (ანგარიშ-ფაქტურა) written from this waybill on RS.ge. */
+  /** From RS.ge: tax invoice (ანგარიშ-ფაქტურა) written from this waybill. */
   invoiceId?: number
-  /** The waybill's goods lines, at least one. */
+  /** The waybill's goods lines, at least one. Stored until the waybill is on RS.ge, then from RS.ge ([] while it can't be read). */
   items: ShipmentItem[]
-  /** Declared quantity: the sum of the items' quantities. */
+  /** The sum of the items' quantities. Stored until the waybill is on RS.ge, then from RS.ge. */
   quantity: number
   status: ShipmentStatus
+  /** The number RS.ge gave the waybill on activation. Stored: it never changes, and the SMS and history name it. */
   waybillNumber?: string
   /** RS.ge internal waybill ID returned by save_waybill. Kept so retries activate it instead of creating a duplicate. */
   rsWaybillId?: number
@@ -199,14 +212,11 @@ export interface Shipment {
    * call may have created the waybill without us hearing back, so the next attempt looks it up first.
    */
   rsSaveAttemptedAt?: string
-  /** What was sent to RS.ge, fixed when the shipment is created so retries send the same waybill. */
+  /** What is sent to RS.ge; stored only until RS.ge has the waybill. */
   rsWaybill?: RsWaybillPayload
-  /** After upload: the waybill was completed or cancelled on RS.ge (from this app or, via rsRemote, anywhere else). */
+  /** From RS.ge: the waybill was completed or cancelled (from this app or the rs.ge portal). */
   waybillState?: 'closed' | 'cancelled'
-  /**
-   * The waybill as RS.ge last reported it (background sync or opening the shipment). Where it differs
-   * from what was sent (someone corrected the waybill on the rs.ge portal), RS.ge is what counts.
-   */
+  /** From RS.ge: the waybill as RS.ge has it now (read on demand, kept in the server's memory). */
   rsRemote?: RsRemoteWaybill
   rs: { status: StepStatus; error?: string; at?: string }
   sms: {
@@ -313,6 +323,7 @@ export interface RsRefItem {
 /**
  * RS.ge waybill settings: the same on every shipment, set by the admin.
  * The password (sp) never leaves the server: clients get '' plus spSet.
+ * Fields marked "from RS.ge" are never stored: the server reads them from RS.ge and adds them to each view.
  */
 export interface RsSettings {
   /** Service user (სერვისის მომხმარებელი). */
@@ -322,7 +333,7 @@ export interface RsSettings {
   /** True when a password is stored on the server. Set only in client copies. */
   spSet?: boolean
 
-  /* Seller: the taxpayer that owns the service user, filled in by "check connection" (or on the first upload). */
+  /* From RS.ge — the seller: the taxpayer that owns the service user. */
   sellerUnId: number | null
   sellerUserId: number | null
   sellerTin: string
@@ -335,7 +346,10 @@ export interface RsSettings {
   buyerTin: string
   buyerName: string
   buyerForeign: boolean
+  /** From RS.ge: when the seller was read. */
   checkedAt?: string
+  /** From RS.ge: why the seller couldn't be read (RS.ge unreachable, password changed…). */
+  accountError?: string
 
   /** Optional: tax ID of a separate transport company (TRANSPORTER_TIN). */
   transporterTin: string
@@ -356,20 +370,42 @@ export interface RsSettings {
   /** Extra COMMENT text. The trailer number is always added to the comment. */
   comment: string
 
-  /** Reference lists cached from RS.ge by "check connection". */
+  /** From RS.ge: reference lists. */
   units: RsRefItem[]
   transTypes: RsRefItem[]
   /** Excise goods codes, for goods lines of excise goods. Missing until first loaded. */
   akciz?: RsAkciz[]
 
-  /** Background sync with RS.ge: changes up to this moment have been read. Cleared with the service user. */
+  /** From RS.ge: waybills changed up to this moment have been re-read, and why the last check failed. */
   syncedTo?: string
-  /** Why the last background sync failed; cleared by the next successful one. */
   syncError?: string
-  /** Products last read from RS.ge (get_bar_codes) at this time, and why the last read failed. */
+  /** From RS.ge: the product list (get_bar_codes) was read at this time, and why the last read failed. */
   productsSyncedAt?: string
   productsSyncError?: string
+  /** From RS.ge: the car-number list (get_car_numbers) was read at this time, and why the last read failed. */
+  platesReadAt?: string
+  platesError?: string
 }
+
+/** RsSettings fields that come from RS.ge and are never stored. */
+export const RS_LIVE_FIELDS = [
+  'sellerUnId',
+  'sellerUserId',
+  'sellerTin',
+  'sellerName',
+  'checkedAt',
+  'accountError',
+  'units',
+  'transTypes',
+  'akciz',
+  'syncedTo',
+  'syncError',
+  'productsSyncedAt',
+  'productsSyncError',
+  'platesReadAt',
+  'platesError',
+  'spSet',
+] as const
 
 /** Everything one waybill needs, in RS.ge terms. Built when a shipment is created. */
 export interface RsWaybillPayload {
@@ -434,6 +470,8 @@ export interface RsRemoteWaybill {
   number: string
   buyerTin: string
   buyerName: string
+  /** CHEK_BUYER_TIN 0: a foreign buyer. */
+  buyerForeign?: boolean
   startAddress: string
   endAddress: string
   driverTin: string
@@ -470,12 +508,14 @@ export interface RsRemoteWaybill {
   checkedAt: string
 }
 
+/** What a client sees: the stored data plus what is read from RS.ge (products, plates, waybills, account). */
 export interface Database {
   version: number
   carriers: Carrier[]
   routes: CarrierRoute[]
   drivers: Driver[]
   trucks: Truck[]
+  /** From RS.ge. */
   products: Product[]
   users: User[]
   shipments: Shipment[]
@@ -483,3 +523,6 @@ export interface Database {
   rs: RsSettings
   sms: SmsSettings
 }
+
+/** What the server stores. Products are RS.ge's only. */
+export type StoredDatabase = Omit<Database, 'products'>

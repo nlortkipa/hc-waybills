@@ -11,12 +11,21 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, saveRsSettings, shipments, startRsSync, syncProductsNow, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { randomBytes } from 'node:crypto'
+import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, saveRsSettings, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
 const HOST = process.env.HOST ?? '0.0.0.0'
 const DIST = join(import.meta.dirname, '..', 'dist')
+
+/**
+ * The state revision clients poll with: the database's, plus what was read from RS.ge (memory only,
+ * so it starts over with each process: BOOT keeps a new process from repeating an old revision).
+ */
+const BOOT = randomBytes(4).toString('base64url')
+const stateRev = () => `${store.rev()}.${BOOT}.${rsCache.gen()}`
 
 type Ctx = { req: IncomingMessage; body: any; params: string[]; user: User; token: string }
 type Handler = (c: Ctx) => unknown
@@ -30,16 +39,23 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
     /^\/api\/state$/,
     // ?rev=R → 204 when nothing changed since R, so clients can poll cheaply. R is opaque and
     // survives restarts, so a client never mistakes new data for what it already has.
+    // Someone is looking: RS.ge's data that is due is read again in the background.
     ({ req, user }) => {
+      rsCache.touch()
       const since = new URL(req.url!, 'http://x').searchParams.get('rev')
-      if (since === store.rev()) return NOT_MODIFIED
-      return { rev: store.rev(), db: viewFor(user) }
+      const rev = stateRev()
+      if (since === rev) return NOT_MODIFIED
+      return { rev, db: viewFor(user) }
     },
   ],
   ['PUT', /^\/api\/refs\/(\w+)$/, ({ params, body, user, token }) => refs.save(refCol(params[0]), body, user, token)],
-  ['DELETE', /^\/api\/refs\/(\w+)\/([\w-]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), params[1], user)],
-  // Reads the product list from RS.ge; the result arrives with the next state poll.
-  ['POST', /^\/api\/products\/sync$/, ({ body, user }) => syncProductsNow(body, user)],
+  // A product's id is its bar code, which may hold any character: sent URL-encoded.
+  ['DELETE', /^\/api\/refs\/(\w+)\/([^/]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), decodeURIComponent(params[1]), user)],
+  // Reads the product list / car-number list from RS.ge; the result arrives with the next state poll.
+  ['POST', /^\/api\/products\/sync$/, ({ body, user }) => readRsList('products', body, user)],
+  ['POST', /^\/api\/trucks\/sync$/, ({ body, user }) => readRsList('plates', body, user)],
+  // Puts stored trucks' plates that RS.ge's car-number list lacks onto it.
+  ['POST', /^\/api\/trucks\/push$/, ({ user }) => pushPlates(user)],
   ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
   ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
   ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
@@ -58,6 +74,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/shipments\/([\w-]+)\/(close|cancel|delete)$/, ({ params, body, user }) => shipments.finish(params[0], params[1] as 'close' | 'cancel' | 'delete', user, body)],
   // Re-reads the waybill from RS.ge; the result arrives with the next state poll.
   ['POST', /^\/api\/shipments\/([\w-]+)\/rs-refresh$/, ({ params, user }) => shipments.refreshFromRs(params[0], user)],
+  // Reads the waybills of the shipments a page shows ({ ids }) from RS.ge in the background.
+  ['POST', /^\/api\/shipments\/rs-load$/, ({ body, user }) => shipments.loadFromRs(body, user)],
   // Asks smsoffice.ge whether the driver got the SMS; the result arrives with the next state poll.
   ['POST', /^\/api\/shipments\/([\w-]+)\/sms-refresh$/, ({ params, user }) => shipments.refreshSms(params[0], user)],
   ['DELETE', /^\/api\/logs$/, ({ user }) => logs.clear(user)],
@@ -182,5 +200,4 @@ process.on('unhandledRejection', (e) => console.error('[api] unhandled rejection
 server.listen(PORT, HOST, () => {
   console.log(`[api] listening on http://${HOST}:${PORT}`)
   shipments.resumeAll()
-  startRsSync()
 })

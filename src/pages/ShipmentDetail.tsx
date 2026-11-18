@@ -77,6 +77,7 @@ export function ShipmentDetail() {
   const begin = s.rsRemote?.beginAt ?? s.waybill?.beginAt
   const started = !begin || Date.parse(begin) <= Date.now()
   const canInvoice = canAct && onRs && s.waybillState !== 'cancelled' && type !== 1 && !s.invoiceId
+  // What was sent: kept only until RS.ge has the waybill (then RS.ge's copy is all there is).
   const w = s.rsWaybill
   const sentAmount = w ? w.goods.reduce((a, g) => a + g.amount, 0) : 0
   const r = s.rsRemote
@@ -259,7 +260,7 @@ export function ShipmentDetail() {
             </ol>
           </Card>
 
-          {(w || r) && (
+          {(w || r || readable) && (
             <Card className="p-5 sm:p-6">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
@@ -281,58 +282,60 @@ export function ShipmentDetail() {
                   )}
                 </div>
               </div>
-              {/* Goods as RS.ge has them (else as sent). */}
-              <div className="-mx-1 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-slate-500">
-                      <th className="px-1 py-1.5 font-medium">საქონელი</th>
-                      <th className="px-1 py-1.5 text-right font-medium">რაოდ.</th>
-                      <th className="px-1 py-1.5 text-right font-medium">ფასი</th>
-                      <th className="px-1 py-1.5 text-right font-medium">თანხა</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-separator">
-                    {(r?.goods ?? w?.goods ?? []).map((g, k) => (
-                      <tr key={k}>
-                        <td className="px-1 py-2">
-                          <p className="text-slate-900">{g.name}</p>
-                          <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
-                        </td>
-                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{qtyText(g.quantity, g.unitTxt)}</td>
-                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.price.toFixed(2)}</td>
-                        <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.amount.toFixed(2)} ₾</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-separator font-medium text-slate-900">
-                      <td className="px-1 py-2">სულ</td>
-                      <td className="px-1 py-2 text-right tabular-nums">
-                        {qtyText(r?.quantity ?? s.quantity, rUnit)}
-                        {r && r.quantity !== s.quantity && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
-                      </td>
-                      <td />
-                      <td className="px-1 py-2 text-right tabular-nums">
-                        {(r?.fullAmount ?? sentAmount).toFixed(2)} ₾
-                        {r && w && Math.abs(r.fullAmount - sentAmount) >= 0.005 && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-              {r?.fullAmountText && <p className="mt-1 text-xs text-slate-500">{r.fullAmountText}</p>}
-              <dl className="mt-3 divide-y divide-separator text-sm">
-                <Info k="მყიდველი" v={(r ?? w)!.buyerName ? `${(r ?? w)!.buyerName} (${(r ?? w)!.buyerTin})` : (r ?? w)!.buyerTin} />
-                {r ? (
-                  <>
-                    <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
-                    {(r.driverTin || r.carNumber) && (
+              {/* Goods as RS.ge has them (else as sent; nothing while RS.ge's copy is being read). */}
+              {(r || w) && (
+                <>
+                  <div className="-mx-1 overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-slate-500">
+                          <th className="px-1 py-1.5 font-medium">საქონელი</th>
+                          <th className="px-1 py-1.5 text-right font-medium">რაოდ.</th>
+                          <th className="px-1 py-1.5 text-right font-medium">ფასი</th>
+                          <th className="px-1 py-1.5 text-right font-medium">თანხა</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-separator">
+                        {(r?.goods ?? w?.goods ?? []).map((g, k) => (
+                          <tr key={k}>
+                            <td className="px-1 py-2">
+                              <p className="text-slate-900">{g.name}</p>
+                              <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
+                            </td>
+                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{qtyText(g.quantity, g.unitTxt)}</td>
+                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.price.toFixed(2)}</td>
+                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.amount.toFixed(2)} ₾</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-separator font-medium text-slate-900">
+                          <td className="px-1 py-2">სულ</td>
+                          <td className="px-1 py-2 text-right tabular-nums">
+                            {qtyText(r?.quantity ?? s.quantity, rUnit)}
+                            {r && r.quantity !== s.quantity && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
+                          </td>
+                          <td />
+                          <td className="px-1 py-2 text-right tabular-nums">
+                            {(r?.fullAmount ?? sentAmount).toFixed(2)} ₾
+                            {r && w && Math.abs(r.fullAmount - sentAmount) >= 0.005 && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  {r?.fullAmountText && <p className="mt-1 text-xs text-slate-500">{r.fullAmountText}</p>}
+                  <dl className="mt-3 divide-y divide-separator text-sm">
+                    <Info k="მყიდველი" v={(r ?? w)!.buyerName ? `${(r ?? w)!.buyerName} (${(r ?? w)!.buyerTin})` : (r ?? w)!.buyerTin} />
+                    {r ? (
                       <>
-                        <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
-                        <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
-                      </>
-                    )}
+                        <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
+                        {(r.driverTin || r.carNumber) && (
+                          <>
+                            <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
+                            <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
+                </>
+              )}
                     {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${r.transportCost.toFixed(2)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
                     {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
                     {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
@@ -354,6 +357,8 @@ export function ShipmentDetail() {
                 )}
                 {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
               </dl>
+              </>
+              )}
               {readable && (
                 <p className={cx('mt-3 text-xs', rsError ? 'text-amber-700' : 'text-slate-400')}>
                   {rsError

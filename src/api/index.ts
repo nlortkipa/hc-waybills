@@ -2,6 +2,7 @@
  * App-facing API. Every change goes to the HC server (server/), which owns the data
  * and enforces the rules; reads come from the synced copy in ./store.
  */
+import { useEffect } from 'react'
 import { canUseCarrier } from '../lib/route'
 import { active, shipmentUses } from '../lib/util'
 import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, RsSettings, Shipment, ShipmentWaybill, User } from '../types'
@@ -80,7 +81,7 @@ export const refs = {
   },
 }
 
-/* ------------------------------ Products ------------------------------ */
+/* ---------------------- Products and car numbers ---------------------- */
 
 export const products = {
   /**
@@ -91,6 +92,41 @@ export const products = {
     return call('POST', '/api/products/sync', { force })
   },
 }
+
+export const trucks = {
+  /** Reads the car-number list from RS.ge, like products.sync. */
+  sync(force = false) {
+    return call('POST', '/api/trucks/sync', { force })
+  },
+  /** Puts the plates of trucks stored here but missing from RS.ge's list onto it. */
+  pushPlates() {
+    return call<{ added: number }>('POST', '/api/trucks/push')
+  },
+}
+
+/* --------------------- Waybills of listed shipments --------------------- */
+
+/** When each shipment's waybill was last asked for, so a page doesn't ask again on every poll. */
+const askedAt = new Map<string, number>()
+const ASK_AGAIN_MS = 60_000
+
+/**
+ * A shipment's waybill details (goods, quantity, state, invoice) are RS.ge's and the server reads them
+ * from RS.ge only when something shows them. Pages listing shipments call this with what they list;
+ * the ones whose waybill isn't read yet are asked for, and arrive with the next state poll.
+ */
+export function useRsLoad(list: Shipment[]) {
+  useEffect(() => {
+    const now = Date.now()
+    const ids = list.filter((s) => s.rsWaybillId && !s.rsRemote && now - (askedAt.get(s.id) ?? 0) > ASK_AGAIN_MS).map((s) => s.id)
+    if (!ids.length) return
+    for (const id of ids) askedAt.set(id, now)
+    void api('POST', '/api/shipments/rs-load', { ids }).catch(() => {})
+  }, [list])
+}
+
+/** Whether a shipment's waybill details are still to come from RS.ge (asked for, not read yet). */
+export const rsPending = (s: Shipment) => !!s.rsWaybillId && !s.rsRemote
 
 /* ------------------------------ RS.ge ------------------------------ */
 

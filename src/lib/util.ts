@@ -16,7 +16,7 @@ export const sameIds = (a: string[], b: string[]) => a.length === b.length && [.
 
 /** Whether a shipment references a reference record (deleting it then only retires it). */
 export function shipmentUses(s: Shipment, col: 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users', id: string): boolean {
-  if (col === 'products') return s.items.some((i) => i.productId === id)
+  if (col === 'products') return (s.items ?? []).some((i) => i.productId === id)
   return s[({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]] === id
 }
 

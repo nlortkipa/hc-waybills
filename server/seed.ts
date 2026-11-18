@@ -1,11 +1,24 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 23
+export const DB_VERSION = 24
+
+/**
+ * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
+ * dropped once RS.ge has the waybill (it is read from RS.ge from then on).
+ */
+export function storedShipment(s: Shipment): Shipment {
+  const { rsRemote: _r, waybillState: _w, invoiceId: _i, ...rest } = s
+  if (rest.rsWaybillId && rest.rs.status === 'ok' && (rest.status === 'saved' || rest.status === 'uploaded')) {
+    const { items: _a, quantity: _q, waybill: _b, rsWaybill: _p, ...thin } = rest
+    return thin as Shipment
+  }
+  return rest
+}
 
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
-export function createSeed(): Database {
+export function createSeed(): StoredDatabase {
   const users = [
     { id: 'u1', firstName: 'ადმინი', lastName: 'HC', phone: '575 78 03 23', email: 'admin@hc.ge', role: 'admin' as const },
   ]
@@ -16,8 +29,6 @@ export function createSeed(): Database {
     routes: [],
     drivers: [],
     trucks: [],
-    // Products come from RS.ge (the first sync reads the taxpayer's list) or are added by the admin.
-    products: [],
     users,
     shipments: [],
     logs: [],
@@ -39,8 +50,9 @@ type V22Item = Omit<ShipmentItem, 'lineId' | 'price' | 'vatType'>
 type V22Rs = RsSettings & { price?: number; vatType?: 0 | 1 | 2 }
 
 /** Upgrades an older stored database in place instead of starting over. Returns null if it can't. */
-export function migrate(db: Database): Database | null {
-  let d = db as Database & { version: number }
+export function migrate(db: StoredDatabase): StoredDatabase | null {
+  // Products were stored before v24: the steps below still see them.
+  let d = { products: [], ...db } as Database & { version: number }
   // v9 → v10: RS.ge settings added.
   if (d.version === 9) d = { ...d, version: 10, rs: defaultRsSettings() }
   // v10 → v11: RS.ge simulator and mode removed. IDs from the simulator mean nothing to RS.ge, so drop them.
@@ -185,5 +197,17 @@ export function migrate(db: Database): Database | null {
     }))
     d = { ...d, version: 23, rs, routes, shipments }
   }
-  return d.version === DB_VERSION ? d : null
+  // v23 → v24: RS.ge's data is no longer stored. Products go (RS.ge's list is read live, the bar code
+  // is a product's id); the seller, reference lists and sync state go from the settings (store.ts drops
+  // them on write); shipments already on RS.ge keep only what RS.ge doesn't have.
+  if (d.version === 23) {
+    const codeOf = (id: string) => d.products.find((p) => p.id === id)?.barCode
+    const product = <T extends { productId: string; barCode: string }>(g: T): T => ({ ...g, productId: g.productId && codeOf(g.productId) === g.barCode ? g.barCode : '' })
+    const routes = d.routes.map((r) => ({ ...r, goods: r.goods.map(product) }))
+    const shipments = d.shipments.map((s) => storedShipment({ ...s, items: (s.items ?? []).map(product) }))
+    d = { ...d, version: 24, routes, shipments }
+  }
+  if (d.version !== DB_VERSION) return null
+  const { products: _p, ...stored } = d
+  return stored
 }

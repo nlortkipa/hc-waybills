@@ -1,6 +1,6 @@
 import { AlertTriangle, Download, FileText, MessageSquare, Truck } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { visibleShipments } from '../api'
+import { rsPending, useRsLoad, visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
 import { cx, downloadCsv, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
 import { useLookup } from '../lib/lookup'
@@ -27,6 +27,9 @@ export function Reports() {
       }),
     [d, user, from, to, carrier],
   )
+  // Quantities and states are RS.ge's: ask for the period's waybills that aren't read yet.
+  useRsLoad(rows)
+  const loading = rows.filter(rsPending).length
   const uploaded = useMemo(() => rows.filter((s) => s.status === 'uploaded' && s.waybillState !== 'cancelled'), [rows])
   const declaredT = uploaded.reduce((a, s) => a + shipmentQuantity(s), 0)
   const smsSent = rows.filter((s) => s.sms.status === 'ok').length
@@ -115,7 +118,7 @@ export function Reports() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat label="რეისები" value={rows.length} sub={`${uploaded.length} ატვირთული`} icon={<Truck className="size-5" />} />
-        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub="ატვირთული ზედნადებებით" icon={<FileText className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
+        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub={loading ? `RS.ge-დან იკითხება ${loading} ზედნადები…` : 'ატვირთული ზედნადებებით'} icon={<FileText className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
         <Stat label="SMS" value={smsSent} sub="გაეგზავნა მძღოლს" icon={<MessageSquare className="size-5" />} accent="bg-slate-100 text-slate-600" />
         <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent="bg-amber-50 text-amber-600" />
       </div>

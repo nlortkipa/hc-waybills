@@ -3,11 +3,32 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeText, routeUsable } from '../src/lib/route.ts'
-import { MAX_DEFER_MS, noTransport, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
+import { MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, sameIds, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Driver, Product, RsListWaybill, RsRemoteWaybill, RsSettings, RsWaybillPayload, RouteGood, Shipment, ShipmentEvent, ShipmentItem, ShipmentWaybill, SmsDelivery, User, WaybillType } from '../src/types.ts'
+import type {
+  Carrier,
+  CarrierRoute,
+  Database,
+  Driver,
+  Product,
+  RsListWaybill,
+  RsRemoteWaybill,
+  RsSettings,
+  RsWaybillPayload,
+  RouteGood,
+  Shipment,
+  ShipmentEvent,
+  ShipmentItem,
+  ShipmentWaybill,
+  SmsDelivery,
+  StoredDatabase,
+  Truck,
+  User,
+  WaybillType,
+} from '../src/types.ts'
 import { IntegrationError } from './integrations.ts'
+import { rsCache } from './rscache.ts'
 import { resetRsCache, rsDate, rsge, storedCreds, type RsCreds, type XmlGood } from './rsge.ts'
 import { newReference, SENDER_RE, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
@@ -43,17 +64,143 @@ export const auth = {
   },
 }
 
-/** What a user is allowed to see: operators only get their own carriers' shipments. The RS.ge password and SMS key never leave the server. */
+/* ------------------------- RS.ge's data in views ------------------------- */
+
+/** The RS.ge settings with what RS.ge says about the account (never stored) filled in. */
+export function rsView(): RsSettings {
+  const a = rsge.account()
+  const products = rsCache.productsStatus()
+  const plates = rsCache.platesStatus()
+  const changes = rsCache.changesStatus()
+  return {
+    ...db.get().rs,
+    sellerUnId: a?.unId ?? null,
+    sellerUserId: a?.userId ?? null,
+    sellerTin: a?.tin ?? '',
+    sellerName: a?.name ?? '',
+    checkedAt: a?.checkedAt,
+    accountError: a ? undefined : rsge.accountError(),
+    units: a?.units ?? [],
+    transTypes: a?.transTypes ?? [],
+    akciz: a?.akciz ?? [],
+    syncedTo: changes.to,
+    syncError: changes.error,
+    productsSyncedAt: products.at,
+    productsSyncError: products.error,
+    platesReadAt: plates.at,
+    platesError: plates.error,
+  }
+}
+
+/**
+ * The trucks as the app shows them: every plate on RS.ge's car-number list, with the model and trailer
+ * stored here for it (a plate with nothing stored gets the id `rs-<PLATE>`). Stored trucks whose plate
+ * is gone from RS.ge are shown deleted, so history still names them. Before RS.ge's list has been read
+ * (or without a connection) the stored trucks are shown as they are.
+ */
+export function trucksView(stored = db.get().trucks): Truck[] {
+  const plates = rsCache.plates()
+  if (!plates) return stored
+  const onRs = new Set(plates.map(plateKey))
+  const byKey = new Map(active(stored).map((t) => [plateKey(t.plateNumber), t]))
+  const out: Truck[] = stored.map((t) => (t.deletedAt || onRs.has(plateKey(t.plateNumber)) ? t : { ...t, deletedAt: 'rs' }))
+  for (const p of plates) if (!byKey.has(plateKey(p))) out.push({ id: `rs-${plateKey(p)}`, model: '', plateNumber: p, trailerNumber: '' })
+  return out
+}
+
+/** waybillState for an RS.ge status: completed → closed, deleted or cancelled → cancelled. */
+const stateOf = (status: number): Shipment['waybillState'] => (status === 2 ? 'closed' : status < 0 ? 'cancelled' : undefined)
+
+/** What the operator typed into COMMENT: without the trailer added in front and the HC tag at the end. */
+function typedComment(comment: string, shipmentId: string) {
+  let c = comment
+  const ref = refTag(shipmentId)
+  if (c === ref) c = ''
+  else if (c.endsWith(`; ${ref}`)) c = c.slice(0, -(ref.length + 2))
+  if (c.startsWith('მისაბმელი: ')) {
+    const k = c.indexOf('; ')
+    c = k < 0 ? '' : c.slice(k + 2)
+  }
+  return c
+}
+
+/** RS.ge's goods rows as the shipment's goods lines, each tied to the route's line with its bar code. */
+function itemsFrom(w: RsRemoteWaybill, route: CarrierRoute | undefined, akciz: RsSettings['akciz']): ShipmentItem[] {
+  const free = [...(route?.goods ?? [])]
+  return w.goods.map((g) => {
+    const k = free.findIndex((x) => x.barCode.toLowerCase() === g.barCode.toLowerCase())
+    const line = k >= 0 ? free.splice(k, 1)[0] : undefined
+    const a = g.aId ? akciz?.find((x) => x.id === g.aId) : undefined
+    return {
+      lineId: line?.id ?? '',
+      productId: line?.productId ?? '',
+      name: g.name,
+      barCode: g.barCode,
+      unitId: g.unitId ?? RS_UNIT_OTHER,
+      unitTxt: g.unitTxt,
+      price: g.price,
+      vatType: ([0, 1, 2] as const).find((v) => v === g.vatType) ?? 0,
+      ...(g.aId ? { aId: g.aId, aTitle: a ? `${a.code} · ${a.title}` : (line?.aTitle ?? String(g.aId)) } : {}),
+      quantity: g.quantity,
+      ...(g.quantityExt ? { quantityExt: g.quantityExt } : {}),
+    }
+  })
+}
+
+/** RS.ge's waybill as the shipment's waybill options. */
+function waybillFrom(w: RsRemoteWaybill, shipmentId: string): ShipmentWaybill {
+  const type = ((w.type ?? 1) as WaybillType) || 1
+  const buyer = type === 1 ? { buyerTin: '', buyerName: '', buyerForeign: false } : { buyerTin: w.buyerTin, buyerName: w.buyerName, buyerForeign: !!w.buyerForeign }
+  return {
+    type,
+    ...buyer,
+    ...(w.beginAt && Date.parse(w.beginAt) > Date.now() && { beginAt: w.beginAt }),
+    transportCost: w.transportCost,
+    tranCostPayer: w.tranCostPayer === 1 ? 1 : 2,
+    receptionInfo: w.receptionInfo ?? '',
+    receiverInfo: w.receiverInfo ?? '',
+    comment: typedComment(w.comment, shipmentId),
+  }
+}
+
+/**
+ * The shipment with what RS.ge has filled in: its waybill as RS.ge has it now (rsRemote), its state and
+ * invoice and, once only RS.ge has them, its goods, quantity and waybill options. Without RS.ge's copy
+ * (not read yet, or RS.ge unreachable) those stay empty.
+ */
+export function withRs(s: Shipment, d: StoredDatabase = db.get(), akciz = rsge.account()?.akciz): Shipment {
+  const w = s.rsWaybillId ? rsCache.waybill(s.rsWaybillId) : undefined
+  // State and invoice count once the pipeline is done with RS.ge (a retry in progress records its own).
+  const settled = s.status === 'uploaded' || s.status === 'saved'
+  const out: Shipment = w
+    ? { ...s, rsRemote: w, ...(settled && { waybillState: stateOf(w.status), invoiceId: w.invoiceId }), waybillNumber: s.waybillNumber || (w.status > 0 && w.number) || undefined }
+    : { ...s }
+  if (!s.items) {
+    out.items = w ? itemsFrom(w, d.routes.find((r) => r.id === s.routeId), akciz) : []
+    out.quantity = w?.quantity ?? 0
+    if (w) out.waybill = { ...waybillFrom(w, s.id), ...(s.waybill?.beginAt && { beginAt: s.waybill.beginAt }) }
+  }
+  return out
+}
+
+/**
+ * What a user is allowed to see: operators only get their own carriers' shipments. The RS.ge password
+ * and SMS key never leave the server. RS.ge's data (products, plates, waybills, the seller) is added here.
+ */
 export function viewFor(user: User): Database {
   const raw = db.get()
+  const rs = rsView()
   const d: Database = {
     ...raw,
-    rs: { ...raw.rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' },
+    rs: { ...rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' },
     sms: { ...raw.sms, apiKey: '', apiKeySet: !!raw.sms.apiKey },
+    products: rsCache.products(),
+    trucks: trucksView(raw.trucks),
+    shipments: raw.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => withRs(s, raw, rs.akciz)),
   }
   if (user.role !== 'operator') return d
-  const mine = new Set(d.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => s.id))
-  return { ...d, shipments: d.shipments.filter((s) => mine.has(s.id)), logs: d.logs.filter((l) => l.shipmentId && mine.has(l.shipmentId)) }
+  const mine = new Set(d.shipments.map((s) => s.id))
+  return { ...d, logs: d.logs.filter((l) => l.shipmentId && mine.has(l.shipmentId)) }
 }
 
 /* ------------------------- Reference data ------------------------- */
@@ -68,12 +215,12 @@ const requireAdmin = (u: User) => u.role === 'admin' || fail('მოქმედ
 const otherAdmins = (id: string) => active(db.get().users).filter((u) => u.role === 'admin' && u.id !== id).length
 const LAST_ADMIN = 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
 
-function shipmentCount(col: RefCollection, id: string): number {
+function shipmentCount(col: Exclude<RefCollection, 'products'>, id: string): number {
   return db.get().shipments.filter((s) => shipmentUses(s, col, id)).length
 }
 
 /** Removes a record, or soft-deletes it when shipments reference it so they keep showing it. */
-function removeOrRetire(col: RefCollection, rec: RefRecord) {
+function removeOrRetire(col: Exclude<RefCollection, 'products'>, rec: RefRecord) {
   if (shipmentCount(col, rec.id) > 0) db.put(col, { ...rec, deletedAt: rec.deletedAt ?? nowIso() } as never)
   else db.remove(col, rec.id)
 }
@@ -92,11 +239,12 @@ const MAX_GOODS = 50
  * product it was filled from) is kept only while the bar code is still that product's.
  */
 function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGood[] {
-  const d = db.get()
+  const rs = rsView()
+  const products = rsCache.products()
   const list = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []
   if (!list.length) fail('დაამატე მინიმუმ ერთი პროდუქტი')
   if (list.length > MAX_GOODS) fail(`ერთ მარშრუტზე მაქსიმუმ ${MAX_GOODS} პროდუქტია`)
-  const units = rsUnits(d.rs)
+  const units = rsUnits(rs)
   const ids = new Set<string>()
   const codes = new Set<string>()
   return list.map((x) => {
@@ -122,14 +270,16 @@ function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGoo
     if (!(price >= 0)) fail(`„${label}“: შეიყვანე ფასი (0 ან მეტი)`)
     const vatType = ([0, 1, 2] as const).find((v) => v === Number(x?.vatType))
     if (vatType == null) fail(`„${label}“: აირჩიე დაბეგვრის ტიპი`)
-    const p = str(x?.productId) ? d.products.find((y) => y.id === str(x.productId) && y.barCode.toLowerCase() === barCode.toLowerCase()) : undefined
+    // The RS.ge product it was filled from, while the bar code is still that product's.
+    const p = str(x?.productId) ? products.find((y) => y.id === str(x.productId) && y.barCode.toLowerCase() === barCode.toLowerCase()) : undefined
+    const keptProduct = !p && str(x?.productId) && prev?.goods.some((y) => y.id === id && y.productId === str(x.productId) && y.barCode === barCode)
     // Excise goods: a code RS.ge lists (or the one the line already had, if RS.ge's list isn't loaded).
     const aId = Math.max(0, Math.trunc(num(x?.aId)))
-    const akciz = aId ? d.rs.akciz?.find((a) => a.id === aId) : undefined
+    const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
     const kept = aId ? prev?.goods.find((y) => y.id === id && y.aId === aId) : undefined
     if (aId && !akciz && !kept) fail(`„${label}“: აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან`)
     const excise = aId ? { aId, aTitle: akciz ? `${akciz.code} · ${akciz.title}` : (kept!.aTitle ?? String(aId)) } : {}
-    return { id, productId: p?.id ?? '', name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise }
+    return { id, productId: p?.id ?? (keptProduct ? str(x.productId) : ''), name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise }
   })
 }
 
@@ -137,10 +287,18 @@ export const refs = {
   /** `token` is the caller's session: kept when admins change their own phone or role. */
   async save(col: RefCollection, record: RefRecord & { id?: string }, by: User, token?: string) {
     requireAdmin(by)
+    // Products are RS.ge's: one is known by its bar code, which is its id.
+    if (col === 'products') {
+      const prev = record.id ? rsCache.products().find((p) => p.id === record.id) : undefined
+      if (record.id && !prev) fail('პროდუქტი RS.ge-ს სიაში ვეღარ მოიძებნა — განაახლე გვერდი', 404)
+      return productLock(() => saveProduct(record as Product, prev))
+    }
+    // A truck known only from RS.ge's car numbers (rs-…) gets its record here now.
+    if (col === 'trucks' && record.id?.startsWith('rs-')) record = { ...record, id: '' }
     const rec = { ...record, id: record.id || uid(col[0]) } as RefRecord
     const prev = (db.get()[col] as RefRecord[]).find((r) => r.id === rec.id)
     if (prev?.deletedAt) fail('ჩანაწერი წაშლილია')
-    if (col === 'products') return productLock(() => saveProduct(rec as Product, prev as Product | undefined)).finally(() => void syncProducts())
+    if (col === 'trucks') return productLock(() => saveTruck(rec as Truck, prev as Truck | undefined))
     let revokeSessions = false
     if (col === 'users') {
       const u = rec as User
@@ -216,7 +374,8 @@ export const refs = {
   /** Deletes a record. If shipments reference it, it is soft-deleted so reports keep showing it. */
   async remove(col: RefCollection, id: string, by: User) {
     requireAdmin(by)
-    if (col === 'products') return productLock(() => removeProduct(id)).finally(() => void syncProducts())
+    if (col === 'products') return productLock(() => removeProduct(id))
+    if (col === 'trucks') return productLock(() => removeTruck(id))
     if (col === 'users') {
       const u = db.get().users.find((x) => x.id === id)
       if (u?.role === 'admin' && !u.deletedAt && !otherAdmins(id)) fail(`წაშლა შეუძლებელია: ${LAST_ADMIN}`)
@@ -242,7 +401,7 @@ const waybillType = (v: unknown): WaybillType | undefined => ([1, 2, 3, 5] as co
  * a buyer is needed on every type but შიდა გადაზიდვა (-1004), and may not be the seller (-1047).
  */
 async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Promise<Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
-  const rs = db.get().rs
+  const rs = rsView()
   const type = str(r.waybillType) ? (waybillType(r.waybillType) ?? fail('აირჩიე ზედნადების ტიპი')) : undefined
   const tin = type === 1 ? '' : str(r.buyerTin)
   if (tin && rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
@@ -255,15 +414,12 @@ async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Pr
 /* ------------------------------ Products ------------------------------ */
 
 /*
- * The product list is a copy of the connected taxpayer's product list on RS.ge, and nothing else:
- * - adding, editing and deleting go to RS.ge first and change the copy only when RS.ge accepted;
- * - every sync makes the copy equal to RS.ge's list (added, changed and deleted there → same here);
- * - another service user (another taxpayer) or no service user at all empties the copy at once,
- *   so the previous account's products never stay pickable, and the sync then fills it again.
- * Products that shipments used are retired (hidden), not deleted, so those shipments keep showing them.
+ * Products are the connected taxpayer's product list on RS.ge, and nothing is stored here: the list is
+ * read from RS.ge (server/rscache.ts); adding, editing and deleting go to RS.ge, and the list is read
+ * again right after. A product's id is its bar code.
  */
 
-/** Product changes and syncs run one at a time, so a sync never undoes a change it didn't see. */
+/** Product and truck changes run one at a time, so two changes never race on RS.ge's lists. */
 let productChain: Promise<unknown> = Promise.resolve()
 function productLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = productChain.then(fn, fn)
@@ -273,128 +429,142 @@ function productLock<T>(fn: () => Promise<T>): Promise<T> {
 
 const productCreds = () => storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს — პროდუქტები RS.ge-ზე ინახება')
 
-/** Hides every product: they belonged to an account that is no longer connected. */
-function dropAllProducts() {
-  for (const p of active(db.get().products)) removeOrRetire('products', p)
-}
-
 async function saveProduct(input: Product, prev: Product | undefined): Promise<Product> {
   productCreds()
+  const rs = rsView()
   const unitId = Number(input.unitId)
   const aId = Math.max(0, Math.trunc(num(input.aId)))
-  const price = input.price == null || String(input.price).trim() === '' ? undefined : Number(String(input.price).replace(',', '.'))
+  const barCode = str(input.barCode)
   const p: Product = {
-    id: input.id,
+    id: prev?.id ?? barCode,
     name: str(input.name),
-    barCode: str(input.barCode),
+    barCode,
     unitId,
-    unitTxt: unitId === RS_UNIT_OTHER ? str(input.unitTxt) : (rsUnits(db.get().rs).find((u) => u.id === unitId)?.name ?? ''),
+    unitTxt: unitId === RS_UNIT_OTHER ? str(input.unitTxt) : (rsUnits(rs).find((u) => u.id === unitId)?.name ?? ''),
     aId,
-    ...(price !== undefined && { price: Math.round(price * 10000) / 10000 }),
-    vatType: ([0, 1, 2] as const).find((v) => v === Number(input.vatType)) ?? 0,
   }
-  if (price !== undefined && !(price >= 0)) fail('ფასი უნდა იყოს 0 ან მეტი')
   // An excise code RS.ge lists (or the one the product already has, if the list isn't loaded).
-  if (aId && aId !== (prev?.aId ?? 0) && !db.get().rs.akciz?.some((a) => a.id === aId)) fail('აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან')
+  if (aId && aId !== (prev?.aId ?? 0) && !rs.akciz?.some((a) => a.id === aId)) fail('აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან')
   if (!p.name) fail('შეიყვანე პროდუქტის დასახელება')
   if (!p.barCode) fail('შეიყვანე შტრიხკოდი')
   // RS.ge knows a product only by its bar code: a new code would be a different product there.
   if (prev && prev.barCode !== p.barCode) fail('შტრიხკოდის შეცვლა შეუძლებელია — წაშალე ეს პროდუქტი და დაამატე ახალი')
   if (!(unitId > 0) || !p.unitTxt) fail(unitId === RS_UNIT_OTHER ? '„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება' : 'აირჩიე საზომი ერთეული')
   const key = p.barCode.toLowerCase()
-  if (active(db.get().products).some((x) => x.id !== p.id && x.barCode.toLowerCase() === key)) fail('ამ შტრიხკოდით პროდუქტი უკვე არსებობს')
-  // Only price or VAT type changed: those are kept here only, RS.ge has nothing to update.
-  if (prev && prev.name === p.name && prev.unitId === p.unitId && prev.unitTxt === p.unitTxt && (prev.aId ?? 0) === aId) {
-    db.put('products', p)
-    return p
-  }
-  // A code already on RS.ge (added on the portal, not synced yet) is overwritten there, as on the portal.
+  if (!prev && rsCache.products().some((x) => x.barCode.toLowerCase() === key)) fail('ამ შტრიხკოდით პროდუქტი უკვე არსებობს')
+  if (prev && prev.name === p.name && prev.unitId === p.unitId && prev.unitTxt === p.unitTxt && (prev.aId ?? 0) === aId) return prev
+  // A code already on RS.ge (added on the portal since the list was read) is overwritten there, as on the portal.
   await rsge.saveBarCode({ ...p, aId }).catch((e: Error) => fail(e.message, 502))
   // RS.ge answers "saved" even when it drops the code, so only what it reads back counts.
   const got = await rsge.barCode(p.barCode).catch((e: Error) => fail(`RS.ge-მ შენახვა დაადასტურა, მაგრამ შემოწმება ვერ მოხერხდა: ${e.message}`, 502))
+  await rsCache.loadProducts().catch(() => {})
   if (!got) fail(`RS.ge-მ შტრიხკოდი „${p.barCode}“ არ შეინახა — სავარაუდოდ ის უკვე სხვა გადამხდელს აქვს რეგისტრირებული. გამოიყენე სხვა, უნიკალური შტრიხკოდი.`, 502)
   if (got!.name !== p.name || got!.unitId !== p.unitId) fail('RS.ge-მ ცვლილება არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
   if (got!.aId !== aId) fail('RS.ge-მ აქციზის კოდი არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
-  db.put('products', p)
   return p
 }
 
 async function removeProduct(id: string) {
-  const p = db.get().products.find((x) => x.id === id) ?? fail('ჩანაწერი ვერ მოიძებნა', 404)
-  if (p.deletedAt) return
   productCreds()
+  const p = rsCache.products().find((x) => x.id === id) ?? fail('ჩანაწერი ვერ მოიძებნა', 404)
   await rsge.deleteBarCode(p.barCode).catch((e: Error) => fail(e.message, 502))
-  removeOrRetire('products', p)
+  await rsCache.loadProducts().catch(() => {})
 }
 
 /** The product list is read again on page open only when the last read is older than this. */
 const PRODUCTS_FRESH_MS = 30_000
-let productSyncQueued: Promise<void> | null = null
 
 /**
- * Reads RS.ge's product list and makes ours equal to it. Never throws; a failure is stored in
- * rs.productsSyncError. Calls made while a sync is already running get a fresh one after it, so
- * a sync started for the previous account is always followed by one for the current account.
+ * Reads RS.ge's product list (or car-number list) now. Asked by the products and trucks tabs and the
+ * new-shipment page when they open (only if the last read is older than PRODUCTS_FRESH_MS), and by
+ * the admin's "refresh" button (`force`, which reports a failure).
  */
-export function syncProducts(): Promise<void> {
-  if (productSyncQueued) return productSyncQueued
-  const p = productLock(async () => {
-    productSyncQueued = null
-    await runProductSync()
-  })
-  productSyncQueued = p
-  return p
-}
-
-async function runProductSync() {
-  if (!storedCreds()) return dropAllProducts()
-  const su = db.get().rs.su
-  const sameUser = () => db.get().rs.su === su
-  try {
-    const remote = new Map((await rsge.barCodes()).map((x) => [x.barCode, x]))
-    // The account changed while RS.ge answered: this list is the old account's. The next sync reads the new one.
-    if (!sameUser()) return
-    for (const p of active(db.get().products)) {
-      const r = remote.get(p.barCode)
-      remote.delete(p.barCode)
-      if (!r) removeOrRetire('products', p)
-      // Price and VAT type are ours only: kept as they are.
-      else if ((r.name || p.name) !== p.name || r.unitId !== p.unitId || r.unitTxt !== p.unitTxt || r.aId !== (p.aId ?? 0))
-        db.put('products', { ...p, name: r.name || p.name, unitId: r.unitId, unitTxt: r.unitTxt, aId: r.aId })
-    }
-    // New on RS.ge. A retired product with the same bar code comes back under its old id, so the
-    // shipments that used it point at the live product again.
-    for (const r of remote.values()) {
-      const old = db.get().products.findLast((x) => x.deletedAt && x.barCode === r.barCode)
-      // A product coming back keeps the price and VAT type it had here.
-      db.put('products', { ...(old && { price: old.price, vatType: old.vatType }), id: old?.id ?? uid('p'), name: r.name || r.barCode, barCode: r.barCode, unitId: r.unitId, unitTxt: r.unitTxt, aId: r.aId })
-    }
-    db.set('rs', { ...db.get().rs, productsSyncedAt: nowIso(), productsSyncError: undefined })
-    // The excise codes, when connecting couldn't load them (or connected before they were kept).
-    if (!db.get().rs.akciz?.length) {
-      const akciz = await rsge.akciz().catch(() => [])
-      if (akciz.length && sameUser()) db.set('rs', { ...db.get().rs, akciz })
-    }
-  } catch (e) {
-    const msg = (e as Error).message
-    console.error('[rs-products]', msg)
-    if (sameUser()) db.set('rs', { ...db.get().rs, productsSyncError: msg })
-  }
-}
-
-/**
- * Asked by the products tab and the new-shipment page when they open (only if the last read is
- * older than PRODUCTS_FRESH_MS), and by the admin's "refresh" button (`force`).
- */
-export async function syncProductsNow(body: { force?: boolean } | undefined, user: User) {
+export async function readRsList(what: 'products' | 'plates', body: { force?: boolean } | undefined, user: User) {
   const force = !!body?.force
   if (force) requireAdmin(user)
   if (!storedCreds()) return force ? fail('ჯერ დაუკავშირდი RS.ge-ს') : undefined
-  const last = db.get().rs.productsSyncedAt
-  if (!force && !db.get().rs.productsSyncError && last && Date.now() - Date.parse(last) < PRODUCTS_FRESH_MS) return
-  await syncProducts()
-  const err = db.get().rs.productsSyncError
-  if (force && err) fail(err, 502)
+  const status = what === 'products' ? rsCache.productsStatus() : rsCache.platesStatus()
+  if (!force && !status.error && status.at && Date.now() - Date.parse(status.at) < PRODUCTS_FRESH_MS) return
+  const load = what === 'products' ? rsCache.loadProducts() : rsCache.loadPlates()
+  await load.catch((e: Error) => force && fail(e.message, 502))
+}
+
+/* ------------------------------ Trucks ------------------------------ */
+
+const truckCreds = () => storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს — მანქანების ნომრები RS.ge-ზე ინახება')
+
+/** RS.ge's car numbers, read now. */
+const readPlates = () => rsCache.loadPlates().catch((e: Error) => fail(`RS.ge-დან მანქანების სია ვერ წაიკითხა: ${e.message}`, 502))
+
+/** Whether another stored truck (not `exceptId`) still has this plate. */
+const plateUsed = (key: string, exceptId: string) => active(db.get().trucks).some((x) => x.id !== exceptId && plateKey(x.plateNumber) === key)
+
+/**
+ * Saves a truck: its plate goes onto RS.ge's car-number list (checked by reading it back), the model and
+ * trailer are stored here. A changed plate leaves RS.ge's list unless another truck still has it.
+ */
+async function saveTruck(input: Truck, prev: Truck | undefined): Promise<Truck> {
+  truckCreds()
+  const t: Truck = { id: input.id, model: str(input.model), plateNumber: str(input.plateNumber), trailerNumber: str(input.trailerNumber) }
+  const key = plateKey(t.plateNumber)
+  if (!key) fail('შეიყვანე სახელმწიფო ნომერი')
+  if (plateUsed(key, t.id)) fail('ამ ნომრით მანქანა უკვე არსებობს')
+  if (!(await readPlates()).some((p) => plateKey(p) === key)) {
+    await rsge.saveCarNumber(key).catch((e: Error) => fail(e.message, 502))
+    if (!(await readPlates()).some((p) => plateKey(p) === key)) fail(`RS.ge-მ ნომერი „${key}“ არ შეინახა — სცადე თავიდან ან დაამატე RS.ge-ს პორტალზე.`, 502)
+  }
+  const old = prev && plateKey(prev.plateNumber)
+  if (old && old !== key && !plateUsed(old, t.id)) {
+    await rsge.deleteCarNumber(old).catch((e: Error) => fail(`ახალი ნომერი შეინახა, მაგრამ ძველი (${old}) RS.ge-ს სიიდან ვერ წაიშალა: ${e.message}`, 502))
+    await rsCache.loadPlates().catch(() => {})
+  }
+  db.put('trucks', t)
+  return t
+}
+
+/** Deletes a truck: its plate leaves RS.ge's car-number list (unless another truck has it), its record goes or is retired. */
+async function removeTruck(id: string) {
+  truckCreds()
+  const t = trucksView().find((x) => x.id === id) ?? fail('ჩანაწერი ვერ მოიძებნა', 404)
+  const key = plateKey(t.plateNumber)
+  if (!plateUsed(key, id) && (await readPlates()).some((p) => plateKey(p) === key)) {
+    await rsge.deleteCarNumber(key).catch((e: Error) => fail(e.message, 502))
+    await rsCache.loadPlates().catch(() => {})
+  }
+  const rec = db.get().trucks.find((x) => x.id === id)
+  if (rec) removeOrRetire('trucks', rec)
+}
+
+/**
+ * Puts the plates of stored trucks that RS.ge's car-number list doesn't have (trucks added before
+ * plates lived on RS.ge, or plates deleted on the portal) onto it, so they can be picked again.
+ * Asked for by the admin: a plate deleted on the portal is not put back on its own.
+ */
+export async function pushPlates(user: User) {
+  requireAdmin(user)
+  truckCreds()
+  return productLock(async () => {
+    const onRs = new Set((await readPlates()).map(plateKey))
+    const missing = [...new Set(active(db.get().trucks).map((t) => plateKey(t.plateNumber)))].filter((k) => k && !onRs.has(k))
+    const failed: string[] = []
+    for (const key of missing) await rsge.saveCarNumber(key).catch(() => failed.push(key))
+    const after = new Set((await readPlates()).map(plateKey))
+    const notSaved = missing.filter((k) => !after.has(k))
+    if (notSaved.length) fail(`RS.ge-მ ეს ნომრები არ შეინახა: ${notSaved.join(', ')}`, 502)
+    return { added: missing.length }
+  })
+}
+
+/** The stored truck for a picked one: a plate known only from RS.ge (`rs-…`) gets its record now. */
+function truckRecord(id: string): string {
+  if (!id.startsWith('rs-')) return id
+  const key = id.slice(3)
+  const have = active(db.get().trucks).find((t) => plateKey(t.plateNumber) === key)
+  if (have) return have.id
+  const plate = rsCache.plates()?.find((p) => plateKey(p) === key) ?? key
+  const t: Truck = { id: uid('t'), model: '', plateNumber: plate, trailerNumber: '' }
+  db.put('trucks', t)
+  return t.id
 }
 
 /* ------------------------------ RS.ge ------------------------------ */
@@ -423,8 +593,8 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
     receiverInfo: str(v.receiverInfo),
     comment: str(v.comment),
   }
-  delete next.spSet
   // Left over from before v19 (unit) and v23 (price, VAT type): now set on each route's goods lines.
+  // RS.ge's fields (seller, lists, read times) are dropped when stored.
   for (const k of ['unitId', 'unitTxt', 'price', 'vatType']) delete (next as unknown as Record<string, unknown>)[k]
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
@@ -467,8 +637,8 @@ async function lookupName(tin: string, who = 'გადამხდელი') {
 }
 
 /**
- * Connects a service user: checks it on RS.ge and, only if it passes, stores it together with the
- * seller and the reference lists. Leaving `sp` empty re-checks the stored password.
+ * Connects a service user: checks it on RS.ge and, only if it passes, stores it. What RS.ge says about
+ * it (seller, reference lists) is kept in memory only. Leaving `sp` empty re-checks the stored password.
  */
 export async function connectRs(body: { su?: string; sp?: string } | undefined, user: User) {
   requireAdmin(user)
@@ -481,36 +651,24 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
   const c: RsCreds = { su, sp }
   const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
   if (su !== prev.su || sp !== prev.sp) resetRsCache()
-  const sameUser = su === prev.su && r.unId === prev.sellerUnId
-  // Another taxpayer: the previous one's products go at once; the sync below loads this one's.
-  if (su !== prev.su) await productLock(async () => dropAllProducts())
-  db.set('rs', {
-    ...db.get().rs,
-    // Another taxpayer's waybills: the background sync starts over.
-    ...(!sameUser && { syncedTo: undefined, syncError: undefined }),
-    ...(su !== prev.su && { productsSyncedAt: undefined, productsSyncError: undefined }),
-    su,
-    sp,
-    sellerUnId: r.unId,
-    sellerUserId: r.userId,
-    sellerTin: r.tin,
-    sellerName: r.name,
-    checkedAt: nowIso(),
-    units: r.units.length ? r.units : prev.units,
-    transTypes: r.transTypes.length ? r.transTypes : prev.transTypes,
-    akciz: r.akciz.length ? r.akciz : prev.akciz,
-  })
-  void syncProducts()
+  // Another taxpayer: everything read from RS.ge for the previous one goes.
+  const before = rsge.account()
+  if (su !== prev.su || (before && before.unId !== r.unId)) rsCache.reset()
+  db.set('rs', { ...db.get().rs, su, sp })
+  // Lists RS.ge didn't return this time keep what was read before.
+  rsge.setAccount(su, { ...r, units: r.units.length ? r.units : (before?.units ?? []), transTypes: r.transTypes.length ? r.transTypes : (before?.transTypes ?? []), akciz: r.akciz.length ? r.akciz : (before?.akciz ?? []) })
+  void rsCache.loadProducts().catch(() => {})
+  void rsCache.loadPlates().catch(() => {})
   return { tin: r.tin, name: r.name }
 }
 
 /** Forgets the service user. Waybills already on RS.ge are not touched. */
 export async function disconnectRs(user: User) {
   requireAdmin(user)
+  db.set('rs', { ...db.get().rs, su: '', sp: '' })
+  // No account: nothing read from RS.ge stays (products, plates, waybills, the seller).
   resetRsCache()
-  db.set('rs', { ...db.get().rs, su: '', sp: '', sellerUnId: null, sellerUserId: null, sellerTin: '', sellerName: '', checkedAt: undefined, syncedTo: undefined, syncError: undefined, productsSyncedAt: undefined, productsSyncError: undefined })
-  // No account, no products: the sync empties the list (it runs after any change in progress).
-  return syncProducts()
+  rsCache.reset()
 }
 
 /** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
@@ -580,8 +738,8 @@ type WaybillSource = Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 
  * from the route as it is now, so a retry picks up a fix to it; a line gone from the route is sent as
  * it was when the shipment was made.
  */
-function buildWaybill(d: Database, s: WaybillSource): RsWaybillPayload {
-  const rs = d.rs
+function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
+  const rs = rsView()
   const route = resolveRoute(d, s.routeId)
   const w = shipmentWaybill(s, rs, route.route)
   const driver = d.drivers.find((x) => x.id === s.driverId)
@@ -628,8 +786,16 @@ function buildWaybill(d: Database, s: WaybillSource): RsWaybillPayload {
   }
 }
 
-const rsNotReady = (d: Database) => {
-  const missing = rsMissing(d.rs, { hasCreds: !!storedCreds() })
+/** Why a waybill can't be sent now, or null. Reads the seller from RS.ge when it isn't known since the server started. */
+async function rsNotReady(): Promise<string | null> {
+  if (storedCreds() && !rsge.account()) {
+    const error = await rsge.loadAccount().then(
+      () => null,
+      (e: Error) => e.message,
+    )
+    if (error) return error
+  }
+  const missing = rsMissing(rsView(), { hasCreds: !!storedCreds() })
   return missing.length ? `RS.ge პარამეტრები არ არის შევსებული (${missing.join(', ')}) — მიმართე ადმინისტრატორს` : null
 }
 
@@ -639,10 +805,24 @@ function patch(id: string, fn: (s: Shipment) => Partial<Shipment>, event?: Omit<
   db.updateShipment(id, (s) => ({ ...s, ...fn(s), events: event ? [...s.events, { at: nowIso(), ...event }] : s.events }))
 }
 
-function get(id: string, user?: User) {
+/** The stored shipment. */
+function stored(id: string, user?: User) {
   const s = db.get().shipments.find((x) => x.id === id)
   if (!s || (user && !canUseCarrier(user, s.carrierId))) return fail('რეისი ვერ მოიძებნა', 404)
   return s
+}
+
+/** The shipment with RS.ge's copy of its waybill filled in (as last read; see `current`). */
+const get = (id: string, user?: User) => withRs(stored(id, user))
+
+/**
+ * The shipment with RS.ge's copy of its waybill, read now when none is held (after a restart, say).
+ * Changing a waybill needs to know how it stands on RS.ge.
+ */
+async function current(id: string, user?: User) {
+  const s = stored(id, user)
+  if (s.rsWaybillId && !rsCache.waybill(s.rsWaybillId) && storedCreds()) await rsCache.read(s.rsWaybillId, id, 'page').catch(() => {})
+  return get(id, user)
 }
 
 const noReport = (user: User) => user.role === 'report' && fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
@@ -695,7 +875,7 @@ const MAX_INFO = 250
  * `keepBegin`: a correction keeps the start RS.ge already has.
  */
 async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRoute, prev?: ShipmentWaybill): Promise<ShipmentWaybill> {
-  const rs = db.get().rs
+  const rs = rsView()
   const base = prev ?? waybillDefaults(rs, route)
   const x = raw ?? {}
   const type = x.type == null ? base.type : (waybillType(x.type) ?? fail('აირჩიე ზედნადების ტიპი'))
@@ -755,7 +935,8 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
     input.truckId = ''
   } else {
     if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
-    if (!usable(d.trucks, input.truckId, prev?.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
+    // Trucks are RS.ge's car numbers (with the model and trailer stored here).
+    if (!usable(trucksView(d.trucks), input.truckId, prev?.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
   }
   const items = parseItems(body.items, picked!)
   const quantity = Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000
@@ -795,7 +976,7 @@ function rowsFor(goods: RsWaybillPayload['goods'], remote: RsRemoteWaybill): Xml
 }
 
 /** What changed between two versions of a shipment, for its history. */
-function describeEdit(d: Database, a: Shipment, b: Pick<Shipment, 'routeId' | 'driverId' | 'truckId' | 'items' | 'quantity' | 'waybill'>) {
+function describeEdit(d: StoredDatabase, a: Shipment, b: Pick<Shipment, 'routeId' | 'driverId' | 'truckId' | 'items' | 'quantity' | 'waybill'>) {
   const out: string[] = []
   const name = (id: string) => {
     const x = d.drivers.find((y) => y.id === id)
@@ -844,10 +1025,10 @@ export const shipments = {
   /** Creates the record and starts the upload pipeline in the background. */
   async create(body: Partial<NewShipmentInput>, user: User): Promise<string> {
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა', 403)
-    const d = db.get()
-    const notReady = rsNotReady(d)
+    const notReady = await rsNotReady()
     if (notReady) fail(notReady)
     const x = await parseShipment(body, user)
+    x.truckId = truckRecord(x.truckId)
     const sid = uid('s')
     const draft = !!body.draft
     const s: Shipment = {
@@ -885,14 +1066,15 @@ export const shipments = {
    * pipeline then activates it and texts the driver.
    */
   async activate(id: string, body: { beginAt?: string } | undefined, user: User) {
-    const s = get(id, user)
+    const s = await current(id, user)
     noReport(user)
     if (s.status !== 'saved' || s.waybillState) fail('ზედნადები არ არის შენახულ (გაუაქტიურებელ) მდგომარეობაში')
     if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
     const beginAt = parseBegin(body?.beginAt)
+    // The start asked for is stored until the activation is done (the pipeline reads it).
     patch(
       id,
-      (x) => ({ draft: undefined, status: 'uploading', rs: { status: 'pending' }, waybill: { ...shipmentWaybill(x, db.get().rs, resolveRoute(db.get(), x.routeId).route), beginAt } }),
+      () => ({ draft: undefined, status: 'uploading', rs: { status: 'pending' }, waybill: { ...shipmentWaybill(s, rsView(), resolveRoute(db.get(), s.routeId).route), beginAt } }),
       { level: 'info', message: beginAt ? `მოთხოვნილია გააქტიურება, ტრანსპორტირების დაწყება ${tbilisiTime(beginAt)}` : 'მოთხოვნილია გააქტიურება' },
     )
     void shipments.run(id)
@@ -905,7 +1087,8 @@ export const shipments = {
    * is texted again when the driver or truck changed.
    */
   async edit(id: string, body: Partial<NewShipmentInput>, user: User) {
-    const s = get(id, user)
+    // RS.ge's copy decides what may change: read it when none is held.
+    const s = await current(id, user)
     noReport(user)
     if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
     if (s.waybillState) fail(s.waybillState === 'closed' ? 'დასრულებულ ზედნადებს ვერ შეცვლი' : 'გაუქმებულ ზედნადებს ვერ შეცვლი')
@@ -922,6 +1105,7 @@ export const shipments = {
       delete x.waybill.beginAt
       if (s.waybill?.beginAt) x.waybill.beginAt = s.waybill.beginAt
     }
+    x.truckId = truckRecord(x.truckId)
     const next: Shipment = { ...s, ...x }
     const payload = buildWaybill(db.get(), next)
     const changes = describeEdit(db.get(), s, x)
@@ -933,19 +1117,22 @@ export const shipments = {
     running.add(id)
     let remote: RsRemoteWaybill | null = null
     try {
-      const now = await rsge.getWaybill(s.rsWaybillId!, id).catch((e: Error) => fail(e.message, 502))
+      const now = await rsCache.read(s.rsWaybillId!, id).catch((e: Error) => fail(e.message, 502))
       if (active && now.status !== 1) fail(`RS.ge-ზე ზედნადები ${RS_STATUS_TEXT[now.status] ?? now.status}-ა — შეცვლა შეუძლებელია`)
+      if (now.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს ვერ შეცვლი')
       if (!active && now.status !== 0) fail('RS.ge-ზე ზედნადები უკვე აღარ არის შენახულ მდგომარეობაში — განაახლე გვერდი')
       const begin = active ? (now.beginAt ? new Date(now.beginAt) : new Date()) : (plannedBegin(next) ?? new Date())
       await rsge
         .saveWaybill(payload, id, { id: s.rsWaybillId!, status: active ? 1 : 0, beginDate: rsDate(begin), goods: rowsFor(payload.goods, now) })
         .catch((e: Error) => fail(e.message, 502))
-      remote = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
+      remote = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
       running.delete(id)
     }
+    if (!remote) rsCache.stale(s.rsWaybillId!)
     const message = active ? `ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე` : 'RS.ge-ზე შენახული ზედნადები განახლდა'
-    patch(id, (y) => ({ ...x, rsWaybill: payload, items: sentItems({ ...y, ...x }, payload), ...(remote && { rsRemote: remote }) }), {
+    // RS.ge has the waybill: what was typed isn't kept (store.ts drops it), RS.ge's copy is shown.
+    patch(id, (y) => ({ ...x, rsWaybill: payload, items: sentItems({ ...y, ...x }, payload) }), {
       level: 'success',
       message: `${message}${changes.length ? ` — ${changes.join('; ')}` : ''}`,
     })
@@ -957,7 +1144,7 @@ export const shipments = {
   },
 
   async retrySms(id: string, user: User) {
-    const s = get(id, user)
+    const s = stored(id, user)
     noReport(user)
     // Sent again only when it failed or the phone never got it, so a double click can't text the driver twice.
     if (s.sms.status === 'ok' && !smsUndelivered(s)) fail('SMS უკვე გაიგზავნა')
@@ -977,7 +1164,7 @@ export const shipments = {
    * at once, and a refusal because it was already done on the rs.ge portal counts as done.
    */
   async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User, body?: { deliveredAt?: string }) {
-    const s = get(id, user)
+    const s = await current(id, user)
     noReport(user)
     if (action === 'delete') {
       if (s.status !== 'saved' || s.waybillState) fail('წაიშლება მხოლოდ შენახული (გაუაქტიურებელი) ზედნადები')
@@ -1000,17 +1187,18 @@ export const shipments = {
       } catch (e) {
         error = e as Error
       }
-      w = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
+      w = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
       running.delete(id)
     }
+    // Not read back: read again soon, so the state shown follows.
+    if (!w) rsCache.stale(s.rsWaybillId!)
     if (error && (!w || stateOf(w.status) !== target)) {
       patch(id, () => ({}), { level: 'error', message: error.message })
-      if (w) applyRemote(id, w)
       fail(error.message, 502)
     }
     if (!error)
-      patch(id, () => ({ waybillState: target }), {
+      patch(id, () => ({}), {
         level: 'success',
         message:
           action === 'close'
@@ -1019,7 +1207,6 @@ export const shipments = {
               ? `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`
               : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
       })
-    if (w) applyRemote(id, w)
   },
 
   /**
@@ -1027,10 +1214,10 @@ export const shipments = {
    * If RS.ge refuses because one exists already (written on the portal), that one is recorded.
    */
   async invoice(id: string, user: User) {
-    const s = get(id, user)
+    const s = await current(id, user)
     noReport(user)
     if (s.status !== 'uploaded' || s.waybillState === 'cancelled') fail('ანგარიშ-ფაქტურა იწერება მხოლოდ აქტიურ ან დასრულებულ ზედნადებზე')
-    if ((s.rsWaybill?.type ?? 1) === 1) fail('შიდა გადაზიდვაზე ანგარიშ-ფაქტურა არ იწერება')
+    if ((s.rsRemote?.type ?? s.waybill?.type ?? 1) === 1) fail('შიდა გადაზიდვაზე ანგარიშ-ფაქტურა არ იწერება')
     if (s.invoiceId) fail(`ანგარიშ-ფაქტურა უკვე გამოწერილია (ID ${s.invoiceId})`)
     if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია')
     // RS.ge refuses it (-3009) until the planned start of transport has come.
@@ -1046,13 +1233,14 @@ export const shipments = {
       } catch (e) {
         error = e as Error
       }
-      const w = await rsge.getWaybill(s.rsWaybillId!, id).catch(() => null)
+      const w = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
+      if (!w) rsCache.stale(s.rsWaybillId!)
       inv ??= w?.invoiceId
       if (!inv) {
         patch(id, () => ({}), { level: 'error', message: error?.message ?? 'ანგარიშ-ფაქტურა ვერ გამოიწერა' })
         fail(error?.message ?? 'ანგარიშ-ფაქტურა ვერ გამოიწერა', 502)
       }
-      patch(id, () => ({ invoiceId: inv, ...(w && { rsRemote: w }) }), { level: 'success', message: `ანგარიშ-ფაქტურა გამოიწერა RS.ge-ზე (ID ${inv})` })
+      patch(id, () => ({}), { level: 'success', message: `ანგარიშ-ფაქტურა გამოიწერა RS.ge-ზე (ID ${inv})` })
       return { invoiceId: inv }
     } finally {
       running.delete(id)
@@ -1064,17 +1252,27 @@ export const shipments = {
    * fast when it was read moments ago, so reopening the page doesn't call RS.ge every time.
    */
   async refreshFromRs(id: string, user: User) {
-    const s = get(id, user)
-    if ((s.status !== 'uploaded' && s.status !== 'saved') || !s.rsWaybillId) return
-    if (s.rsRemote && Date.now() - Date.parse(s.rsRemote.checkedAt) < REFRESH_FRESH_MS) return
-    if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული — ნაჩვენებია ბოლოს ნანახი მონაცემები', 409)
-    let p = reading.get(id)
-    if (!p) {
-      p = rsge.getWaybill(s.rsWaybillId!, id, 'page').then((w) => applyRemote(id, w))
-      reading.set(id, p)
-      void p.catch(() => {}).finally(() => reading.delete(id))
-    }
-    await p.catch((e: Error) => fail(e.message, 502))
+    const s = stored(id, user)
+    if (!s.rsWaybillId) return
+    const held = rsCache.waybill(s.rsWaybillId)
+    if (held && Date.now() - Date.parse(held.checkedAt) < REFRESH_FRESH_MS) return
+    if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული — ზედნადების მონაცემები RS.ge-დან ვერ წაიკითხება', 409)
+    await rsCache.read(s.rsWaybillId, id, 'page').catch((e: Error) => fail(e.message, 502))
+  },
+
+  /**
+   * Reads the waybills of these shipments from RS.ge in the background, the ones not held yet. Lists
+   * and reports ask for what they show; the answers arrive with the next state poll.
+   */
+  loadFromRs(body: { ids?: unknown } | undefined, user: User) {
+    if (!storedCreds()) return
+    const ids = new Set(Array.isArray(body?.ids) ? body.ids.slice(0, 2000).map(String) : [])
+    const waybills = db
+      .get()
+      .shipments.filter((s) => ids.has(s.id) && s.rsWaybillId && canUseCarrier(user, s.carrierId))
+      // Newest first: what is on top of a list arrives first.
+      .map((s) => s.rsWaybillId!)
+    rsCache.want(waybills)
   },
 
   /** Asks smsoffice.ge whether the driver got the SMS (opening a shipment calls this). */
@@ -1095,137 +1293,66 @@ export const shipments = {
 
 /** A waybill read less than this long ago is not read again when the shipment is opened. */
 const REFRESH_FRESH_MS = 15_000
-const reading = new Map<string, Promise<void>>()
 
 const RS_STATUS_TEXT: Record<number, string> = { 0: 'შენახული', 1: 'აქტიური', 2: 'დასრულებული', 8: 'გადამზიდავთან გადაგზავნილი', [-1]: 'წაშლილი', [-2]: 'გაუქმებული' }
 
-/** waybillState for an RS.ge status: completed → closed, deleted or cancelled → cancelled. */
-const stateOf = (status: number): Shipment['waybillState'] => (status === 2 ? 'closed' : status < 0 ? 'cancelled' : undefined)
-
-const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
-
 /**
- * Records the waybill as RS.ge reported it. RS.ge wins over what was sent: a waybill completed,
- * cancelled or corrected on the rs.ge portal is shown that way here, with an event saying what changed.
- * A draft activated on the portal becomes uploaded here, and its driver is texted.
+ * Runs for every waybill read from RS.ge that belongs to a shipment (`prev`: the copy held before, if
+ * any). Nothing of RS.ge's is stored; this only writes our side: a draft activated on the rs.ge portal
+ * becomes uploaded here (with its number) and its driver is texted, and changes made on the portal go
+ * into the shipment's history.
  */
-function applyRemote(id: string, w: RsRemoteWaybill) {
-  // A pipeline or close/cancel in progress records its own outcome; the next read catches up.
+function reconcile(id: string, prev: RsRemoteWaybill | undefined, w: RsRemoteWaybill) {
+  // A pipeline or close/cancel in progress records its own outcome.
   if (running.has(id)) return
   const s = db.get().shipments.find((x) => x.id === id)
   if (!s || (s.status !== 'uploaded' && s.status !== 'saved')) return
-  const invoice = { invoiceId: w.invoiceId ?? s.invoiceId }
   if (s.status === 'saved') {
-    if (w.status !== 0 && w.number && w.status > 0) {
-      patch(id, () => ({ ...invoice, rsRemote: w, status: 'uploaded', draft: undefined, waybillNumber: w.number, waybillState: stateOf(w.status), rs: { status: 'ok', at: nowIso() } }), {
+    if (w.status > 0 && w.number) {
+      patch(id, () => ({ status: 'uploaded', draft: undefined, waybillNumber: w.number, rs: { status: 'ok', at: nowIso() } }), {
         level: 'success',
         message: `ზედნადები №${w.number} გააქტიურდა RS.ge-ზე`,
       })
       void shipments.run(id)
-    } else if (w.status < 0 && !s.waybillState) patch(id, () => ({ rsRemote: w, waybillState: 'cancelled' }), { level: 'info', message: 'RS.ge-ზე შენახული ზედნადები წაიშალა' })
-    else patch(id, () => ({ rsRemote: w }))
+    } else if (w.status < 0 && (!prev || prev.status >= 0)) {
+      // Said once: after a restart there is no earlier copy to tell it from.
+      const message = 'RS.ge-ზე შენახული ზედნადები წაიშალა'
+      if (!s.events.some((e) => e.message === message)) patch(id, () => ({}), { level: 'info', message })
+    }
     return
   }
-  // Compared with the last reading, or with what was sent before the first one.
-  const sent = s.rsWaybill
-  const was = s.rsRemote ?? {
-    carNumber: sent?.carNumber ?? '',
-    driverTin: sent?.driverTin ?? '',
-    driverName: sent?.driverName ?? '',
-    startAddress: sent?.startAddress ?? '',
-    endAddress: sent?.endAddress ?? '',
-    quantity: s.quantity,
-    fullAmount: Math.round((sent?.goods ?? []).reduce((a, g) => a + g.amount, 0) * 100) / 100,
-    invoiceId: undefined,
-  }
+  if (!s.waybillNumber && w.number) patch(id, () => ({ waybillNumber: w.number }))
+  // Changes are told against the copy read before (none after a restart: nothing to compare with).
+  if (!prev) return
   const changes: string[] = []
-  const state = stateOf(w.status)
-  if (state !== s.waybillState) changes.push(`სტატუსი: ${RS_STATUS_TEXT[w.status] ?? w.status}`)
-  if (plateKey(w.carNumber) !== plateKey(was.carNumber)) changes.push(`მანქანა: ${was.carNumber || '—'} → ${w.carNumber || '—'}`)
-  if (w.driverTin !== was.driverTin) changes.push(`მძღოლი: ${was.driverName || was.driverTin} → ${w.driverName || w.driverTin}`)
-  if (w.startAddress.trim() !== was.startAddress.trim()) changes.push(`დაწყების მისამართი: ${w.startAddress || '—'}`)
-  if (w.endAddress.trim() !== was.endAddress.trim()) changes.push(`დასრულების მისამართი: ${w.endAddress || '—'}`)
-  if (w.quantity !== was.quantity) changes.push(`რაოდენობა: ${was.quantity} → ${w.quantity}`)
-  if (Math.abs(w.fullAmount - was.fullAmount) >= 0.005) changes.push(`თანხა: ${was.fullAmount.toFixed(2)} → ${w.fullAmount.toFixed(2)} ₾`)
-  if (w.invoiceId && w.invoiceId !== s.invoiceId) changes.push(`ანგარიშ-ფაქტურა: ID ${w.invoiceId}`)
-  patch(
-    id,
-    (x) => ({ ...invoice, rsRemote: w, waybillState: state, waybillNumber: w.number || x.waybillNumber }),
-    changes.length ? { level: 'info', message: `RS.ge-ზე შეიცვალა — ${changes.join('; ')}` } : undefined,
-  )
+  if (stateOf(w.status) !== stateOf(prev.status)) changes.push(`სტატუსი: ${RS_STATUS_TEXT[w.status] ?? w.status}`)
+  if (plateKey(w.carNumber) !== plateKey(prev.carNumber)) changes.push(`მანქანა: ${prev.carNumber || '—'} → ${w.carNumber || '—'}`)
+  if (w.driverTin !== prev.driverTin) changes.push(`მძღოლი: ${prev.driverName || prev.driverTin} → ${w.driverName || w.driverTin}`)
+  if (w.startAddress.trim() !== prev.startAddress.trim()) changes.push(`დაწყების მისამართი: ${w.startAddress || '—'}`)
+  if (w.endAddress.trim() !== prev.endAddress.trim()) changes.push(`დასრულების მისამართი: ${w.endAddress || '—'}`)
+  if (w.quantity !== prev.quantity) changes.push(`რაოდენობა: ${prev.quantity} → ${w.quantity}`)
+  if (Math.abs(w.fullAmount - prev.fullAmount) >= 0.005) changes.push(`თანხა: ${prev.fullAmount.toFixed(2)} → ${w.fullAmount.toFixed(2)} ₾`)
+  if (w.invoiceId && w.invoiceId !== prev.invoiceId) changes.push(`ანგარიშ-ფაქტურა: ID ${w.invoiceId}`)
+  if (changes.length) patch(id, () => ({}), { level: 'info', message: `RS.ge-ზე შეიცვალა — ${changes.join('; ')}` })
 }
+rsCache.onWaybill(reconcile)
 
-/** Minutes between background syncs (RS_SYNC_MINUTES, default 5; 0 turns it off). */
-const SYNC_MS = Math.max(0, Number(process.env.RS_SYNC_MINUTES ?? 5) || 0) * 60_000
-/** The furthest back one sync reads. Older changes still show up when the shipment is opened. */
-const SYNC_MAX_BACK_MS = 30 * 86400_000
-/** Each sync re-reads this much of the previous window, against clock differences between the servers. */
-const SYNC_OVERLAP_MS = 5 * 60_000
-let syncing: Promise<void> | null = null
-
-/**
- * Background sync: asks RS.ge which waybills changed since the last sync (get_waybills_v1) and
- * re-reads the ones that belong to uploaded shipments or drafts. A failed sync leaves the cursor
- * where it was, so the next one reads the same changes again.
- */
-export function syncRs(): Promise<void> {
-  syncing ??= runSync().finally(() => (syncing = null))
-  return syncing
-}
-
-async function runSync() {
-  const start = db.get().rs
-  if (!storedCreds()) return
-  const stillSameUser = () => db.get().rs.su === start.su && db.get().rs.sellerUnId === start.sellerUnId
-  const now = Date.now()
-  try {
-    const tracked = db.get().shipments.filter((s) => (s.status === 'uploaded' || s.status === 'saved') && s.rsWaybillId)
-    const byWaybill = new Map(tracked.map((s) => [s.rsWaybillId!, s.id]))
-    // First sync: from the oldest tracked shipment, so changes made before syncing existed count too.
-    const cursor = start.syncedTo ? Date.parse(start.syncedTo) - SYNC_OVERLAP_MS : tracked.reduce((m, s) => Math.min(m, Date.parse(s.createdAt)), now)
-    const from = new Date(Math.max(now - SYNC_MAX_BACK_MS, cursor))
-    const to = new Date(now)
-    const ids = new Set<number>()
-    if (tracked.length) for (const w of await rsge.changed(from, to)) if (byWaybill.has(w.id)) ids.add(w.id)
-    for (const wid of ids) {
-      const sid = byWaybill.get(wid)!
-      applyRemote(sid, await rsge.getWaybill(wid, sid, 'sync'))
-    }
-    if (stillSameUser()) db.set('rs', { ...db.get().rs, syncedTo: to.toISOString(), syncError: undefined })
-  } catch (e) {
-    const msg = (e as Error).message
-    console.error('[rs-sync]', msg)
-    if (stillSameUser() && db.get().rs.syncError !== msg) db.set('rs', { ...db.get().rs, syncError: msg })
-  }
-}
-
-/** Starts the background sync (server start). */
-export function startRsSync() {
-  if (!SYNC_MS) return
-  const both = () => void syncRs().then(() => syncProducts())
-  setTimeout(both, 15_000).unref()
-  setInterval(both, SYNC_MS).unref()
-}
-
-/** "Sync now" from the settings page. */
+/** "Check now" on the settings page: asks RS.ge which waybills changed and reads them again. */
 export async function syncRsNow(user: User) {
   requireAdmin(user)
   if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
-  await syncRs()
-  const err = db.get().rs.syncError
-  if (err) fail(err, 502)
+  await rsCache.checkChanges().catch((e: Error) => fail(e.message, 502))
 }
 
 async function runPipeline(id: string) {
-  let s = get(id)
-  const d = db.get()
+  let s = stored(id)
 
   // 1. RS.ge — save the waybill (→ ID), then activate it (→ number); a draft stops after saving.
   if (s.rs.status !== 'ok') {
     if (s.status === 'rs_failed') patch(id, () => ({}), { level: 'info', message: 'RS.ge-ზე ატვირთვის ხელახალი ცდა' })
     patch(id, () => ({ status: 'uploading', rs: { status: 'running' } }))
     try {
-      const notReady = rsNotReady(d)
+      const notReady = await rsNotReady()
       if (notReady) throw new Error(notReady)
       let waybillId = s.rsWaybillId
       let done: Activated | null = null
@@ -1246,7 +1373,9 @@ async function runPipeline(id: string) {
         }
       }
       if (!waybillId) waybillId = await saveNew(id)
-      if (!done && get(id).draft) {
+      if (!done && stored(id).draft) {
+        // RS.ge's copy is what the shipment shows from now on: read it before the typed values are dropped.
+        await rsCache.read(waybillId, id).catch(() => rsCache.stale(waybillId!))
         patch(id, () => ({ status: 'saved', rs: { status: 'ok', at: nowIso() } }), { level: 'success', message: `ზედნადები შეინახა RS.ge-ზე (ID ${waybillId}) — გასააქტიურებელია` })
         return
       }
@@ -1260,9 +1389,12 @@ async function runPipeline(id: string) {
       }
       const { number, status } = done
       const state = stateOf(status)
+      // RS.ge's copy is what the shipment shows from now on: read it before the typed values are dropped.
+      const wid = waybillId
+      await rsCache.read(wid, id).catch(() => rsCache.stale(wid))
       patch(
         id,
-        () => ({ status: 'uploaded', draft: undefined, waybillNumber: number, waybillState: state, rs: { status: 'ok', at: nowIso() } }),
+        () => ({ status: 'uploaded', draft: undefined, waybillNumber: number, rs: { status: 'ok', at: nowIso() } }),
         { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}${state ? ` (RS.ge-ზე უკვე ${RS_STATUS_TEXT[status]})` : ''}` },
       )
     } catch (e) {
@@ -1273,7 +1405,7 @@ async function runPipeline(id: string) {
   }
 
   // 2. SMS to driver (a waybill without transport has none)
-  s = get(id)
+  s = stored(id)
   if (s.status !== 'uploaded') return
   if (!s.driverId) {
     if (s.sms.status === 'pending') patch(id, () => ({ sms: { status: 'skipped' } }))
@@ -1287,11 +1419,12 @@ async function runPipeline(id: string) {
  * reference data: nothing exists on RS.ge yet, so whatever the admin fixed after a refusal applies.
  */
 async function saveNew(id: string): Promise<number> {
+  // With RS.ge's copy filled in: a draft deleted on the portal is saved again from what RS.ge had.
   const s = get(id)
   const payload = buildWaybill(db.get(), s)
   // Recorded before the call: from here on, a lost answer means "maybe saved".
   // The items keep what was sent (a product may have been renamed since the shipment was created).
-  patch(id, (x) => ({ rsWaybill: payload, items: sentItems(x, payload), rsSaveAttemptedAt: nowIso() }))
+  patch(id, () => ({ rsWaybill: payload, items: sentItems(s, payload), quantity: s.quantity, ...(s.waybill && { waybill: s.waybill }), rsSaveAttemptedAt: nowIso() }))
   let waybillId: number
   try {
     waybillId = await rsge.saveWaybill(payload, id, { beginDate: rsDate(plannedBegin(s)) })
@@ -1314,9 +1447,10 @@ type Activated = { number: string; status: number }
  */
 async function activate(id: string, waybillId: number): Promise<Activated | null> {
   try {
-    return { number: await rsge.sendWaybill(waybillId, id, plannedBegin(get(id))), status: 1 }
+    // The stored start: the one asked for with this activation (or typed for the shipment).
+    return { number: await rsge.sendWaybill(waybillId, id, plannedBegin(stored(id))), status: 1 }
   } catch (e) {
-    const w = await rsge.getWaybill(waybillId, id).catch(() => null)
+    const w = await rsCache.read(waybillId, id).catch(() => null)
     if (w && w.status !== 0 && w.number) return { number: w.number, status: w.status }
     if (w?.status === -1) return null
     throw e
@@ -1360,8 +1494,8 @@ export const rsWaybills = {
     const sid = shipmentByWaybill(user).get(waybillId)
     if (user.role === 'operator' && !sid) fail('ზედნადები ვერ მოიძებნა', 404)
     if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
-    const w = await rsge.getWaybill(waybillId, sid, 'page').catch((e: Error) => fail(e.message, 502))
-    if (sid) applyRemote(sid, w)
+    // Read through the cache: a shipment's waybill is then shown (and its changes noticed) there too.
+    const w = await rsCache.read(waybillId, sid, 'page').catch((e: Error) => fail(e.message, 502))
     return { ...w, ...(sid && { shipmentId: sid }) }
   },
 
@@ -1467,7 +1601,7 @@ async function smsDelivery(destination: string, reference: string, shipmentId: s
 
 /** Reads the SMS's delivery status from smsoffice.ge, unless it is final, fresh or too old to ask. */
 function checkDelivery(id: string): Promise<void> {
-  const s = get(id)
+  const s = stored(id)
   const { status, reference, destination, delivery, deliveryCheckedAt, at } = s.sms
   if (status !== 'ok' || !reference || !destination || (delivery && SMS_FINAL.includes(delivery))) return Promise.resolve()
   if (deliveryCheckedAt && Date.now() - Date.parse(deliveryCheckedAt) < DELIVERY_FRESH_MS) return Promise.resolve()
@@ -1476,7 +1610,7 @@ function checkDelivery(id: string): Promise<void> {
   if (!p) {
     p = smsDelivery(destination, reference, id).then((now) => {
       // Only if this is still the same message (not re-sent meanwhile).
-      if (!now || get(id).sms.reference !== reference) return
+      if (!now || stored(id).sms.reference !== reference) return
       patch(id, (x) => ({ sms: { ...x.sms, delivery: now, deliveryCheckedAt: nowIso() } }), now !== delivery ? DELIVERY_EVENT[now] : undefined)
     })
     checkingSms.set(id, p)

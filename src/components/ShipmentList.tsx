@@ -1,5 +1,6 @@
 import { ChevronRight, MapPin, Truck as TruckIcon, User as UserIcon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { rsPending, useRsLoad } from '../api'
 import { shipmentQuantity } from '../lib/rs'
 import { formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
@@ -10,6 +11,10 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
   const L = useLookup()
   const nav = useNavigate()
   const open = (id: string) => nav(`/shipments/${id}`)
+  // Quantities and states are RS.ge's: ask for the listed waybills that aren't read yet.
+  useRsLoad(rows)
+  /** The quantity as RS.ge has it; '…' while it is being read. */
+  const qty = (s: Shipment) => (rsPending(s) ? '…' : formatTonnes(shipmentQuantity(s)))
 
   return (
     <>
@@ -43,7 +48,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                     <p className="text-slate-800">{x.driver}</p>
                     <p className="font-mono text-xs text-slate-400">{x.plate}</p>
                   </td>
-                  <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{formatTonnes(shipmentQuantity(s))}</td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap tabular-nums text-slate-700">{qty(s)}</td>
                   <td className="px-3 py-3">
                     <ShipmentBadge s={s} />
                   </td>
@@ -88,7 +93,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                 </div>
                 <div className="mt-2.5 flex gap-4 text-xs">
                   <span className="text-slate-500">
-                    დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{formatTonnes(shipmentQuantity(s))}</b>
+                    დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{qty(s)}</b>
                   </span>
                 </div>
               </button>

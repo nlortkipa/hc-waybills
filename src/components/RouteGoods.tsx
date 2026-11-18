@@ -118,7 +118,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
       ...(a.unit && !g.name.trim() && !g.barCode.trim() && (unit ? { unitId: String(unit.id) } : { unitId: String(RS_UNIT_OTHER), unitTxt: a.unit })),
     })
   }
-  /** Fills the line from a product of the list; every field stays editable. */
+  /** Fills the line from a product of RS.ge's list; every field stays editable. */
   const fill = (key: string, productId: string) => {
     const p = products.find((x) => x.id === productId)
     if (!p) return
@@ -131,11 +131,9 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
       name: p.name,
       unitId: String(listed ? p.unitId : RS_UNIT_OTHER),
       unitTxt: p.unitTxt,
-      vatType: String(p.vatType ?? 0),
       aId: p.aId ? String(p.aId) : '',
       aTitle: p.aId ? (a ? `${a.code} · ${a.title}` : String(p.aId)) : '',
-      // A product without a price leaves what was typed.
-      ...(p.price != null && { price: String(p.price) }),
+      // RS.ge's products have no price or VAT type: what is typed on the line stays.
     })
   }
 

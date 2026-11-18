@@ -22,18 +22,22 @@ export function makeLookup(d: Database) {
       const x = drivers.get(id)
       return x ? `${x.firstName} ${x.lastName}` : '—'
     },
-    /** Display values of a shipment. Where its waybill was corrected on RS.ge, RS.ge's values are shown. */
+    /**
+     * Display values of a shipment. Once its waybill is on RS.ge, RS.ge's values are shown (a correction
+     * on the rs.ge portal included); ours where they are the same, since RS.ge spells plates its own way.
+     */
     describe(s: Shipment) {
       const r = resolveRoute(d, s.routeId)
       const rs = s.rsRemote
       const sent = s.rsWaybill
-      const moved = !!rs && !!sent && (rs.startAddress.trim() !== sent.startAddress.trim() || rs.endAddress.trim() !== sent.endAddress.trim())
+      const driver = drivers.get(s.driverId)
+      const plate = trucks.get(s.truckId)?.plateNumber
       return {
         carrier: carriers.get(s.carrierId)?.name ?? '—',
         // As RS.ge has it, else as sent (without transport the end is the start), else the route.
-        route: moved ? routeText({ start: rs!.startAddress, end: rs!.endAddress }) : sent ? routeText({ start: sent.startAddress, end: sent.endAddress }) : routeText(r),
-        driver: rs && sent && rs.driverTin !== sent.driverTin ? rs.driverName || rs.driverTin : this.driverName(s.driverId),
-        plate: rs && sent && plateKey(rs.carNumber) !== plateKey(sent.carNumber) ? rs.carNumber || '—' : (trucks.get(s.truckId)?.plateNumber ?? '—'),
+        route: rs ? routeText({ start: rs.startAddress, end: rs.endAddress }) : sent ? routeText({ start: sent.startAddress, end: sent.endAddress }) : routeText(r),
+        driver: rs && rs.driverTin !== (driver?.personalId.trim() ?? '') ? rs.driverName || rs.driverTin || '—' : this.driverName(s.driverId),
+        plate: rs && plateKey(rs.carNumber) !== plateKey(plate ?? '') ? rs.carNumber || '—' : (plate ?? '—'),
         item: itemsText(s),
       }
     },

@@ -1,13 +1,13 @@
 import { Building2, Check, Package, Pencil, Plus, RefreshCw, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { products, refs, type RefCollection } from '../api'
+import { products, refs, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, formatDateTime, phoneKey, sameIds } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
-import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
+import { RS_UNIT_OTHER, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import type { CarrierRoute, Database, RouteGood } from '../types'
 import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 
@@ -77,8 +77,8 @@ const productNames = (d: Database, r: Rec) => goodsOf(d, r).map((g) => g.name).j
 /** A route record resolved to its carrier and addresses. */
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
 
-/** Connected to RS.ge (the admin's copy shows the service user). Products are kept on RS.ge too, so they need it. */
-const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet && !!d.rs.sellerUnId
+/** Connected to RS.ge (the admin's copy shows the service user). Products and plates are RS.ge's, so they need it. */
+const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet
 
 const TABS: TabDef[] = [
   {
@@ -215,9 +215,6 @@ const TABS: TabDef[] = [
       { key: 'barCode', label: 'შტრიხკოდი', placeholder: 'CRS-05', mono: true, fixed: { hint: 'RS.ge-ზე პროდუქტი შტრიხკოდით იძებნება, ამიტომ ის არ იცვლება.' } },
       { key: 'unitId', label: 'საზომი ერთეული', type: 'select', options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })), initial: (d) => String(tonneUnit(d.rs)) },
       { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა' },
-      // Not on RS.ge: kept here and filled into a route's goods line when the product is picked there.
-      { key: 'price', label: 'ერთეულის ფასი (₾)', placeholder: '0.00', optional: true, validate: (v) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი'), hint: 'არასავალდებულო. მარშრუტზე ჩაიწერება, სადაც შეიძლება შეიცვალოს.' },
-      { key: 'vatType', label: 'დაბეგვრის ტიპი', type: 'select', options: () => RS_VAT_TYPES.map((v) => ({ value: String(v.value), label: v.label })), initial: () => '0' },
       {
         key: 'aId',
         label: 'აქციზი',
@@ -235,13 +232,11 @@ const TABS: TabDef[] = [
       },
     ],
     title: (r) => r.name!,
-    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'}${r.price != null && r.price !== '' ? ` · ${Number(r.price).toFixed(2)} ₾` : ''}`,
+    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'}`,
     columns: [
       { label: 'დასახელება', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
       { label: 'შტრიხკოდი', render: (r) => <span className="font-mono text-[13px]">{r.barCode}</span> },
       { label: 'ერთეული', render: (r) => r.unitTxt || '—' },
-      { label: 'ფასი', render: (r) => (r.price != null && r.price !== '' ? `${Number(r.price).toFixed(2)} ₾` : '—') },
-      { label: 'დაბეგვრა', render: (r) => RS_VAT_TYPES.find((v) => String(v.value) === String(r.vatType ?? 0))?.label ?? '—' },
       { label: 'აქციზი', render: (r) => (Number(r.aId) > 0 ? <Badge tone="violet">აქციზური</Badge> : '—') },
     ],
   },
@@ -284,11 +279,12 @@ export function ReferenceData() {
   const [editing, setEditing] = useState<Rec | null>(null)
   const [deleting, setDeleting] = useState<Rec | null>(null)
   const [busy, setBusy] = useState(false)
-  const productsLocked = tab.key === 'products' && !rsConnected(d)
+  const productsLocked = (tab.key === 'products' || tab.key === 'trucks') && !rsConnected(d)
 
-  // Products: read RS.ge's list when the tab opens, so ones added on the rs.ge portal show up.
+  // Products and plates: read RS.ge's list when the tab opens, so ones added on the rs.ge portal show up.
   useEffect(() => {
     if (tabKey === 'products') products.sync().catch(() => {})
+    if (tabKey === 'trucks') trucks.sync().catch(() => {})
   }, [tabKey])
 
   const rows = useMemo(() => {
@@ -369,7 +365,7 @@ export function ReferenceData() {
         </span>
       </div>
 
-      {tab.key === 'products' && <ProductsSyncLine />}
+      {(tab.key === 'products' || tab.key === 'trucks') && <RsListLine what={tab.key} />}
 
       <Card className="overflow-hidden">
         {rows.length === 0 ? (
@@ -470,20 +466,40 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
   )
 }
 
-/** Products tab: when RS.ge's product list was last read, why it failed, and a "read now" button. */
-function ProductsSyncLine() {
+/** Products and trucks tabs: when RS.ge's list was last read, why it failed, and a "read now" button. */
+function RsListLine({ what }: { what: 'products' | 'trucks' }) {
   const d = useDb()
   const toast = useToast()
   const [busy, setBusy] = useState(false)
-  const { productsSyncedAt: at, productsSyncError: error } = d.rs
+  const isProducts = what === 'products'
+  const at = isProducts ? d.rs.productsSyncedAt : d.rs.platesReadAt
+  const error = isProducts ? d.rs.productsSyncError : d.rs.platesError
+  const list = isProducts ? 'პროდუქტების სია' : 'მანქანების ნომრების სია'
   if (!rsConnected(d)) {
-    return <p className="mb-4 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">პროდუქტები RS.ge-დან მოდის — სანახავად, დასამატებლად და შესაცვლელად ჯერ დაუკავშირდი RS.ge-ს (RS.ge-ს გვერდი).</p>
+    return (
+      <p className="mb-4 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
+        {isProducts ? 'პროდუქტები RS.ge-დან მოდის' : 'მანქანების ნომრები RS.ge-ზე ინახება'} — დასამატებლად და შესაცვლელად ჯერ დაუკავშირდი RS.ge-ს (RS.ge-ს გვერდი).
+      </p>
+    )
   }
   const run = async () => {
     setBusy(true)
     try {
-      await products.sync(true)
-      toast('success', 'პროდუქტების სია განახლდა RS.ge-დან')
+      await (isProducts ? products : trucks).sync(true)
+      toast('success', `${list} განახლდა RS.ge-დან`)
+    } catch (e) {
+      toast('error', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  // Trucks stored here whose plate RS.ge's list doesn't have: hidden from the pickers until it does.
+  const offRs = isProducts ? [] : d.trucks.filter((t) => t.deletedAt === 'rs')
+  const push = async () => {
+    setBusy(true)
+    try {
+      const r = await trucks.pushPlates()
+      toast('success', `RS.ge-ს სიას დაემატა ${r.added} ნომერი`)
     } catch (e) {
       toast('error', (e as Error).message)
     } finally {
@@ -491,13 +507,31 @@ function ProductsSyncLine() {
     }
   }
   return (
+    <>
+      {offRs.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
+          <p>
+            RS.ge-ს სიაში არ არის: <span className="font-mono text-[13px]">{offRs.map((t) => t.plateNumber).join(', ')}</span> — ამ მანქანებს რეისზე ვერ აირჩევ, სანამ ნომერი RS.ge-ს სიაში არ დაემატება.
+          </p>
+          <Button size="sm" variant="secondary" onClick={() => void push()} loading={busy}>
+            RS.ge-ზე დამატება
+          </Button>
+        </div>
+      )}
+      <RsReadLine at={at} error={error} list={list} busy={busy} onRefresh={() => void run()} />
+    </>
+  )
+}
+
+function RsReadLine({ at, error, list, busy, onRefresh }: { at?: string; error?: string; list: string; busy: boolean; onRefresh: () => void }) {
+  return (
     <p className="mb-4 ml-1 flex flex-wrap items-center gap-x-1.5 text-xs">
       {error ? (
         <span className="text-amber-700">{error}</span>
       ) : (
-        <span className="text-slate-500">{at ? `RS.ge-ს პროდუქტების სია წაკითხულია ${formatDateTime(at)}` : 'RS.ge-ს პროდუქტების სია ჯერ არ წაკითხულა'}</span>
+        <span className="text-slate-500">{at ? `RS.ge-ს ${list} წაკითხულია ${formatDateTime(at)}` : `RS.ge-ს ${list} ჯერ არ წაკითხულა`}</span>
       )}
-      <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
+      <button type="button" onClick={onRefresh} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
         <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
         განახლება
       </button>

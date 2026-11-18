@@ -33,7 +33,8 @@ const FALLBACK_TRANS = [
   { id: RS_TRANS_OTHER, name: 'სხვა' },
 ]
 
-const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet && !!rs.sellerUnId
+/** A service user is stored (the seller is then read from RS.ge; it isn't stored). */
+const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet
 
 /* ------------------------------- Screen ------------------------------- */
 
@@ -154,9 +155,15 @@ function ConnectionCard() {
             </div>
             <div className="min-w-0">
               <h3 className="text-sm font-semibold text-slate-900">დაკავშირებულია RS.ge-სთან</h3>
-              <p className="text-sm text-slate-900">
-                {rs.sellerName} <span className="font-mono text-[13px] text-slate-500">({rs.sellerTin})</span>
-              </p>
+              {rs.sellerTin ? (
+                <p className="text-sm text-slate-900">
+                  {rs.sellerName} <span className="font-mono text-[13px] text-slate-500">({rs.sellerTin})</span>
+                </p>
+              ) : rs.accountError ? (
+                <p className="text-sm text-amber-700">გამყიდველი RS.ge-დან ვერ წაიკითხა: {rs.accountError}</p>
+              ) : (
+                <p className="text-sm text-slate-500">გამყიდველი იკითხება RS.ge-დან…</p>
+              )}
               <p className="text-xs text-slate-500">
                 სერვისის მომხმარებელი <span className="font-mono">{rs.su}</span>
                 {rs.checkedAt && <> · შემოწმდა {formatDateTime(rs.checkedAt)}</>}
@@ -429,7 +436,7 @@ function Section({ title, text, icon, children }: { title: string; text?: string
   )
 }
 
-/** Background sync with RS.ge: when it last read the changes, why it failed, and a "sync now" button. */
+/** Waybills changed on RS.ge: up to when they were checked (while the app is open), why it failed, and a "check now" button. */
 function SyncLine({ rs }: { rs: RsSettings }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
@@ -437,7 +444,7 @@ function SyncLine({ rs }: { rs: RsSettings }) {
     setBusy(true)
     try {
       await rsSettings.syncNow()
-      toast('success', 'RS.ge-სთან სინქრონიზაცია დასრულდა')
+      toast('success', 'RS.ge-ს ცვლილებები შემოწმდა')
     } catch (e) {
       toast('error', (e as Error).message)
     } finally {
@@ -447,9 +454,9 @@ function SyncLine({ rs }: { rs: RsSettings }) {
   return (
     <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs">
       {rs.syncError ? (
-        <span className="text-amber-700">სინქრონიზაცია ვერ მოხერხდა: {rs.syncError}</span>
+        <span className="text-amber-700">ცვლილებების შემოწმება ვერ მოხერხდა: {rs.syncError}</span>
       ) : (
-        <span className="text-slate-500">{rs.syncedTo ? `RS.ge-ს ცვლილებები წაკითხულია ${formatDateTime(rs.syncedTo)}-მდე` : 'RS.ge-ს ცვლილებები ჯერ არ წაკითხულა'}</span>
+        <span className="text-slate-500">{rs.syncedTo ? `RS.ge-ს ცვლილებები შემოწმებულია ${formatDateTime(rs.syncedTo)}-მდე` : 'RS.ge-ს ცვლილებები ჯერ არ შემოწმებულა'}</span>
       )}
       <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
         <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
