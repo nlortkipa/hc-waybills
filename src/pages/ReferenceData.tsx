@@ -7,7 +7,7 @@ import { active, cx, formatDateTime, phoneKey, sameIds } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
-import { RS_UNIT_OTHER, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
+import { akcizUnit, RS_UNIT_OTHER, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import type { CarrierRoute, Database, RouteGood } from '../types'
 import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 
@@ -38,6 +38,17 @@ interface FieldDef {
   searchable?: boolean
   /** Under the field. */
   hint?: string
+  /** The value another field fixes (shown, can't be changed, saved); undefined = free. */
+  lock?: (d: Database, rec: Rec, isNew: boolean) => string | undefined
+  /** Other fields this one fills when it is changed (they stay editable unless locked). */
+  fills?: (d: Database, value: string) => Partial<Rec>
+}
+
+/** A product's excise code, when RS.ge's list has it: as on RS.ge's form, it fixes the bar code and unit. */
+const akcizOfRec = (d: Database, r: Rec) => (Number(r.aId) > 0 ? d.rs.akciz?.find((a) => String(a.id) === r.aId) : undefined)
+const lockedUnit = (d: Database, r: Rec) => {
+  const a = akcizOfRec(d, r)
+  return a && akcizUnit(d.rs, a)
 }
 
 interface TabDef {
@@ -212,9 +223,27 @@ const TABS: TabDef[] = [
     icon: Package,
     fields: [
       { key: 'name', label: 'დასახელება', placeholder: 'ღორღი 0–5 მმ', wide: true },
-      { key: 'barCode', label: 'შტრიხკოდი', placeholder: 'CRS-05', mono: true, fixed: { hint: 'RS.ge-ზე პროდუქტი შტრიხკოდით იძებნება, ამიტომ ის არ იცვლება.' } },
-      { key: 'unitId', label: 'საზომი ერთეული', type: 'select', options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })), initial: (d) => String(tonneUnit(d.rs)) },
-      { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა' },
+      {
+        key: 'barCode',
+        label: 'შტრიხკოდი',
+        placeholder: 'CRS-05',
+        mono: true,
+        fixed: { hint: 'RS.ge-ზე პროდუქტი შტრიხკოდით იძებნება, ამიტომ ის არ იცვლება.' },
+        // A saved product's bar code never changes (it is the product on RS.ge).
+        lock: (d, r, isNew) => (isNew ? akcizOfRec(d, r)?.code : undefined),
+      },
+      {
+        key: 'unitId',
+        label: 'საზომი ერთეული',
+        type: 'select',
+        options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })),
+        initial: (d) => String(tonneUnit(d.rs)),
+        lock: (d, r) => {
+          const u = lockedUnit(d, r)
+          return u && String(u.unitId)
+        },
+      },
+      { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა', lock: (d, r) => lockedUnit(d, r)?.unitTxt },
       {
         key: 'aId',
         label: 'აქციზი',
@@ -228,7 +257,12 @@ const TABS: TabDef[] = [
           ...(d.rs.akciz ?? []).map((a) => ({ value: String(a.id), label: `${a.code} · ${a.title}` })),
         ],
         initial: () => '0',
-        hint: 'მხოლოდ აქციზური საქონლისთვის. RS.ge-ზე პროდუქტთან ერთად ინახება.',
+        hint: 'მხოლოდ აქციზური საქონლისთვის. როგორც RS.ge-ზე, შტრიხკოდი და ერთეული აქციზის კოდიდან ივსება და არ იცვლება.',
+        // As on RS.ge's form, the name is filled from the code (and stays editable).
+        fills: (d, v) => {
+          const a = d.rs.akciz?.find((x) => String(x.id) === v)
+          return a ? { name: a.title } : {}
+        },
       },
     ],
     title: (r) => r.name!,
@@ -556,7 +590,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const d = useDb()
   const toast = useToast()
   // Drivers saved before citizenship existed are Georgian citizens.
-  const [r, setR] = useState<Rec>(() => {
+  const [form, setR] = useState<Rec>(() => {
     // The form edits text: numbers (a product's unit) become strings.
     const x = Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typeof v === 'number' ? String(v) : v])) as Rec
     // Fields added later (e.g. a product's VAT type) start at their default on older records.
@@ -566,7 +600,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const liveCarriers = active(d.carriers)
   // Deleted carriers drop out of the list; saving removes them from the operator.
   const [carrierIds, setCarrierIds] = useState<string[]>(() => carrierIdsOf(rec).filter((id) => liveCarriers.some((c) => c.id === id)))
-  const pickCarriers = tab.key === 'users' && r.role === 'operator'
+  const pickCarriers = tab.key === 'users' && form.role === 'operator'
   const pickGoods = tab.key === 'routes'
   const [goods, setGoods] = useState<GoodDraft[]>(() => {
     const stored = (rec as unknown as { goods?: RouteGood[] }).goods ?? []
@@ -575,9 +609,19 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const isNew = !rec.id
+  /** The record as shown and saved: with the values other fields lock. */
+  const view = (x: Rec): Rec => {
+    const out = { ...x }
+    for (const f of tab.fields) {
+      const v = f.lock?.(d, out, isNew)
+      if (v !== undefined) out[f.key] = v
+    }
+    return out
+  }
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
+    const r = view(form)
     const errs: Record<string, string> = {}
     for (const f of tab.fields) {
       if (f.showIf && !f.showIf(r)) continue
@@ -623,15 +667,16 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   /** Sets a field; fields whose options depend on it are picked again. */
   const setField = (key: string, value: string) => {
     setR((x) => {
-      const next: Rec = { ...x, [key]: value }
+      const next: Rec = { ...x, [key]: value, ...tab.fields.find((f) => f.key === key)?.fills?.(d, value) }
       for (const f of tab.fields) if (f.resetOn === key) next[f.key] = f.options!(d, next)[0]?.value ?? ''
       return next
     })
-    setErrors((x) => ({ ...x, [key]: '', ...Object.fromEntries(tab.fields.filter((f) => f.resetOn === key).map((f) => [f.key, ''])) }))
+    setErrors((x) => ({ ...x, [key]: '', ...Object.fromEntries(Object.keys(tab.fields.find((f) => f.key === key)?.fills?.(d, value) ?? {}).map((k) => [k, ''])), ...Object.fromEntries(tab.fields.filter((f) => f.resetOn === key).map((f) => [f.key, ''])) }))
     // A new operator with only one carrier to choose from gets it right away.
     if (key === 'role' && value === 'operator' && !carrierIds.length && liveCarriers.length === 1) setCarrierIds([liveCarriers[0].id])
   }
 
+  const r = view(form)
   const fields = tab.fields.filter((f) => !f.showIf || f.showIf(r))
   const routeStart = tab.key === 'routes' ? d.carriers.find((c) => c.id === r.carrierId)?.startAddress : undefined
 
@@ -655,11 +700,12 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
         {fields.map((f) => {
           const opts = f.type === 'select' ? f.options!(d, r) : []
+          const locked = f.lock?.(d, form, isNew) !== undefined
           return (
             <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : f.fixed && !isNew ? f.fixed.hint : f.hint}>
+              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : locked ? 'აქციზის კოდით არის განსაზღვრული' : f.fixed && !isNew ? f.fixed.hint : f.hint}>
                 {f.type === 'select' ? (
-                  <Select searchable={f.searchable} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
+                  <Select searchable={f.searchable} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length || locked}>
                     {opts.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
@@ -674,7 +720,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                     inputMode={f.key === 'personalId' ? 'numeric' : undefined}
                     className={f.mono ? 'font-mono' : undefined}
                     invalid={!!errors[f.key]}
-                    disabled={!!f.fixed && !isNew}
+                    disabled={(!!f.fixed && !isNew) || locked}
                     onChange={(e) => setField(f.key, e.target.value)}
                   />
                 )}

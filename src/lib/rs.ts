@@ -24,6 +24,16 @@ export const FALLBACK_UNITS = [{ id: RS_UNIT_OTHER, name: 'სხვა' }]
 /** RS.ge's units, always with "other" (99) among them. */
 export const rsUnits = (rs: RsSettings) => (rs.units.some((u) => u.id === RS_UNIT_OTHER) ? rs.units : [...rs.units, ...FALLBACK_UNITS])
 
+/**
+ * The unit an excise code fixes on a goods line, as RS.ge's own form locks it: RS.ge's unit of that
+ * name, else "other" with the excise list's unit name (e.g. ღერი, which RS.ge's unit list doesn't have).
+ */
+export function akcizUnit(rs: RsSettings, a: { unit: string }) {
+  const name = a.unit.trim()
+  const unit = rsUnits(rs).find((u) => u.id !== RS_UNIT_OTHER && u.name.trim() === name)
+  return unit ? { unitId: unit.id, unitTxt: unit.name } : { unitId: RS_UNIT_OTHER, unitTxt: name }
+}
+
 /** A new product's unit: tonnes when RS.ge has such a unit, otherwise "other" (named ტონა). */
 export const tonneUnit = (rs: RsSettings) => rsUnits(rs).find((u) => u.id !== RS_UNIT_OTHER && /^ტონ/.test(u.name))?.id ?? RS_UNIT_OTHER
 

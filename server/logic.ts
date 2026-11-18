@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeText, routeUsable } from '../src/lib/route.ts'
-import { MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
+import { akcizUnit, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, sameIds, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
@@ -278,6 +278,10 @@ function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGoo
     const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
     const kept = aId ? prev?.goods.find((y) => y.id === id && y.aId === aId) : undefined
     if (aId && !akciz && !kept) fail(`„${label}“: აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან`)
+    // As on RS.ge's form, excise goods go under their excise goods code.
+    if (akciz && akciz.code.toLowerCase() !== barCode.toLowerCase()) fail(`„${label}“: აქციზური საქონლის შტრიხკოდი მისი აქციზის კოდია (${akciz.code})`)
+    const fixed = akciz && akcizUnit(rs, akciz)
+    if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== unitTxt))) fail(`„${label}“: აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
     const excise = aId ? { aId, aTitle: akciz ? `${akciz.code} · ${akciz.title}` : (kept!.aTitle ?? String(aId)) } : {}
     return { id, productId: p?.id ?? (keptProduct ? str(x.productId) : ''), name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise }
   })
@@ -445,6 +449,11 @@ async function saveProduct(input: Product, prev: Product | undefined): Promise<P
   }
   // An excise code RS.ge lists (or the one the product already has, if the list isn't loaded).
   if (aId && aId !== (prev?.aId ?? 0) && !rs.akciz?.some((a) => a.id === aId)) fail('აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან')
+  // As on RS.ge's form, an excise code fixes the unit, and a new product's bar code.
+  const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
+  if (akciz && !prev && akciz.code.toLowerCase() !== barCode.toLowerCase()) fail(`აქციზური საქონლის შტრიხკოდი მისი აქციზის კოდია (${akciz.code})`)
+  const fixed = akciz && akcizUnit(rs, akciz)
+  if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== p.unitTxt))) fail(`აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
   if (!p.name) fail('შეიყვანე პროდუქტის დასახელება')
   if (!p.barCode) fail('შეიყვანე შტრიხკოდი')
   // RS.ge knows a product only by its bar code: a new code would be a different product there.

@@ -6,7 +6,7 @@
 import { Plus, Search, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
 import { active, cx, uid } from '../lib/util'
-import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
+import { akcizUnit, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { Database, RouteGood } from '../types'
 
 /** A goods line in the form: every value as typed. */
@@ -56,6 +56,11 @@ export const toDraft = (g: RouteGood): GoodDraft => ({
   aTitle: g.aTitle ?? '',
 })
 
+/** The excise code of an excise line, when RS.ge's list has it: its bar code and unit are locked to it. */
+const akcizOf = (d: Database, g: GoodDraft) => (g.aId ? d.rs.akciz?.find((a) => String(a.id) === g.aId) : undefined)
+
+const strUnit = (u: { unitId: number; unitTxt: string }) => ({ unitId: String(u.unitId), unitTxt: u.unitTxt })
+
 const priceOf = (g: GoodDraft) => g.price.trim().replace(',', '.')
 
 /** Errors by `${key}.${field}`; empty when every line is complete. */
@@ -81,14 +86,15 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
 export function fromDrafts(d: Database, goods: GoodDraft[]) {
   const units = rsUnits(d.rs)
   return goods.map((g) => {
-    const unitId = Number(g.unitId)
+    const a = akcizOf(d, g)
+    const unitId = a ? akcizUnit(d.rs, a).unitId : Number(g.unitId)
     return {
       id: g.id,
       productId: g.productId,
       name: g.name.trim(),
-      barCode: g.barCode.trim(),
+      barCode: (a?.code ?? g.barCode).trim(),
       unitId,
-      unitTxt: unitId === RS_UNIT_OTHER ? g.unitTxt.trim() : (units.find((u) => u.id === unitId)?.name ?? g.unitTxt.trim()),
+      unitTxt: a ? akcizUnit(d.rs, a).unitTxt : unitId === RS_UNIT_OTHER ? g.unitTxt.trim() : (units.find((u) => u.id === unitId)?.name ?? g.unitTxt.trim()),
       price: Number(priceOf(g)),
       vatType: Number(g.vatType),
       aId: Number(g.aId || 0),
@@ -105,17 +111,21 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     onClearError('goods')
   }
   const akciz = d.rs.akciz ?? []
-  /** Marks the line as excise goods. Its code, name and unit fill only the fields still empty. */
+  /**
+   * Marks the line as excise goods, as RS.ge's own form does: the bar code becomes the excise goods
+   * code and the unit the code's unit, both locked; the name is filled from the code (and stays editable).
+   */
   const pickAkciz = (g: GoodDraft, id: string) => {
     const a = akciz.find((x) => String(x.id) === id)
     if (!a) return set(g.key, { aId: '', aTitle: '' })
-    const unit = units.find((u) => u.id !== RS_UNIT_OTHER && u.name.trim() === a.unit.trim())
     set(g.key, {
       aId: id,
       aTitle: '',
-      ...(!g.barCode.trim() && { barCode: a.code }),
-      ...(!g.name.trim() && { name: a.title }),
-      ...(a.unit && !g.name.trim() && !g.barCode.trim() && (unit ? { unitId: String(unit.id) } : { unitId: String(RS_UNIT_OTHER), unitTxt: a.unit })),
+      barCode: a.code,
+      name: a.title,
+      ...strUnit(akcizUnit(d.rs, a)),
+      // Another bar code is another product: the line no longer comes from the list.
+      productId: products.find((x) => x.id === g.productId)?.barCode === a.code ? g.productId : '',
     })
   }
   /** Fills the line from a product of RS.ge's list; every field stays editable. */
@@ -126,11 +136,11 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     const listed = units.some((u) => u.id === p.unitId)
     const a = p.aId ? akciz.find((x) => x.id === p.aId) : undefined
     set(key, {
-      productId: p.id,
-      barCode: p.barCode,
+      productId: a && a.code !== p.barCode ? '' : p.id,
+      // An excise product goes on the waybill under its excise goods code, as on RS.ge's form.
+      barCode: a ? a.code : p.barCode,
       name: p.name,
-      unitId: String(listed ? p.unitId : RS_UNIT_OTHER),
-      unitTxt: p.unitTxt,
+      ...(a ? strUnit(akcizUnit(d.rs, a)) : { unitId: String(listed ? p.unitId : RS_UNIT_OTHER), unitTxt: p.unitTxt }),
       aId: p.aId ? String(p.aId) : '',
       aTitle: p.aId ? (a ? `${a.code} · ${a.title}` : String(p.aId)) : '',
       // RS.ge's products have no price or VAT type: what is typed on the line stays.
@@ -146,7 +156,12 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
       <div className="space-y-2">
         {goods.map((g, i) => {
           const err = (f: keyof GoodDraft) => errors[`${g.key}.${f}`]
-          const other = Number(g.unitId) === RS_UNIT_OTHER
+          // Excise goods go under their excise goods code and unit, locked as on RS.ge's form.
+          const exc = akcizOf(d, g)
+          const locked = exc?.code
+          const lockedUnit = exc && akcizUnit(d.rs, exc)
+          const unitId = lockedUnit ? String(lockedUnit.unitId) : g.unitId
+          const other = Number(unitId) === RS_UNIT_OTHER
           // A product whose bar code is already on another line can't be picked again.
           const taken = new Set(goods.filter((x) => x.key !== g.key).map((x) => x.barCode.trim().toLowerCase()))
           return (
@@ -177,10 +192,12 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                   </Field>
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Field label="შტრიხკოდი" error={err('barCode')}>
+                  <Field label={locked ? 'შტრიხკოდი (აქციზის კოდი)' : 'შტრიხკოდი'} error={err('barCode')}>
                     <Input
-                      value={g.barCode}
-                      className="font-mono"
+                      value={locked ?? g.barCode}
+                      readOnly={locked != null}
+                      title={locked != null ? 'აქციზური საქონლის კოდი — იცვლება აქციზის არჩევით' : undefined}
+                      className={cx('font-mono', locked != null && 'bg-slate-50 text-slate-500')}
                       invalid={!!err('barCode')}
                       // Another bar code is another product: the line no longer comes from the list.
                       onChange={(e) => set(g.key, { barCode: e.target.value, productId: products.find((x) => x.id === g.productId)?.barCode === e.target.value.trim() ? g.productId : '' })}
@@ -189,7 +206,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                 </div>
                 <div className={cx(other ? 'col-span-1' : 'col-span-2')}>
                   <Field label="საზომი ერთეული">
-                    <Select searchable={units.length > 8} value={g.unitId} onChange={(e) => set(g.key, { unitId: e.target.value })}>
+                    <Select searchable={units.length > 8} value={unitId} disabled={!!lockedUnit} title={lockedUnit ? 'აქციზური საქონლის ერთეული — იცვლება აქციზის არჩევით' : undefined} onChange={(e) => set(g.key, { unitId: e.target.value })}>
                       {units.map((u) => (
                         <option key={u.id} value={String(u.id)}>
                           {u.name}
@@ -201,7 +218,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                 {other && (
                   <div className="col-span-1">
                     <Field label="ერთეულის სახელი" error={err('unitTxt')}>
-                      <Input value={g.unitTxt} placeholder="ტონა" invalid={!!err('unitTxt')} onChange={(e) => set(g.key, { unitTxt: e.target.value })} />
+                      <Input value={lockedUnit?.unitTxt ?? g.unitTxt} readOnly={!!lockedUnit} className={cx(lockedUnit && 'bg-slate-50 text-slate-500')} placeholder="ტონა" invalid={!!err('unitTxt')} onChange={(e) => set(g.key, { unitTxt: e.target.value })} />
                     </Field>
                   </div>
                 )}
