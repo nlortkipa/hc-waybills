@@ -69,7 +69,8 @@ export interface ShipmentWaybill {
 /**
  * One goods line of a route, set up by the admin: bar code, name and unit typed in or filled from the
  * RS.ge product list (and then still editable; nothing is added to RS.ge's list), plus what RS.ge needs
- * besides the quantity, which the operator types on each shipment. Sent exactly as written here.
+ * besides the quantity, which the operator types on each shipment (prefilled from the line's own
+ * quantity, when set). Sent exactly as written here.
  */
 export interface RouteGood {
   id: string
@@ -90,6 +91,8 @@ export interface RouteGood {
   aId?: number
   /** The excise code as shown, e.g. "2207 · ეთილის სპირტი(2207)_ლიტრი _ (2.6)". */
   aTitle?: string
+  /** Quantity prefilled on this line of a new shipment (the operator can change it); 0 or missing = none. */
+  quantity?: number
 }
 
 export interface Driver extends SoftDeletable {
@@ -361,9 +364,6 @@ export interface RsSettings {
   tranCostPayer: 1 | 2
   /** TRANSPORT_COAST (sic): transport cost, GEL. */
   transportCost: number
-
-  /** Quantity prefilled on each goods line of a new shipment (the operator can change it); 0 = none. */
-  quantity: number
 
   receptionInfo: string
   receiverInfo: string

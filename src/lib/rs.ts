@@ -64,7 +64,6 @@ export function defaultRsSettings(): RsSettings {
     transTxt: '',
     tranCostPayer: 2,
     transportCost: 0,
-    quantity: 0,
     receptionInfo: '',
     receiverInfo: '',
     comment: '',

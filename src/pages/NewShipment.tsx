@@ -155,12 +155,12 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   // The route's goods lines (set by the admin in ცნობარები → მარშრუტები): the operator types each
   // quantity and drops the lines this truck doesn't carry. Another route starts over.
   const routeGoods = route?.goods ?? []
-  const defaultQty = d.rs.quantity > 0 ? String(d.rs.quantity) : ''
   type Entry = { routeId: string; qty: Record<string, string>; ext: Record<string, string>; removed: string[] }
   const [entry, setEntry] = useState<Entry>({ routeId: seed?.routeId ?? '', qty: seed?.qty ?? {}, ext: seed?.ext ?? {}, removed: seed?.removed ?? [] })
   const cur: Entry = entry.routeId === (route?.id ?? '') ? entry : { routeId: route?.id ?? '', qty: {}, ext: {}, removed: [] }
   const update = (patch: Partial<Entry>) => setEntry({ ...cur, ...patch })
-  const qtyOf = (lineId: string) => cur.qty[lineId] ?? defaultQty
+  // A line's own quantity, if the admin set one, is prefilled.
+  const qtyOf = (lineId: string) => cur.qty[lineId] ?? (routeGoods.find((g) => g.id === lineId)?.quantity || '').toString()
   const shown = routeGoods.filter((g) => !cur.removed.includes(g.id))
   const hidden = routeGoods.filter((g) => cur.removed.includes(g.id))
 

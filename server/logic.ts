@@ -270,6 +270,9 @@ function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGoo
     if (!(price >= 0)) fail(`„${label}“: შეიყვანე ფასი (0 ან მეტი)`)
     const vatType = ([0, 1, 2] as const).find((v) => v === Number(x?.vatType))
     if (vatType == null) fail(`„${label}“: აირჩიე დაბეგვრის ტიპი`)
+    // Optional: prefilled on new shipments.
+    const quantity = x?.quantity === '' || x?.quantity == null ? 0 : Number(x.quantity)
+    if (!(quantity >= 0)) fail(`„${label}“: რაოდენობა უნდა იყოს 0 ან მეტი`)
     // The RS.ge product it was filled from, while the bar code is still that product's.
     const p = str(x?.productId) ? products.find((y) => y.id === str(x.productId) && y.barCode.toLowerCase() === barCode.toLowerCase()) : undefined
     const keptProduct = !p && str(x?.productId) && prev?.goods.some((y) => y.id === id && y.productId === str(x.productId) && y.barCode === barCode)
@@ -283,7 +286,7 @@ function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGoo
     const fixed = akciz && akcizUnit(rs, akciz)
     if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== unitTxt))) fail(`„${label}“: აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
     const excise = aId ? { aId, aTitle: akciz ? `${akciz.code} · ${akciz.title}` : (kept!.aTitle ?? String(aId)) } : {}
-    return { id, productId: p?.id ?? (keptProduct ? str(x.productId) : ''), name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise }
+    return { id, productId: p?.id ?? (keptProduct ? str(x.productId) : ''), name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise, ...(quantity > 0 && { quantity: Math.round(quantity * 1000) / 1000 }) }
   })
 }
 
@@ -597,17 +600,15 @@ export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
     transTxt: str(v.transTxt),
     tranCostPayer: Number(v.tranCostPayer) === 1 ? 1 : 2,
     transportCost: num(v.transportCost),
-    quantity: num(v.quantity),
     receptionInfo: str(v.receptionInfo),
     receiverInfo: str(v.receiverInfo),
     comment: str(v.comment),
   }
-  // Left over from before v19 (unit) and v23 (price, VAT type): now set on each route's goods lines.
-  // RS.ge's fields (seller, lists, read times) are dropped when stored.
-  for (const k of ['unitId', 'unitTxt', 'price', 'vatType']) delete (next as unknown as Record<string, unknown>)[k]
+  // Left over from before v19 (unit), v23 (price, VAT type) and v25 (quantity): now set on each route's
+  // goods lines. RS.ge's fields (seller, lists, read times) are dropped when stored.
+  for (const k of ['unitId', 'unitTxt', 'price', 'vatType', 'quantity']) delete (next as unknown as Record<string, unknown>)[k]
   if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   if (next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
-  if (next.quantity < 0) fail('რაოდენობა არ შეიძლება იყოს უარყოფითი')
   if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
   db.set('rs', next)
 }

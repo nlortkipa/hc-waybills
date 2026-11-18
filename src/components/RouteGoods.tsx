@@ -1,7 +1,8 @@
 /*
  * The goods lines of a route, as the admin sets them up: bar code, name and unit typed in (or filled
  * from the RS.ge product list with the search button, and then still editable; nothing is added to
- * RS.ge's list), plus the price and VAT type. The operator types only the quantities on each shipment.
+ * RS.ge's list), plus the price, VAT type and an optional quantity prefilled on new shipments. The
+ * operator types only the quantities on each shipment.
  */
 import { Plus, Search, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
@@ -26,6 +27,8 @@ export interface GoodDraft {
   /** Excise code id; '' = not excise goods. aTitle shows a stored code RS.ge's list doesn't have (yet). */
   aId: string
   aTitle: string
+  /** Prefilled on new shipments; '' = none. */
+  quantity: string
 }
 
 export const blankGood = (d: Database): GoodDraft => ({
@@ -40,6 +43,7 @@ export const blankGood = (d: Database): GoodDraft => ({
   vatType: '0',
   aId: '',
   aTitle: '',
+  quantity: '',
 })
 
 export const toDraft = (g: RouteGood): GoodDraft => ({
@@ -54,6 +58,7 @@ export const toDraft = (g: RouteGood): GoodDraft => ({
   vatType: String(g.vatType),
   aId: g.aId ? String(g.aId) : '',
   aTitle: g.aTitle ?? '',
+  quantity: g.quantity ? String(g.quantity) : '',
 })
 
 /** The excise code of an excise line, when RS.ge's list has it: its bar code and unit are locked to it. */
@@ -62,6 +67,7 @@ const akcizOf = (d: Database, g: GoodDraft) => (g.aId ? d.rs.akciz?.find((a) => 
 const strUnit = (u: { unitId: number; unitTxt: string }) => ({ unitId: String(u.unitId), unitTxt: u.unitTxt })
 
 const priceOf = (g: GoodDraft) => g.price.trim().replace(',', '.')
+const qtyOf = (g: GoodDraft) => g.quantity.trim().replace(',', '.')
 
 /** Errors by `${key}.${field}`; empty when every line is complete. */
 export function checkGoods(goods: GoodDraft[]): Record<string, string> {
@@ -77,6 +83,7 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
     if (!g.name.trim()) e[at('name')] = 'სავალდებულო ველი'
     if (Number(g.unitId) === RS_UNIT_OTHER && !g.unitTxt.trim()) e[at('unitTxt')] = 'სავალდებულო ველი'
     if (!priceOf(g) || !(Number(priceOf(g)) >= 0)) e[at('price')] = 'შეიყვანე 0 ან მეტი'
+    if (qtyOf(g) && !(Number(qtyOf(g)) >= 0)) e[at('quantity')] = 'შეიყვანე 0 ან მეტი'
   }
   if (!goods.length) e.goods = 'დაამატე მინიმუმ ერთი პროდუქტი'
   return e
@@ -98,6 +105,7 @@ export function fromDrafts(d: Database, goods: GoodDraft[]) {
       price: Number(priceOf(g)),
       vatType: Number(g.vatType),
       aId: Number(g.aId || 0),
+      quantity: Number(qtyOf(g) || 0),
     }
   })
 }
@@ -151,7 +159,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     <div className="sm:col-span-2">
       <p className="mb-1.5 text-sm font-medium text-slate-700">პროდუქტები</p>
       <p className="mb-2 text-xs text-slate-500">
-        თითოეული ზედნადებზე ცალკე სტრიქონად წავა. ჩაწერე ხელით ან <Search className="inline size-3.5 align-[-2px]" /> ღილაკით შეავსე პროდუქტების ცნობარიდან (კოდი, დასახელება, ერთეული, ფასი, დაბეგვრა, აქციზი) — შემდეგ ყველაფერი შეიძლება შეიცვალოს. ოპერატორი რეისზე მხოლოდ რაოდენობას წერს.
+        თითოეული ზედნადებზე ცალკე სტრიქონად წავა. ჩაწერე ხელით ან <Search className="inline size-3.5 align-[-2px]" /> ღილაკით შეავსე პროდუქტების ცნობარიდან (კოდი, დასახელება, ერთეული, ფასი, დაბეგვრა, აქციზი) — შემდეგ ყველაფერი შეიძლება შეიცვალოს. ოპერატორი რეისზე მხოლოდ რაოდენობას წერს; აქ მითითებული რაოდენობა (არასავალდებულო) ახალ რეისზე წინასწარ ჩაეწერება.
       </p>
       <div className="space-y-2">
         {goods.map((g, i) => {
@@ -204,7 +212,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                     />
                   </Field>
                 </div>
-                <div className={cx(other ? 'col-span-1' : 'col-span-2')}>
+                <div className="col-span-1">
                   <Field label="საზომი ერთეული">
                     <Select searchable={units.length > 8} value={unitId} disabled={!!lockedUnit} title={lockedUnit ? 'აქციზური საქონლის ერთეული — იცვლება აქციზის არჩევით' : undefined} onChange={(e) => set(g.key, { unitId: e.target.value })}>
                       {units.map((u) => (
@@ -236,6 +244,11 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                         </option>
                       ))}
                     </Select>
+                  </Field>
+                </div>
+                <div className="col-span-1">
+                  <Field label="რაოდენობა" error={err('quantity')}>
+                    <Input type="text" inputMode="decimal" value={g.quantity} placeholder="—" title="ახალ რეისზე წინასწარ ჩაეწერება; ოპერატორს შეუძლია შეცვალოს" invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value })} />
                   </Field>
                 </div>
                 {(akciz.length > 0 || g.aId) && (

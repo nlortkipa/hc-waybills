@@ -10,10 +10,9 @@ import { active, formatDateTime } from '../lib/util'
 import type { RsSettings } from '../types'
 import { LookupLine, TIN_RE, useTinName } from '../components/TinLookup'
 
-type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
+type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
 
 const toForm = (rs: RsSettings): Form => ({
-  quantity: rs.quantity ? String(rs.quantity) : '',
   buyerTin: rs.buyerTin,
   // Only a name RS.ge doesn't have is the admin's; RS.ge's own is shown from the lookup.
   buyerName: rs.buyerForeign ? rs.buyerName : '',
@@ -277,7 +276,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
       else if (buyer.state === 'error') e.buyerTin = buyer.message
       else if (buyer.state === 'missing' && !f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
     }
-    if (f.quantity !== '' && !(Number(f.quantity) >= 0)) e.quantity = 'შეიყვანე 0 ან მეტი'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
     if (Number(f.transId) === RS_TRANS_OTHER && !f.transTxt.trim()) e.transTxt = 'სავალდებულო ველი'
@@ -298,7 +296,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
-        quantity: Number(f.quantity || 0),
       })
       toast('success', 'პარამეტრები შენახულია')
     } catch (err) {
@@ -384,12 +381,6 @@ function DefaultsForm({ connected }: { connected: boolean }) {
             </Field>
             {!errors.transporterTin && <LookupLine lookup={transporter} />}
           </div>
-        </Section>
-
-        <Section title="რაოდენობა" text="პროდუქტები, მათი ფასი და დაბეგვრის ტიპი თითოეულ მარშრუტზე ცალკე მიეთითება (ცნობარები → მარშრუტები). რაოდენობას ოპერატორი რეისზე წერს.">
-          <Field label="რაოდენობა ნაგულისხმევად (არასავალდებულო)" error={errors.quantity} hint="ახალ რეისზე თითოეულ პროდუქტს ეს რაოდენობა ჩაეწერება; ოპერატორს შეუძლია შეცვალოს.">
-            <Input type="number" inputMode="decimal" step="0.1" min="0" value={f.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
-          </Field>
         </Section>
 
         <Section icon={<FileText className="size-4" />} title="დამატებითი ინფორმაცია" text="არასავალდებულო. მისაბმელის ნომერი კომენტარს ავტომატურად ემატება.">

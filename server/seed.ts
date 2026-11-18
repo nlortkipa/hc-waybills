@@ -2,7 +2,7 @@ import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 24
+export const DB_VERSION = 25
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -148,7 +148,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
       ...rest,
       version: 19,
       products,
-      rs: { ...rs, quantity: cargo?.quantity ?? 0 },
+      rs: { ...rs, quantity: cargo?.quantity ?? 0 } as RsSettings,
       shipments: (d.shipments as unknown as V21Shipment[]).map((s) => ({ ...s, productId: p && s.cargo.description === p.name && s.cargo.code === p.barCode ? p.id : '' })) as unknown as Shipment[],
     }
   }
@@ -206,6 +206,13 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     const routes = d.routes.map((r) => ({ ...r, goods: r.goods.map(product) }))
     const shipments = d.shipments.map((s) => storedShipment({ ...s, items: (s.items ?? []).map(product) }))
     d = { ...d, version: 24, routes, shipments }
+  }
+  // v24 → v25: the quantity prefilled on new shipments is set per goods line of a route, not once in
+  // the settings. Every line takes the settings' old value.
+  if (d.version === 24) {
+    const { quantity = 0, ...rs } = d.rs as RsSettings & { quantity?: number }
+    const routes = d.routes.map((r) => ({ ...r, goods: r.goods.map((g) => (quantity > 0 ? { ...g, quantity } : g)) }))
+    d = { ...d, version: 25, rs, routes }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d
