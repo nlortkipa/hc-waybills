@@ -4,11 +4,11 @@ import { rsSettings } from '../api'
 import { useDb } from '../api/store'
 import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { isInternal, RS_TRANS_OTHER, RS_VAT_TYPES, rsMissing } from '../lib/rs'
+import { isInternal, RS_TRANS_OTHER, rsMissing } from '../lib/rs'
 import { active, formatDateTime } from '../lib/util'
 import type { RsSettings } from '../types'
 
-type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'price' | 'vatType' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
+type Form = Record<'buyerTin' | 'buyerName' | 'transporterTin' | 'transId' | 'transTxt' | 'tranCostPayer' | 'transportCost' | 'quantity' | 'receptionInfo' | 'receiverInfo' | 'comment', string>
 
 const toForm = (rs: RsSettings): Form => ({
   quantity: rs.quantity ? String(rs.quantity) : '',
@@ -20,8 +20,6 @@ const toForm = (rs: RsSettings): Form => ({
   transTxt: rs.transTxt,
   tranCostPayer: String(rs.tranCostPayer),
   transportCost: String(rs.transportCost),
-  price: String(rs.price),
-  vatType: String(rs.vatType),
   receptionInfo: rs.receptionInfo,
   receiverInfo: rs.receiverInfo,
   comment: rs.comment,
@@ -329,11 +327,10 @@ function DefaultsForm({ connected }: { connected: boolean }) {
       else if (buyer.state === 'error') e.buyerTin = buyer.message
       else if (buyer.state === 'missing' && !f.buyerName.trim()) e.buyerName = 'სავალდებულო ველი'
     }
-    if (!(Number(f.quantity) > 0)) e.quantity = 'შეიყვანე 0-ზე მეტი რაოდენობა'
+    if (f.quantity !== '' && !(Number(f.quantity) >= 0)) e.quantity = 'შეიყვანე 0 ან მეტი'
     if (f.transporterTin.trim() && !TIN_RE.test(f.transporterTin.trim())) e.transporterTin = '9 ან 11 ციფრი'
     else if (transporter.state === 'error') e.transporterTin = transporter.message
     if (Number(f.transId) === RS_TRANS_OTHER && !f.transTxt.trim()) e.transTxt = 'სავალდებულო ველი'
-    if (f.price === '' || !(Number(f.price) >= 0)) e.price = 'შეიყვანე 0 ან მეტი'
     if (f.transportCost !== '' && !(Number(f.transportCost) >= 0)) e.transportCost = 'შეიყვანე 0 ან მეტი'
     setErrors(e)
     return !Object.keys(e).length
@@ -351,9 +348,7 @@ function DefaultsForm({ connected }: { connected: boolean }) {
         transId: Number(f.transId),
         tranCostPayer: Number(f.tranCostPayer) as 1 | 2,
         transportCost: Number(f.transportCost || 0),
-        quantity: Number(f.quantity),
-        price: Number(f.price),
-        vatType: Number(f.vatType) as 0 | 1 | 2,
+        quantity: Number(f.quantity || 0),
       })
       toast('success', 'პარამეტრები შენახულია')
     } catch (err) {
@@ -441,22 +436,9 @@ function DefaultsForm({ connected }: { connected: boolean }) {
           </div>
         </Section>
 
-        <Section title="რაოდენობა და ფასი" text="ერთნაირია ყველა ახალ რეისზე — ოპერატორი მხოლოდ პროდუქტს ირჩევს. პროდუქტები და მათი საზომი ერთეული — ცნობარებში.">
-          <Field label="დეკლარირებული რაოდენობა (ტ)" error={errors.quantity}>
+        <Section title="რაოდენობა" text="პროდუქტები, მათი ფასი და დაბეგვრის ტიპი თითოეულ მარშრუტზე ცალკე მიეთითება (ცნობარები → მარშრუტები). რაოდენობას ოპერატორი რეისზე წერს.">
+          <Field label="რაოდენობა ნაგულისხმევად (არასავალდებულო)" error={errors.quantity} hint="ახალ რეისზე თითოეულ პროდუქტს ეს რაოდენობა ჩაეწერება; ოპერატორს შეუძლია შეცვალოს.">
             <Input type="number" inputMode="decimal" step="0.1" min="0" value={f.quantity} invalid={!!errors.quantity} onChange={set('quantity')} />
-          </Field>
-          <div className="hidden sm:block" />
-          <Field label="ერთეულის ფასი (₾)" error={errors.price} hint={Number(f.price) >= 0 && Number(f.quantity) > 0 ? `ჯამი რეისზე: ${(Number(f.price) * Number(f.quantity)).toFixed(2)} ₾` : undefined}>
-            <Input type="number" inputMode="decimal" min="0" step="0.01" value={f.price} invalid={!!errors.price} onChange={set('price')} />
-          </Field>
-          <Field label="დაბეგვრის ტიპი">
-            <Select value={f.vatType} onChange={set('vatType')}>
-              {RS_VAT_TYPES.map((v) => (
-                <option key={v.value} value={String(v.value)}>
-                  {v.label}
-                </option>
-              ))}
-            </Select>
           </Field>
         </Section>
 

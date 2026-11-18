@@ -3,7 +3,7 @@
  * and enforces the rules; reads come from the synced copy in ./store.
  */
 import { canUseCarrier } from '../lib/route'
-import { active } from '../lib/util'
+import { active, shipmentUses } from '../lib/util'
 import type { Carrier, Database, RsSettings, Shipment, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
@@ -53,8 +53,7 @@ export const refs = {
 
   /** Number of shipments that reference the record (they keep showing it after deletion). */
   shipmentCount(col: RefCollection, id: string): number {
-    const k = ({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', products: 'productId', users: 'createdBy' } as const)[col]
-    return db.get().shipments.filter((s) => s[k] === id).length
+    return db.get().shipments.filter((s) => shipmentUses(s, col, id)).length
   },
 
   /** Returns why a record cannot be deleted, or null if it can. The server checks the same rules. */
@@ -152,11 +151,15 @@ export function visibleShipments(d: Database, user: User): Shipment[] {
   return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
+/** A goods line: one of the route's lines and the quantity the truck carries. */
+export type NewShipmentItem = { lineId: string; quantity: number; quantityExt?: number }
+
 export interface NewShipmentInput {
   carrierId: string
   routeId: string
   driverId: string
   truckId: string
+  items: NewShipmentItem[]
 }
 
 export const shipments = {

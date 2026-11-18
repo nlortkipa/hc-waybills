@@ -28,7 +28,8 @@ import { inputCls, invalidCls } from './fieldStyles'
 /* --------------------------- Popover plumbing --------------------------- */
 
 /** Fixed-position placement under (or, if cramped, above) the anchor. */
-function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null>, panel: RefObject<HTMLElement | null>, matchWidth: boolean) {
+/** `content`: re-placed when it changes (e.g. a search filtering the list), so the panel stays against the anchor. */
+function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null>, panel: RefObject<HTMLElement | null>, matchWidth: boolean, content?: unknown) {
   const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, visibility: 'hidden' })
 
   useLayoutEffect(() => {
@@ -65,7 +66,7 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, anchor, panel, matchWidth])
+  }, [open, anchor, panel, matchWidth, content])
 
   return style
 }
@@ -91,7 +92,8 @@ function useDismiss(open: boolean, refs: RefObject<HTMLElement | null>[], onDism
   }, [open])
 }
 
-const panelCls = 'menu-material animate-menu-in fixed z-[70] overflow-y-auto overscroll-contain rounded-[10px] outline-none'
+const panelBase = 'menu-material animate-menu-in fixed z-[70] rounded-[10px] outline-none'
+const panelCls = `${panelBase} overflow-y-auto overscroll-contain`
 
 /* -------------------------------- Select -------------------------------- */
 
@@ -131,12 +133,20 @@ export type SelectProps = {
   className?: string
   id?: string
   'aria-label'?: string
+  /** Long lists: the open menu starts with a search field that filters the options by their text. */
+  searchable?: boolean
+  /** Shows only this icon as a small square button (e.g. a lookup next to a field) instead of the field-like button. */
+  icon?: ReactNode
+  title?: string
 }
 
-export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel }: SelectProps) {
-  const opts = collectOptions(children)
+export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title }: SelectProps) {
+  const all = collectOptions(children)
+  const [query, setQuery] = useState('')
+  const q = searchable ? query.trim().toLowerCase() : ''
+  const opts = q ? all.filter((o) => o.text.toLowerCase().includes(q)) : all
   const cur = value == null ? '' : String(value)
-  const selected = opts.find((o) => o.value === cur)
+  const selected = all.find((o) => o.value === cur)
 
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
@@ -145,17 +155,20 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
   const panel = useRef<HTMLDivElement>(null)
   const listId = useId()
   const typed = useRef({ buf: '', t: 0 })
-  const style = useAnchoredPosition(open, btn, panel, true)
+  const style = useAnchoredPosition(open, btn, panel, !icon, query)
 
   const close = () => {
     setOpen(false)
     setFlash(null)
+    // Focus moved into the search field while open: give it back to the button.
+    if (searchable && panel.current?.contains(document.activeElement)) btn.current?.focus()
   }
   useDismiss(open, [btn, panel], close)
 
   const show = () => {
     if (disabled) return
-    setActive(opts.findIndex((o) => o.value === cur && !o.disabled))
+    setQuery('')
+    setActive(all.findIndex((o) => o.value === cur && !o.disabled))
     setOpen(true)
   }
 
@@ -200,6 +213,8 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
       if (active >= 0) choose(opts[active])
       return
     }
+    // In the search field, letters are typed into it.
+    if (searchable) return
     if (key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       handled()
       const now = Date.now()
@@ -225,14 +240,23 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
         aria-controls={open ? listId : undefined}
         aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
         disabled={disabled}
+        title={title}
         onClick={() => (open ? close() : show())}
         onKeyDown={onKeyDown}
-        className={cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', open && 'ring-2 ring-brand-500/50', invalid && invalidCls, className)}
+        className={
+          icon
+            ? cx('grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-40', open && 'bg-brand-50 text-brand-600', className)
+            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', open && 'ring-2 ring-brand-500/50', invalid && invalidCls, className)
+        }
       >
-        <span className={cx('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>{selected ? selected.label : placeholder}</span>
-        <span className="grid size-[22px] shrink-0 place-items-center rounded-[6px] bg-brand-500 text-white shadow-[0_0.5px_1px_rgba(0,0,0,0.2),inset_0_0.5px_0_rgba(255,255,255,0.25)]">
-          <ChevronsUpDown className="size-3.5" strokeWidth={2.5} />
-        </span>
+        {icon ?? (
+          <>
+            <span className={cx('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>{selected ? selected.label : placeholder}</span>
+            <span className="grid size-[22px] shrink-0 place-items-center rounded-[6px] bg-brand-500 text-white shadow-[0_0.5px_1px_rgba(0,0,0,0.2),inset_0_0.5px_0_rgba(255,255,255,0.25)]">
+              <ChevronsUpDown className="size-3.5" strokeWidth={2.5} />
+            </span>
+          </>
+        )}
       </button>
 
       {open &&
@@ -242,35 +266,53 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
             id={listId}
             role="listbox"
             style={style}
-            className={cx(panelCls, 'p-[5px]')}
-            onMouseDown={(e) => e.preventDefault()}
+            // With a search field the panel doesn't scroll: the field stays on top and only the options scroll.
+            // A small icon button doesn't set the menu's width: it gets a usable one of its own.
+            className={cx(searchable ? `${panelBase} flex flex-col overflow-hidden` : panelCls, 'p-[5px]', !!icon && 'w-[22rem]')}
+            onMouseDown={(e) => (e.target as HTMLElement).tagName !== 'INPUT' && e.preventDefault()}
             onMouseLeave={() => flash == null && setActive(-1)}
           >
-            {opts.length === 0 && <div className="px-3 py-1.5 text-[15px] text-slate-400 sm:text-[13px]">ვარიანტები არ არის</div>}
-            {opts.map((o, i) => {
-              const on = o.value === cur
-              const hi = !o.disabled && (flash != null ? flash === o.value : i === active)
-              return (
-                <div
-                  key={o.value + ':' + i}
-                  id={`${listId}-${i}`}
-                  data-i={i}
-                  role="option"
-                  aria-selected={on}
-                  aria-disabled={o.disabled || undefined}
-                  onMouseMove={() => !o.disabled && flash == null && active !== i && setActive(i)}
-                  onClick={() => choose(o)}
-                  className={cx(
-                    'flex min-h-9 cursor-default items-center gap-1 rounded-[5px] py-1.5 pr-3 pl-1 text-[15px] leading-snug select-none sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
-                    o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
-                    flash === o.value && 'animate-menu-blink',
-                  )}
-                >
-                  <Check className={cx('size-3.5 shrink-0', !on && 'invisible')} strokeWidth={3} />
-                  <span className="min-w-0 [overflow-wrap:anywhere] sm:truncate">{o.label}</span>
-                </div>
-              )
-            })}
+            {searchable && (
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setActive(e.target.value.trim() ? 0 : -1)
+                }}
+                onKeyDown={onKeyDown}
+                placeholder="ძებნა…"
+                aria-label="ძებნა"
+                className="mb-1 h-9 w-full shrink-0 rounded-[6px] bg-fill px-2.5 text-[15px] text-slate-900 outline-none placeholder:text-slate-400 sm:h-7 sm:text-[13px]"
+              />
+            )}
+            <div className={searchable ? 'min-h-0 flex-1 overflow-y-auto overscroll-contain' : 'contents'}>
+              {opts.length === 0 && <div className="px-3 py-1.5 text-[15px] text-slate-400 sm:text-[13px]">{q ? 'ვერაფერი მოიძებნა' : 'ვარიანტები არ არის'}</div>}
+              {opts.map((o, i) => {
+                const on = o.value === cur
+                const hi = !o.disabled && (flash != null ? flash === o.value : i === active)
+                return (
+                  <div
+                    key={o.value + ':' + i}
+                    id={`${listId}-${i}`}
+                    data-i={i}
+                    role="option"
+                    aria-selected={on}
+                    aria-disabled={o.disabled || undefined}
+                    onMouseMove={() => !o.disabled && flash == null && active !== i && setActive(i)}
+                    onClick={() => choose(o)}
+                    className={cx(
+                      'flex min-h-9 cursor-default items-center gap-1 rounded-[5px] py-1.5 pr-3 pl-1 text-[15px] leading-snug select-none sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
+                      o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
+                      flash === o.value && 'animate-menu-blink',
+                    )}
+                  >
+                    <Check className={cx('size-3.5 shrink-0', !on && 'invisible')} strokeWidth={3} />
+                    <span className="min-w-0 [overflow-wrap:anywhere] sm:truncate">{o.label}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>,
           document.body,
         )}

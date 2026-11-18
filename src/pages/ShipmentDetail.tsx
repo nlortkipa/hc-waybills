@@ -5,7 +5,7 @@ import { shipments } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, StatusBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
-import { cx, formatDateTime, formatTonnes } from '../lib/util'
+import { cx, formatDateTime, formatNumber } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { plateKey, RS_STATUS } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
@@ -72,8 +72,12 @@ export function ShipmentDetail() {
   const canCancel = onRs && s.waybillState !== 'cancelled'
   const w = s.rsWaybill
   const good = w?.goods[0]
+  const sentAmount = w ? w.goods.reduce((a, g) => a + g.amount, 0) : 0
   const r = s.rsRemote
   const rGood = r?.goods[0]
+  // The quantity's unit, when every goods line has the same one.
+  const rUnit = r && new Set(r.goods.map((g) => g.unitTxt)).size === 1 ? rGood?.unitTxt : undefined
+  const qtyText = (n: number, unit?: string) => `${formatNumber(n, 3)}${unit ? ` ${unit}` : ''}`
   const rStatus = r && (RS_STATUS[r.status] ?? { label: String(r.status), tone: 'gray' as const })
   // 'ok' only means smsoffice.ge accepted it; delivery says whether the phone got it.
   const smsLost = s.sms.status === 'ok' && (s.sms.delivery === 'Undelivered' || s.sms.delivery === 'Expired')
@@ -210,8 +214,15 @@ export function ShipmentDetail() {
               <Info k="მანქანა" v={truck?.model} />
               <Info k="სახელმწიფო ნომერი" v={truck?.plateNumber} mono />
               <Info k="მისაბმელი" v={truck?.trailerNumber || undefined} mono />
-              <Info k="ტვირთი" v={s.cargo.description ? `${s.cargo.description}${s.cargo.code ? ` (${s.cargo.code})` : ''}` : undefined} />
-              <Info k="დეკლარირებული" v={formatTonnes(s.quantity)} />
+              {s.items.map((i, k) => (
+                <Info
+                  key={k}
+                  k={i.name || 'პროდუქტი'}
+                  sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
+                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
+                />
+              ))}
+              {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}
             </dl>
           </Card>
 
@@ -242,9 +253,10 @@ export function ShipmentDetail() {
                   <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
                   <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
                   <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
-                  <Info k="რაოდენობა" v={`${r.quantity}${rGood?.unitTxt ? ` ${rGood.unitTxt}` : ''}`} changed={r.quantity !== s.quantity} />
-                  {rGood && <Info k="ფასი" v={`${rGood.price.toFixed(2)} ₾`} />}
-                  <Info k="თანხა" v={`${r.fullAmount.toFixed(2)} ₾`} changed={!!w && Math.abs(r.fullAmount - w.goods.reduce((a, g) => a + g.amount, 0)) >= 0.005} />
+                  {r.goods.length > 1 && r.goods.map((g, k) => <Info key={k} k={g.name || 'პროდუქტი'} sub={g.barCode} v={qtyText(g.quantity, g.unitTxt)} />)}
+                  <Info k={r.goods.length > 1 ? 'სულ' : 'რაოდენობა'} v={qtyText(r.quantity, rUnit)} changed={r.quantity !== s.quantity} />
+                  {rGood && r.goods.length === 1 && <Info k="ფასი" v={`${rGood.price.toFixed(2)} ₾`} />}
+                  <Info k="თანხა" v={`${r.fullAmount.toFixed(2)} ₾`} changed={!!w && Math.abs(r.fullAmount - sentAmount) >= 0.005} />
                   {r.activatedAt && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
                   {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
                   {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
@@ -258,9 +270,7 @@ export function ShipmentDetail() {
                     <Info k="მყიდველი" v={w.buyerName} />
                     <Info k="მყიდველის ს/ნ" v={w.buyerTin} mono />
                     {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
-                    <Info k="ერთეული" v={good && (good.unitTxt || String(good.unitId))} />
-                    <Info k="ფასი" v={good && `${good.price.toFixed(2)} ₾`} />
-                    <Info k="თანხა" v={good && `${good.amount.toFixed(2)} ₾`} />
+                    <Info k="თანხა" v={good && `${sentAmount.toFixed(2)} ₾`} />
                     {w.comment && <Info k="კომენტარი" v={w.comment} />}
                     {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
                   </dl>
@@ -309,10 +319,13 @@ export function ShipmentDetail() {
 }
 
 /** `changed`: the value differs from what this app sent (the waybill was corrected on RS.ge). */
-function Info({ k, v, mono, changed }: { k: string; v?: string; mono?: boolean; changed?: boolean }) {
+function Info({ k, v, mono, changed, sub }: { k: string; v?: string; mono?: boolean; changed?: boolean; sub?: string }) {
   return (
     <div className="flex justify-between gap-4 py-2.5">
-      <dt className="shrink-0 text-slate-500">{k}</dt>
+      <dt className={cx('text-slate-500', sub ? 'min-w-0 [overflow-wrap:anywhere]' : 'shrink-0')}>
+        {k}
+        {sub && <span className="block font-mono text-xs text-slate-400">{sub}</span>}
+      </dt>
       <dd className="min-w-0 text-right">
         <span className={cx('text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</span>
         {changed && <span className="block text-xs text-amber-700">შეცვლილია RS.ge-ზე</span>}

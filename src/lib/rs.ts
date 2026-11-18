@@ -24,9 +24,13 @@ export const FALLBACK_UNITS = [{ id: RS_UNIT_OTHER, name: 'სხვა' }]
 /** RS.ge's units, always with "other" (99) among them. */
 export const rsUnits = (rs: RsSettings) => (rs.units.some((u) => u.id === RS_UNIT_OTHER) ? rs.units : [...rs.units, ...FALLBACK_UNITS])
 
+/** A new product's unit: tonnes when RS.ge has such a unit, otherwise "other" (named ტონა). */
+export const tonneUnit = (rs: RsSettings) => rsUnits(rs).find((u) => u.id !== RS_UNIT_OTHER && /^ტონ/.test(u.name))?.id ?? RS_UNIT_OTHER
+
 /** TRANS_ID meaning "other": the transport type is then sent in TRANS_TXT. */
 export const RS_TRANS_OTHER = 4
 
+/** VAT_TYPE of a goods line. */
 export const RS_VAT_TYPES = [
   { value: 0, label: 'ჩვეულებრივი' },
   { value: 1, label: 'ნულოვანი' },
@@ -51,8 +55,6 @@ export function defaultRsSettings(): RsSettings {
     tranCostPayer: 2,
     transportCost: 0,
     quantity: 0,
-    price: 0,
-    vatType: 0,
     receptionInfo: '',
     receiverInfo: '',
     comment: '',
@@ -72,8 +74,6 @@ export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[]
   const out: string[] = []
   // Connecting fills in the seller (also the buyer when none is set: შიდა გადაზიდვა).
   if (!opts.hasCreds || !rs.sellerTin) out.push('სერვისის მომხმარებელი და პაროლი')
-  if (!(rs.quantity > 0)) out.push('დეკლარირებული რაოდენობა')
   if (rs.transId === RS_TRANS_OTHER && !rs.transTxt) out.push('ტრანსპორტის ტიპის დასახელება')
-  if (!(rs.price >= 0)) out.push('ერთეულის ფასი')
   return out
 }

@@ -3,12 +3,13 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 're
 import { products, refs, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx, formatDateTime, phoneKey } from '../lib/util'
+import { active, cx, formatDateTime, phoneKey, sameIds } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
-import { RS_UNIT_OTHER, rsUnits } from '../lib/rs'
-import type { CarrierRoute, Database } from '../types'
+import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
+import type { CarrierRoute, Database, RouteGood } from '../types'
+import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -33,6 +34,10 @@ interface FieldDef {
   initial?: (d: Database) => string
   /** Can't be changed once saved; `hint` says why. */
   fixed?: { hint: string }
+  /** A select with a long list: its menu has a search field. */
+  searchable?: boolean
+  /** Under the field. */
+  hint?: string
 }
 
 interface TabDef {
@@ -66,19 +71,14 @@ const carrierNames = (d: Database, r: Rec) =>
     .join(', ') || '—'
 
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
-/** A route's product name; a product removed since (deleted here or on RS.ge) is marked. */
-const productName = (d: Database, id?: string) => {
-  const p = d.products.find((x) => x.id === id)
-  return !p ? '—' : p.deletedAt ? `${p.name} (წაშლილია)` : p.name
-}
+/** A route record's goods lines. */
+const goodsOf = (_d: Database, r: Rec) => (r as unknown as { goods?: RouteGood[] }).goods ?? []
+const productNames = (d: Database, r: Rec) => goodsOf(d, r).map((g) => g.name).join(', ')
 /** A route record resolved to its carrier and addresses. */
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
 
 /** Connected to RS.ge (the admin's copy shows the service user). Products are kept on RS.ge too, so they need it. */
 const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet && !!d.rs.sellerUnId
-
-/** A new product's unit: tonnes when RS.ge has such a unit, otherwise "other" with the name ტონა. */
-const tonneUnit = (d: Database) => rsUnits(d.rs).find((u) => u.id !== RS_UNIT_OTHER && /^ტონ/.test(u.name))?.id ?? RS_UNIT_OTHER
 
 const TABS: TabDef[] = [
   {
@@ -106,30 +106,20 @@ const TABS: TabDef[] = [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
-      {
-        key: 'productId',
-        label: 'პროდუქტი',
-        type: 'select',
-        placeholder: 'აირჩიე პროდუქტი…',
-        wide: true,
-        options: (d) => active(d.products).map((p) => ({ value: p.id, label: `${p.name} · ${p.barCode}` })),
-        // Picked for the admin only when there is nothing to choose between.
-        initial: (d) => (active(d.products).length === 1 ? active(d.products)[0].id : ''),
-        emptyHint: () => 'პროდუქტები ჯერ არ არის — დაამატე „პროდუქტები“ ჩანართში.',
-      },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
-    subtitle: (r, d) => `${carrierName(d, r.carrierId)} · ${productName(d, r.productId)}`,
+    subtitle: (r, d) => `${carrierName(d, r.carrierId)} · ${productNames(d, r) || 'პროდუქტი არ არის'}`,
     columns: [
       { label: 'კარიერი', render: (r, d) => <span className="font-medium text-slate-900">{carrierName(d, r.carrierId)}</span> },
       { label: 'დაწყების მისამართი', render: (r, d) => routeOf(d, r).start || '—' },
       { label: 'დასრულების მისამართი', render: (r, d) => routeOf(d, r).end || '—' },
       { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px]">{r.scaleId || '—'}</span> },
       {
-        label: 'პროდუქტი',
+        label: 'პროდუქტები',
         render: (r, d) => {
-          const p = active(d.products).find((x) => x.id === r.productId)
-          return p ? p.name : <Badge tone="amber">{r.productId ? productName(d, r.productId) : 'არ არის მითითებული'}</Badge>
+          const g = goodsOf(d, r)
+          if (!g.length) return <Badge tone="amber">არ არის მითითებული</Badge>
+          return g.length > 2 ? `${g[0].name}, ${g[1].name} +${g.length - 2}` : g.map((x) => x.name).join(', ')
         },
       },
     ],
@@ -188,15 +178,36 @@ const TABS: TabDef[] = [
     fields: [
       { key: 'name', label: 'დასახელება', placeholder: 'ღორღი 0–5 მმ', wide: true },
       { key: 'barCode', label: 'შტრიხკოდი', placeholder: 'CRS-05', mono: true, fixed: { hint: 'RS.ge-ზე პროდუქტი შტრიხკოდით იძებნება, ამიტომ ის არ იცვლება.' } },
-      { key: 'unitId', label: 'საზომი ერთეული', type: 'select', options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })), initial: (d) => String(tonneUnit(d)) },
+      { key: 'unitId', label: 'საზომი ერთეული', type: 'select', options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })), initial: (d) => String(tonneUnit(d.rs)) },
       { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა' },
+      // Not on RS.ge: kept here and filled into a route's goods line when the product is picked there.
+      { key: 'price', label: 'ერთეულის ფასი (₾)', placeholder: '0.00', optional: true, validate: (v) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი'), hint: 'არასავალდებულო. მარშრუტზე ჩაიწერება, სადაც შეიძლება შეიცვალოს.' },
+      { key: 'vatType', label: 'დაბეგვრის ტიპი', type: 'select', options: () => RS_VAT_TYPES.map((v) => ({ value: String(v.value), label: v.label })), initial: () => '0' },
+      {
+        key: 'aId',
+        label: 'აქციზი',
+        type: 'select',
+        searchable: true,
+        wide: true,
+        options: (d, r) => [
+          { value: '0', label: 'არ არის აქციზური' },
+          // A code RS.ge's list doesn't have (yet) stays pickable.
+          ...(r.aId && r.aId !== '0' && !d.rs.akciz?.some((a) => String(a.id) === r.aId) ? [{ value: r.aId, label: `აქციზის კოდი ${r.aId}` }] : []),
+          ...(d.rs.akciz ?? []).map((a) => ({ value: String(a.id), label: `${a.code} · ${a.title}` })),
+        ],
+        initial: () => '0',
+        hint: 'მხოლოდ აქციზური საქონლისთვის. RS.ge-ზე პროდუქტთან ერთად ინახება.',
+      },
     ],
     title: (r) => r.name!,
-    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'}`,
+    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'}${r.price != null && r.price !== '' ? ` · ${Number(r.price).toFixed(2)} ₾` : ''}`,
     columns: [
       { label: 'დასახელება', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
       { label: 'შტრიხკოდი', render: (r) => <span className="font-mono text-[13px]">{r.barCode}</span> },
       { label: 'ერთეული', render: (r) => r.unitTxt || '—' },
+      { label: 'ფასი', render: (r) => (r.price != null && r.price !== '' ? `${Number(r.price).toFixed(2)} ₾` : '—') },
+      { label: 'დაბეგვრა', render: (r) => RS_VAT_TYPES.find((v) => String(v.value) === String(r.vatType ?? 0))?.label ?? '—' },
+      { label: 'აქციზი', render: (r) => (Number(r.aId) > 0 ? <Badge tone="violet">აქციზური</Badge> : '—') },
     ],
   },
   {
@@ -251,7 +262,7 @@ export function ReferenceData() {
     const text = (r: Rec): string[] => {
       if (tab.key === 'routes') {
         const x = routeOf(d, r)
-        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', productName(d, r.productId)]
+        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', ...goodsOf(d, r).flatMap((g) => [g.name, g.barCode])]
       }
       return [...Object.values(r).filter((v) => typeof v === 'string'), ...(tab.key === 'users' ? [carrierNames(d, r)] : [])]
     }
@@ -403,7 +414,7 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
   const blocker = refs.blocker(col, id, user)
   const used = refs.shipmentCount(col, id)
   const routeCount = col === 'carriers' ? active(d.routes).filter((x) => x.carrierId === id).length : 0
-  const productRoutes = col === 'products' ? active(d.routes).filter((x) => x.productId === id).length : 0
+  const productRoutes = col === 'products' ? active(d.routes).filter((x) => x.goods.some((g) => g.productId === id)).length : 0
   return (
     <>
       <b className="text-slate-900">{name}</b> წაიშლება სიიდან და ახალ რეისებში ვეღარ აირჩევა.
@@ -414,7 +425,7 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
       ) : null}
       {!blocker && col === 'products' && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">პროდუქტი RS.ge-ს პროდუქტების სიიდანაც წაიშლება. უკვე ატვირთული ზედნადებები არ შეიცვლება.</p>}
       {!blocker && productRoutes > 0 && (
-        <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">გამოიყენება {productRoutes} მარშრუტში — მათით რეისს ვერ შექმნი, სანამ სხვა პროდუქტს არ მიუთითებ.</p>
+        <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">გამოიყენება {productRoutes} მარშრუტში — იქ დარჩება ისე, როგორც ჩაწერილია, და ზედნადებზე ასევე წავა.</p>
       )}
       {!blocker && routeCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">მასთან ერთად წაიშლება ამ კარიერის {routeCount} მარშრუტი.</p>}
       {!blocker && col === 'users' && id === user.id && (
@@ -479,14 +490,19 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [r, setR] = useState<Rec>(() => {
     // The form edits text: numbers (a product's unit) become strings.
     const x = Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typeof v === 'number' ? String(v) : v])) as Rec
-    // A route whose product was removed (here or on RS.ge) asks for a new one.
-    if (tab.key === 'routes' && !active(d.products).some((p) => p.id === x.productId)) x.productId = ''
+    // Fields added later (e.g. a product's VAT type) start at their default on older records.
+    if (x.id) for (const f of tab.fields) if (x[f.key] == null && f.initial && f.type === 'select') x[f.key] = f.initial(d)
     return tab.key === 'drivers' && !x.citizenship ? { ...x, citizenship: 'GE' } : x
   })
   const liveCarriers = active(d.carriers)
   // Deleted carriers drop out of the list; saving removes them from the operator.
   const [carrierIds, setCarrierIds] = useState<string[]>(() => carrierIdsOf(rec).filter((id) => liveCarriers.some((c) => c.id === id)))
   const pickCarriers = tab.key === 'users' && r.role === 'operator'
+  const pickGoods = tab.key === 'routes'
+  const [goods, setGoods] = useState<GoodDraft[]>(() => {
+    const stored = (rec as unknown as { goods?: RouteGood[] }).goods ?? []
+    return stored.length ? stored.map(toDraft) : [blankGood(d)]
+  })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const isNew = !rec.id
@@ -505,10 +521,12 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       if (msg) errs[f.key] = msg
     }
     if (pickCarriers && !carrierIds.length) errs.carrierIds = liveCarriers.length ? 'მონიშნე მინიმუმ ერთი კარიერი' : 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
-    if (tab.key === 'routes' && !errs.endAddress) {
+    if (pickGoods) Object.assign(errs, checkGoods(goods))
+    if (pickGoods && !errs.endAddress) {
       const end = (r.endAddress ?? '').trim().toLowerCase()
-      if (active(d.routes).some((x) => x.id !== r.id && x.carrierId === r.carrierId && x.productId === r.productId && x.endAddress.trim().toLowerCase() === end))
-        errs.endAddress = 'ამ კარიერს ეს მარშრუტი ამ პროდუქტით უკვე აქვს'
+      const codes = fromDrafts(d, goods).map((g) => g.barCode.toLowerCase())
+      if (active(d.routes).some((x) => x.id !== r.id && x.carrierId === r.carrierId && sameIds(x.goods.map((g) => g.barCode.toLowerCase()), codes) && x.endAddress.trim().toLowerCase() === end))
+        errs.endAddress = 'ამ კარიერს ეს მარშრუტი ამ პროდუქტებით უკვე აქვს'
     }
     setErrors(errs)
     if (Object.keys(errs).length) return
@@ -523,6 +541,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         clean[f.key] = v
       }
       if (pickCarriers) Object.assign(clean, { carrierIds })
+      if (pickGoods) Object.assign(clean, { goods: fromDrafts(d, goods) })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -550,6 +569,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   return (
     <Modal
       open
+      wide={pickGoods}
       onClose={onClose}
       title={`${tab.singular} ${isNew ? 'დამატება' : 'რედაქტირება'}`}
       footer={
@@ -568,9 +588,9 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
           const opts = f.type === 'select' ? f.options!(d, r) : []
           return (
             <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : f.fixed && !isNew ? f.fixed.hint : undefined}>
+              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : f.fixed && !isNew ? f.fixed.hint : f.hint}>
                 {f.type === 'select' ? (
-                  <Select value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
+                  <Select searchable={f.searchable} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
                     {opts.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
@@ -601,41 +621,60 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
           </div>
         )}
 
+        {pickGoods && <RouteGoodsEditor d={d} goods={goods} onChange={setGoods} errors={errors} onClearError={(k) => setErrors((x) => (x[k] ? { ...x, [k]: '' } : x))} />}
+
         {pickCarriers && (
-          <div className="sm:col-span-2">
-            <p className="mb-1.5 text-sm font-medium text-slate-700">კარიერები</p>
-            <p className="mb-2 text-xs text-slate-500">ოპერატორი რეისის შექმნისას აირჩევს ერთ-ერთს და ხედავს მონიშნული კარიერების რეისებს.</p>
-            {liveCarriers.length ? (
-              <div className="flex flex-wrap gap-2" role="group" aria-label="კარიერები">
-                {liveCarriers.map((c) => {
-                  const on = carrierIds.includes(c.id)
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => {
-                        setCarrierIds((xs) => (on ? xs.filter((x) => x !== c.id) : [...xs, c.id]))
-                        setErrors((x) => ({ ...x, carrierIds: '' }))
-                      }}
-                      className={cx(
-                        'pressable flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm ring-1 transition-colors',
-                        on ? 'bg-brand-600 font-medium text-white ring-brand-600' : 'bg-surface text-slate-700 ring-slate-200 hover:bg-fill',
-                      )}
-                    >
-                      {on && <Check className="size-4" />}
-                      {c.name}
-                    </button>
-                  )
-                })}
-              </div>
-            ) : null}
-            {errors.carrierIds && <p className="mt-2 text-xs text-rose-600">{errors.carrierIds}</p>}
-          </div>
+          <Chips
+            label="კარიერები"
+            text="ოპერატორი რეისის შექმნისას აირჩევს ერთ-ერთს და ხედავს მონიშნული კარიერების რეისებს."
+            items={liveCarriers.map((c) => ({ id: c.id, label: c.name }))}
+            value={carrierIds}
+            onChange={(v) => {
+              setCarrierIds(v)
+              setErrors((x) => ({ ...x, carrierIds: '' }))
+            }}
+            error={errors.carrierIds}
+          />
         )}
 
         <button type="submit" className="hidden" />
       </form>
     </Modal>
+  )
+}
+
+/** Toggle buttons for picking several records (an operator's carriers, a route's products). */
+function Chips({ label, text, items, empty, value, onChange, error }: { label: string; text: string; items: { id: string; label: string; sub?: string }[]; empty?: string; value: string[]; onChange: (v: string[]) => void; error?: string }) {
+  return (
+    <div className="sm:col-span-2">
+      <p className="mb-1.5 text-sm font-medium text-slate-700">{label}</p>
+      <p className="mb-2 text-xs text-slate-500">{text}</p>
+      {items.length ? (
+        <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
+          {items.map((x) => {
+            const on = value.includes(x.id)
+            return (
+              <button
+                key={x.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => onChange(on ? value.filter((v) => v !== x.id) : [...value, x.id])}
+                className={cx(
+                  'pressable flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm ring-1 transition-colors',
+                  on ? 'bg-brand-600 font-medium text-white ring-brand-600' : 'bg-surface text-slate-700 ring-slate-200 hover:bg-fill',
+                )}
+              >
+                {on && <Check className="size-4" />}
+                {x.label}
+                {x.sub && <span className={cx('font-mono text-xs', on ? 'text-white/75' : 'text-slate-400')}>{x.sub}</span>}
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        empty && <p className="text-xs text-slate-500">{empty}</p>
+      )}
+      {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
+    </div>
   )
 }

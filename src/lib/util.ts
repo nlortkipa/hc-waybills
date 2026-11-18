@@ -1,3 +1,5 @@
+import type { Shipment } from '../types.ts'
+
 let counter = 0
 
 /** Works in non-secure contexts too (e.g. phone opening the dev server over LAN). */
@@ -8,6 +10,15 @@ export function uid(prefix = ''): string {
 
 /** Drops soft-deleted records — use for lists and pickers, never for resolving history. */
 export const active = <T extends { deletedAt?: string }>(xs: T[]): T[] => xs.filter((x) => !x.deletedAt)
+
+/** Same ids, in any order. */
+export const sameIds = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n')
+
+/** Whether a shipment references a reference record (deleting it then only retires it). */
+export function shipmentUses(s: Shipment, col: 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users', id: string): boolean {
+  if (col === 'products') return s.items.some((i) => i.productId === id)
+  return s[({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]] === id
+}
 
 
 export const nowIso = () => new Date().toISOString()

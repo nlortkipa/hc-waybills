@@ -4,6 +4,9 @@ import type { Database, Shipment } from '../types'
 import { resolveRoute, routeText } from './route'
 import { plateKey } from './rs'
 
+/** The shipment's products, e.g. "ღორღი, ქვიშა". */
+export const itemsText = (s: Shipment) => s.items.map((i) => i.name).filter(Boolean).join(', ') || '—'
+
 export function makeLookup(d: Database) {
   const by = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]))
   const carriers = by(d.carriers)
@@ -30,7 +33,7 @@ export function makeLookup(d: Database) {
         route: moved ? routeText({ start: rs!.startAddress, end: rs!.endAddress }) : routeText(r),
         driver: rs && sent && rs.driverTin !== sent.driverTin ? rs.driverName || rs.driverTin : this.driverName(s.driverId),
         plate: rs && sent && plateKey(rs.carNumber) !== plateKey(sent.carNumber) ? rs.carNumber || '—' : (trucks.get(s.truckId)?.plateNumber ?? '—'),
-        item: s.cargo.description || '—',
+        item: itemsText(s),
       }
     },
   }

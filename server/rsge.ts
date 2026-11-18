@@ -20,7 +20,7 @@
  * password masked. Read-backs are tagged
  * (readBack) so the log keeps them apart from the uploads.
  */
-import type { IntegrationLog, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
+import type { IntegrationLog, RsAkciz, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
 import { IntegrationError, log } from './integrations.ts'
 import { store as db } from './store.ts'
 
@@ -40,6 +40,8 @@ export interface RsBarCode {
   name: string
   unitId: number
   unitTxt: string
+  /** Excise code; 0 = not excise goods. */
+  aId: number
 }
 
 /** A waybill found on RS.ge. status: 0 saved, 1 active, 2 completed, -1 deleted, -2 cancelled. */
@@ -183,7 +185,8 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
     .map(
       (g) =>
         `<GOODS>${el('ID', 0)}${el('W_NAME', g.name)}${el('UNIT_ID', g.unitId)}${el('UNIT_TXT', g.unitTxt)}${el('QUANTITY', g.quantity)}${el('PRICE', g.price)}` +
-        `${el('STATUS', 1)}${el('AMOUNT', g.amount)}${el('BAR_CODE', g.barCode)}${el('A_ID', 0)}${el('VAT_TYPE', g.vatType)}</GOODS>`,
+        `${el('STATUS', 1)}${el('AMOUNT', g.amount)}${el('BAR_CODE', g.barCode)}${el('A_ID', g.aId ?? 0)}${el('VAT_TYPE', g.vatType)}` +
+        `${g.quantityExt ? el('QUANTITY_EXT', g.quantityExt) : ''}</GOODS>`,
     )
     .join('')
   const full = Math.round(p.goods.reduce((a, g) => a + g.amount, 0) * 100) / 100
@@ -302,7 +305,17 @@ const live = {
       name: tag(tinXml, 'name'),
       units: await list('get_waybill_units', 'WAYBILL_UNIT'),
       transTypes: await list('get_trans_types', 'TRANSPORT_TYPE'),
+      // Not needed to connect: an empty list is loaded again later.
+      akciz: await live.akciz(c).catch(() => [] as RsAkciz[]),
     }
+  },
+
+  /** Excise goods codes (get_akciz_codes). Tagged as a read-back in the log. */
+  async akciz(c: RsCreds): Promise<RsAkciz[]> {
+    const xml = await soap('get_akciz_codes', creds(c), undefined, (x) => /<AKCIZ_CODE[\s>]/.test(x), 'sync')
+    return blocks(xml, 'AKCIZ_CODE')
+      .map((b) => ({ id: Number(tag(b, 'ID')), title: tag(b, 'TITLE'), unit: tag(b, 'MEASUREMENT'), code: tag(b, 'SAKON_KODI'), rate: tag(b, 'AKCIS_GANAKV') }))
+      .filter((x) => x.id > 0 && x.title)
   },
 
   /** '' when RS.ge doesn't know the number (it answers with the literal text "null"). */
@@ -390,13 +403,13 @@ const live = {
     const r = Number(tag(xml, 'get_bar_codesResult'))
     if (r !== 1) throw rsError(await describe(r || -1, c))
     return blocks(xml, 'BAR_CODE')
-      .map((b) => ({ barCode: tag(b, 'CODE'), name: tag(b, 'NAME'), unitId: numOf(tag(b, 'UNIT_ID')), unitTxt: tag(b, 'UNIT_TXT') }))
+      .map((b) => ({ barCode: tag(b, 'CODE'), name: tag(b, 'NAME'), unitId: numOf(tag(b, 'UNIT_ID')), unitTxt: tag(b, 'UNIT_TXT'), aId: numOf(tag(b, 'A_ID')) }))
       .filter((x) => x.barCode)
   },
 
   /** Adds the product to RS.ge, or overwrites the one with the same bar code. */
   async saveBarCode(c: RsCreds, p: RsBarCode) {
-    const params: Param[] = [...creds(c), ['bar_code', p.barCode], ['goods_name', p.name], ['unit_id', p.unitId], ['unit_txt', p.unitTxt], ['a_id', 0]]
+    const params: Param[] = [...creds(c), ['bar_code', p.barCode], ['goods_name', p.name], ['unit_id', p.unitId], ['unit_txt', p.unitTxt], ['a_id', p.aId]]
     const r = Number(tag(await soap('save_bar_code', params, undefined, (x) => tag(x, 'save_bar_codeResult') === '1'), 'save_bar_codeResult'))
     if (r !== 1) throw rsError(await describe(r || -1, c), true)
   },
@@ -481,6 +494,8 @@ export const rsge = {
 
   /** The taxpayer's product list on RS.ge. */
   barCodes: () => live.barCodes(activeCreds()),
+  /** Excise goods codes. */
+  akciz: () => live.akciz(activeCreds()),
   /** One product on RS.ge by its exact bar code, or null when RS.ge doesn't have it. */
   async barCode(barCode: string): Promise<RsBarCode | null> {
     return (await live.barCodes(activeCreds(), barCode)).find((x) => x.barCode === barCode) ?? null

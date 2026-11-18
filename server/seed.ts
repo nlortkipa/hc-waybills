@@ -1,8 +1,8 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, User } from '../src/types.ts'
 
-export const DB_VERSION = 21
+export const DB_VERSION = 23
 
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
@@ -28,7 +28,15 @@ export function createSeed(): Database {
 
 type V15Destination = { id: string; address: string; scaleId: string; deletedAt?: string }
 type V15Carrier = Carrier & { destinations?: V15Destination[] }
-type V15Route = Omit<CarrierRoute, 'endAddress' | 'scaleId' | 'productId'> & { destinationId: string }
+type V15Route = Omit<CarrierRoute, 'endAddress' | 'scaleId' | 'goods'> & { destinationId: string }
+/** Before v22: one product per route and per shipment. */
+type V21Route = Omit<CarrierRoute, 'goods'> & { productId: string }
+type V21Shipment = Omit<Shipment, 'items'> & { productId: string; cargo: { description: string; code: string } }
+/** v22: a list of products per route; shipment items without price and VAT. */
+type V22Route = Omit<CarrierRoute, 'goods'> & { productIds: string[] }
+type V22Item = Omit<ShipmentItem, 'lineId' | 'price' | 'vatType'>
+/** Before v23 price and VAT type were global settings. */
+type V22Rs = RsSettings & { price?: number; vatType?: 0 | 1 | 2 }
 
 /** Upgrades an older stored database in place instead of starting over. Returns null if it can't. */
 export function migrate(db: Database): Database | null {
@@ -102,7 +110,7 @@ export function migrate(db: Database): Database | null {
   if (d.version === 17) {
     const carriers = d.carriers as unknown as V15Carrier[]
     const dest = (carrierId: string, id: string) => carriers.find((c) => c.id === carrierId)?.destinations?.find((x) => x.id === id)
-    const routes: CarrierRoute[] = (d.routes as unknown as V15Route[]).map(({ destinationId, ...r }) => {
+    const routes: V21Route[] = (d.routes as unknown as V15Route[]).map(({ destinationId, ...r }) => {
       const x = dest(r.carrierId, destinationId)
       return { ...r, endAddress: x?.address ?? '', scaleId: x?.scaleId ?? '', productId: '' }
     })
@@ -113,7 +121,7 @@ export function migrate(db: Database): Database | null {
       if (id && x && !routes.some((r) => r.id === id)) routes.push({ id, carrierId: s.carrierId, endAddress: x.address, scaleId: x.scaleId, productId: '', deletedAt: x.deletedAt ?? new Date().toISOString() })
       return { ...s, routeId: id }
     })
-    d = { ...d, version: 18, carriers: carriers.map(({ destinations: _x, ...c }) => c), routes, shipments }
+    d = { ...d, version: 18, carriers: carriers.map(({ destinations: _x, ...c }) => c), routes: routes as unknown as CarrierRoute[], shipments }
   }
   // v18 → v19: the one admin-set cargo becomes a product (with the unit from the RS.ge settings), and
   // operators pick a product per shipment. Its declared quantity moves to the RS.ge settings. The
@@ -129,7 +137,7 @@ export function migrate(db: Database): Database | null {
       version: 19,
       products,
       rs: { ...rs, quantity: cargo?.quantity ?? 0 },
-      shipments: d.shipments.map((s) => ({ ...s, productId: p && s.cargo.description === p.name && s.cargo.code === p.barCode ? p.id : '' })),
+      shipments: (d.shipments as unknown as V21Shipment[]).map((s) => ({ ...s, productId: p && s.cargo.description === p.name && s.cargo.code === p.barCode ? p.id : '' })) as unknown as Shipment[],
     }
   }
   // v19 → v20: the product moves from the shipment form onto the route. Each route takes the product
@@ -137,10 +145,45 @@ export function migrate(db: Database): Database | null {
   if (d.version === 19) {
     const live = new Set(d.products.filter((p) => !p.deletedAt).map((p) => p.id))
     const only = live.size === 1 ? [...live][0] : ''
-    const used = (routeId: string) => d.shipments.find((s) => s.routeId === routeId && live.has(s.productId))?.productId
-    d = { ...d, version: 20, routes: d.routes.map((r) => ({ ...r, productId: r.productId || used(r.id) || only })) }
+    const shipments = d.shipments as unknown as V21Shipment[]
+    const used = (routeId: string) => shipments.find((s) => s.routeId === routeId && live.has(s.productId))?.productId
+    const routes = (d.routes as unknown as V21Route[]).map((r) => ({ ...r, productId: r.productId || used(r.id) || only }))
+    d = { ...d, version: 20, routes: routes as unknown as CarrierRoute[] }
   }
   // v20 → v21: a buyer can be set again; none (the default) keeps შიდა გადაზიდვა.
   if (d.version === 20) d = { ...d, version: 21, rs: { ...d.rs, buyerTin: '', buyerName: '', buyerForeign: false } }
+  // v21 → v22: a waybill carries several products. Routes get a list of products, shipments a list of
+  // goods lines (each with its own quantity); the settings' quantity is only prefilled from now on.
+  if (d.version === 21) {
+    const routes = (d.routes as unknown as V21Route[]).map(({ productId, ...r }) => ({ ...r, productIds: productId ? [productId] : [] }))
+    const shipments = (d.shipments as unknown as V21Shipment[]).map(({ productId, cargo, ...s }) => {
+      const p = d.products.find((x) => x.id === productId)
+      // The unit is what the waybill was sent with, else the product's, else tonnes as "other".
+      const g = s.rsWaybill?.goods[0]
+      const unit = g ? { unitId: g.unitId, unitTxt: g.unitTxt } : p ? { unitId: p.unitId, unitTxt: p.unitTxt } : { unitId: 99, unitTxt: 'ტონა' }
+      return { ...s, items: [{ productId, name: cargo.description, barCode: cargo.code, ...unit, quantity: s.quantity }] }
+    })
+    d = { ...d, version: 22, routes: routes as unknown as CarrierRoute[], shipments: shipments as unknown as Shipment[] }
+  }
+  // v22 → v23: routes hold goods lines (a product from the list or typed in, with its price and VAT
+  // type) instead of product ids; price and VAT type leave the settings for the lines.
+  if (d.version === 22) {
+    const { price = 0, vatType = 0, ...rs } = d.rs as V22Rs
+    const routes: CarrierRoute[] = (d.routes as unknown as V22Route[]).map(({ productIds, ...r }) => ({
+      ...r,
+      goods: (productIds ?? []).flatMap((id, i) => {
+        const p = d.products.find((x) => x.id === id)
+        return p ? [{ id: `${r.id}.${i}`, productId: p.id, name: p.name, barCode: p.barCode, unitId: p.unitId, unitTxt: p.unitTxt, price, vatType }] : []
+      }),
+    }))
+    const shipments = d.shipments.map((s) => ({
+      ...s,
+      items: (s.items as unknown as V22Item[]).map((i, k) => {
+        const g = s.rsWaybill?.goods[k]
+        return { ...i, lineId: '', price: g?.price ?? price, vatType: g?.vatType ?? vatType }
+      }),
+    }))
+    d = { ...d, version: 23, rs, routes, shipments }
+  }
   return d.version === DB_VERSION ? d : null
 }

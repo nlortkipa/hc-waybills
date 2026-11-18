@@ -11,7 +11,7 @@ sequenceDiagram
     participant RS as RS.ge (Waybill API)
     participant SMS as smsoffice.ge
 
-    Op->>App: Pick carrier, route (with its product), driver, truck
+    Op->>App: Pick carrier, route, driver, truck; type each product's quantity
     Op->>App: Click "Upload waybill"
     App->>RS: Create waybill
     RS-->>App: Waybill number
@@ -34,10 +34,10 @@ flowchart LR
 | Entity | Fields |
 |---|---|
 | **Carrier** | Name, start address (one), end addresses (one or more, each with its scale ID) |
-| **Route** | Carrier, end address, scale ID and one product (start → end). The same addresses can be opened again for another product. Operators pick a route for each shipment, and the shipment carries the route's product |
+| **Route** | Carrier, end address, scale ID and its goods lines (start → end). Each line's bar code, name and unit are typed in, or filled from the product list with the search button and then still editable (nothing is added to RS.ge's list), with its unit price, VAT type and, for excise goods, the excise code (RS.ge's list, loaded on connect). Operators pick a route for each shipment and type each line's quantity (plus the optional additional quantity, QUANTITY_EXT), removing lines the truck doesn't carry; each line becomes one goods line on the RS.ge waybill |
 | **Driver** | First/last name, personal ID, phone |
 | **Truck** | Model, plate number, trailer number |
-| **Product** | Name, bar code, unit. Kept in step with the taxpayer's product list on RS.ge (see below). Each route has one |
+| **Product** | Name, bar code, unit and excise code, kept in step with the taxpayer's product list on RS.ge (see below); plus unit price and VAT type, kept only here. Searching a product on a route's goods line fills all of these in (still editable there) |
 | **User** | Name, phone, email, role |
 
 **Roles:** `Admin` · `Operator` (given one or more carriers) · `Report user`
@@ -108,7 +108,7 @@ Setup (admin, **RS.ge** tab):
 
 1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and enter its user name (`su`) and password (`sp`). The password is stored only on the server, encrypted (AES-256-GCM) with `HC_SECRET_KEY`, and never sent to browsers.
 2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
-3. Fill in the declared quantity, price, VAT type and transport fields. They apply to every shipment. The product (name, bar code, unit) comes from the shipment's route; products are kept in **ცნობარები → პროდუქტები**. The **buyer** is optional and the same for every shipment:
+3. Fill in the transport fields. They apply to every shipment. The quantity here is optional: it is only prefilled on each product of a new shipment. Products, their price and VAT type are set per route in **ცნობარები → მარშრუტები**; the RS.ge product list is in **ცნობარები → პროდუქტები**. The **buyer** is optional and the same for every shipment:
    - **Empty** (or the seller's own number): the waybill is შიდა გადაზიდვა (internal transport between the company's own sites) and the buyer is the seller, taken from the connected service user.
    - **Any other number** (any format, up to 50 characters): the waybill is მიწოდება ტრანსპორტირებით (type 2). The number is looked up on RS.ge as it is typed. If RS.ge knows it, its name is used and can't be changed (`CHEK_BUYER_TIN` 1). If it doesn't, type any name; the number is then sent unchecked (`CHEK_BUYER_TIN` 0). The server looks the number up again on save, so a name RS.ge has always wins.
 
@@ -159,6 +159,6 @@ Per shipment, after RS.ge returns the waybill number, the server sends the drive
 
 ### Mock assumptions to confirm with the client
 
-- The product is set per route by the admin, not per shipment; the declared quantity, price and VAT type are set once and are the same for every product. A route whose product was removed (here or on RS.ge) can't be used until the admin picks another.
+- A waybill can carry several products, one goods line each. The admin sets up a route's lines (product, unit price, VAT type); the operator only types each line's quantity and can leave lines out. Every line is sent exactly as written on the route; renaming or removing a product in the list doesn't change routes already filled from it. A shipment's lines are read from the route again when its waybill is saved, so fixing a price after a refusal applies to the retry.
 - Drivers and trucks are shared across carriers. Only the start address, routes and operators are tied to a carrier.
 - Deleting a carrier also removes its routes. Records that shipments use are kept, hidden from pickers, so those shipments still show them.

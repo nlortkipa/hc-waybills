@@ -17,7 +17,8 @@ export interface Carrier extends SoftDeletable {
 
 /**
  * A route the admin opened for a carrier: the carrier's start address → the end address typed here,
- * carrying one product. Operators pick one of these for each shipment, which takes its product.
+ * with the goods lines carried on it. Operators pick one of these for each shipment and type each
+ * line's quantity (dropping the lines the truck doesn't carry).
  */
 export interface CarrierRoute extends SoftDeletable {
   id: string
@@ -25,8 +26,34 @@ export interface CarrierRoute extends SoftDeletable {
   endAddress: string
   /** ID of the scale at the end address. */
   scaleId: string
-  /** The product carried on this route (Product.id); '' when not set yet (routes from before v20). */
+  /** The goods lines of this route's waybills, at least one (none on old routes not set up yet). */
+  goods: RouteGood[]
+}
+
+/**
+ * One goods line of a route, set up by the admin: bar code, name and unit typed in or filled from the
+ * RS.ge product list (and then still editable; nothing is added to RS.ge's list), plus what RS.ge needs
+ * besides the quantity, which the operator types on each shipment. Sent exactly as written here.
+ */
+export interface RouteGood {
+  id: string
+  /** The list product it was filled from, while the bar code is still that product's; '' otherwise. */
   productId: string
+  /** W_NAME. */
+  name: string
+  /** BAR_CODE. */
+  barCode: string
+  /** UNIT_ID; 99 = "other", then unitTxt is the unit name. */
+  unitId: number
+  unitTxt: string
+  /** PRICE: per unit, GEL. AMOUNT = quantity × price. */
+  price: number
+  /** VAT_TYPE: 0 ordinary, 1 zero-rated, 2 exempt. */
+  vatType: 0 | 1 | 2
+  /** A_ID: the excise code (RsAkciz.id) of excise goods; 0 or missing = not excise goods. */
+  aId?: number
+  /** The excise code as shown, e.g. "2207 · ეთილის სპირტი(2207)_ლიტრი _ (2.6)". */
+  aTitle?: string
 }
 
 export interface Driver extends SoftDeletable {
@@ -49,7 +76,8 @@ export interface Truck extends SoftDeletable {
 /**
  * A product (საქონელი): a copy of one entry of the connected taxpayer's RS.ge product list
  * (get_bar_codes / save_bar_code), kept equal to it by the sync. The bar code is its identity on
- * RS.ge, so it can't be changed once saved. The admin gives each route one; shipments take their route's.
+ * RS.ge, so it can't be changed once saved. Price and VAT type are kept here only (RS.ge's list has
+ * no such fields). Picking a product for a route's goods line fills the line with all of it.
  */
 export interface Product extends SoftDeletable {
   id: string
@@ -60,12 +88,24 @@ export interface Product extends SoftDeletable {
   /** UNIT_ID from get_waybill_units; 99 = "other", then unitTxt is the unit name. */
   unitId: number
   unitTxt: string
+  /** A_ID: excise code (RsAkciz.id) on RS.ge; 0 or missing = not excise goods. */
+  aId?: number
+  /** Price per unit, GEL, for goods lines filled from this product. Not on RS.ge; missing = not set. */
+  price?: number
+  /** VAT_TYPE for goods lines filled from this product. Not on RS.ge; missing = 0 (ordinary). */
+  vatType?: 0 | 1 | 2
 }
 
-/** The product as it was on a shipment. Copied when the shipment is created (and when its waybill is saved). */
-export interface Cargo {
-  description: string
-  code: string
+/**
+ * One goods line of a shipment's waybill: a route goods line (lineId) with the quantity the operator
+ * typed. The rest is a snapshot of the line, refreshed when the waybill is saved.
+ */
+export interface ShipmentItem extends Omit<RouteGood, 'id'> {
+  /** RouteGood.id; '' on shipments from before route goods lines existed. */
+  lineId: string
+  quantity: number
+  /** QUANTITY_EXT: the optional additional quantity (დამატებითი რაოდენობა). */
+  quantityExt?: number
 }
 
 export interface User extends SoftDeletable {
@@ -101,11 +141,9 @@ export interface Shipment {
   routeId: string
   driverId: string
   truckId: string
-  /** The route's product when the shipment was created (Product.id); '' on shipments made before products existed. */
-  productId: string
-  /** Snapshot of the product's name and bar code. */
-  cargo: Cargo
-  /** Declared quantity in tonnes. */
+  /** The waybill's goods lines, at least one. */
+  items: ShipmentItem[]
+  /** Declared quantity: the sum of the items' quantities. */
   quantity: number
   status: ShipmentStatus
   waybillNumber?: string
@@ -180,6 +218,18 @@ export interface IntegrationLog {
   readBack?: 'sync' | 'page'
 }
 
+/** An excise goods code from RS.ge (get_akciz_codes). */
+export interface RsAkciz {
+  id: number
+  title: string
+  /** Unit of measure, e.g. ლიტრი. */
+  unit: string
+  /** SAKON_KODI: the goods code. */
+  code: string
+  /** AKCIS_GANAKV: the excise rate. */
+  rate: string
+}
+
 /** An item of an RS.ge reference list (units, transport types). */
 export interface RsRefItem {
   id: number
@@ -224,12 +274,8 @@ export interface RsSettings {
   /** TRANSPORT_COAST (sic): transport cost, GEL. */
   transportCost: number
 
-  /** Declared quantity (tonnes) of every new shipment. The operator can't change it. */
+  /** Quantity prefilled on each goods line of a new shipment (the operator can change it); 0 = none. */
   quantity: number
-  /** Price per unit, GEL. AMOUNT = quantity × price. */
-  price: number
-  /** VAT_TYPE: 0 ordinary, 1 zero-rated, 2 exempt. */
-  vatType: 0 | 1 | 2
 
   receptionInfo: string
   receiverInfo: string
@@ -239,6 +285,8 @@ export interface RsSettings {
   /** Reference lists cached from RS.ge by "check connection". */
   units: RsRefItem[]
   transTypes: RsRefItem[]
+  /** Excise goods codes, for goods lines of excise goods. Missing until first loaded. */
+  akciz?: RsAkciz[]
 
   /** Background sync with RS.ge: changes up to this moment have been read. Cleared with the service user. */
   syncedTo?: string
@@ -278,6 +326,10 @@ export interface RsWaybillPayload {
     amount: number
     barCode: string
     vatType: 0 | 1 | 2
+    /** A_ID; 0 or missing = not excise goods. */
+    aId?: number
+    /** QUANTITY_EXT; sent only when set. */
+    quantityExt?: number
   }[]
 }
 
