@@ -9,7 +9,7 @@ sequenceDiagram
     actor Op as Operator
     participant App as HC Portal
     participant RS as RS.ge (Waybill API)
-    participant SMS as SMS Provider
+    participant SMS as smsoffice.ge
 
     Op->>App: Pick carrier, route, driver, truck
     Op->>App: Click "Upload waybill"
@@ -26,7 +26,7 @@ flowchart LR
     U[Admin / Operator / Report user] --> APP[HC Portal]
     APP --> DB[(Database)]
     APP -->|create waybill| RS[RS.ge]
-    APP -->|driver SMS| SMS[SMS Provider]
+    APP -->|driver SMS| SMS[smsoffice.ge]
 ```
 
 ## Reference data
@@ -45,9 +45,9 @@ flowchart LR
 
 The app is a React + TypeScript front end (Vite, Tailwind) plus a small Node API server (`server/`, no dependencies). The front end runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com). Browsers and the Android app all talk to the same server, which owns the data, enforces roles and runs the RS.ge → SMS pipeline.
 
-> **SMS is mocked** (`server/integrations.ts`) and always succeeds. **RS.ge** is called for real (`server/rsge.ts`) with the service user the admin enters. There is no simulator. Data is stored by the server in SQLite at `server/data/hc.db` (Node's built-in `node:sqlite`; override with `HC_DB_FILE`). Delete `hc.db*` to start over with only the admin. On first start an existing `server/data/db.json` (the old storage) is imported and renamed to `db.json.imported`. Back up `hc.db` with `sqlite3 hc.db ".backup copy.db"` (a plain file copy while the server runs can miss the newest changes in `hc.db-wal`).
+> **RS.ge** (`server/rsge.ts`) and **SMS** (`server/smsoffice.ts`, through [smsoffice.ge](https://smsoffice.ge)) are called for real with the accounts the admin enters. There is no simulator. Data is stored by the server in SQLite at `server/data/hc.db` (Node's built-in `node:sqlite`; override with `HC_DB_FILE`). Delete `hc.db*` to start over with only the admin. On first start an existing `server/data/db.json` (the old storage) is imported and renamed to `db.json.imported`. Back up `hc.db` with `sqlite3 hc.db ".backup copy.db"` (a plain file copy while the server runs can miss the newest changes in `hc.db-wal`).
 
-> **Secrets:** the server reads `.env` in the project root. On first start it generates `HC_SECRET_KEY` there, which encrypts the RS.ge password in `hc.db`. Keep `.env` out of database backups (a copied `hc.db` is useless without it) but don't lose it: with a different key the RS.ge password can't be read and has to be entered again. A password stored by an older version is encrypted on the next start.
+> **Secrets:** the server reads `.env` in the project root. On first start it generates `HC_SECRET_KEY` there, which encrypts the RS.ge password and the SMS API key in `hc.db`. Keep `.env` out of database backups (a copied `hc.db` is useless without it) but don't lose it: with a different key the RS.ge password and SMS key can't be read and have to be entered again. A password stored by an older version is encrypted on the next start.
 
 > **Sessions** end after 30 days without use or 90 days after login. A user is logged out everywhere when their phone number or role changes, or when they're deleted. **Times** are always shown and grouped by day in Georgian time (UTC+4), whatever the device's time zone.
 
@@ -95,6 +95,8 @@ The interface is in Georgian.
 2. As an operator, open **ახალი რეისი** (new shipment), pick the carrier (skipped when there is only one), one of its routes, the driver and truck, then press **ზედნადების ატვირთვა** (upload waybill). The shipment page shows each step live: RS.ge → SMS.
 3. In **API მოთხოვნები**: watch every RS.ge and SMS request and response (admins can clear the log).
 
+SMS needs an smsoffice.ge account (see below). Without one, the SMS step fails with a message saying so; once it's set up, **ხელახლა გაგზავნა** on the shipment sends it.
+
 ### RS.ge waybills
 
 Protocol: [`docs/rs-ge/waybill_protocol.pdf`](docs/rs-ge/waybill_protocol.pdf) (official, v4.0.4, from eservices.rs.ge → სერვისების დოკუმენტაცია). SOAP endpoint `https://services.rs.ge/WayBillService/WayBillService.asmx` (override with `RS_WAYBILL_URL`).
@@ -127,6 +129,23 @@ Mapping notes:
 - Quantity is in tonnes; pick a tonne unit, or "other" (99) with the name ტონა (the default).
 - Drivers have a citizenship (Georgian / foreign) → `CHEK_DRIVER_TIN`; foreigners can have a non-11-digit ID.
 - `TRANSPORTER_TIN` is sent only when filled in. RS.ge then expects the transport company to activate the waybill, so leave it empty unless that's how you work.
+
+### SMS (smsoffice.ge)
+
+Docs: [smsoffice.ge/integration](https://smsoffice.ge/integration) (in Georgian). Endpoints are under `https://smsoffice.ge` (override with `SMSOFFICE_URL`, e.g. to point at a local mock).
+
+Setup (admin, **SMS** tab):
+
+1. On smsoffice.ge, open your profile → integration, turn the API on and copy the **API key**. Register a **sender name** (up to 11 Latin letters, digits, `-` or `.`).
+2. Enter both and press **შემოწმება და შენახვა**. The key is checked with `getBalance` before it's saved and is then stored only on the server, encrypted with `HC_SECRET_KEY`, and never sent to browsers. The page shows the remaining SMS balance.
+3. The sender can't be checked without sending, so send a **სატესტო SMS** to your own phone. It uses one message.
+
+Per shipment, after RS.ge returns the waybill number, the server sends the driver `ზედნადები №… ატვირთულია. მარშრუტი: … → …. მანქანა: ….` with `POST /api/v2/send/`. The driver's phone (`5XX XX XX XX`) goes out as `9955XXXXXXXX`. All calls are form POSTs with the key in the body, never in the URL. They appear in **API მოთხოვნები** with the key masked.
+
+- **Accepted ≠ delivered.** `ErrorCode 0` only means smsoffice.ge queued the message. Each send carries a random `reference`; about a minute later, and again whenever the shipment is opened (at most every 15 s, for up to 7 days), the server asks `getMessageStatus` and shows **მიწოდებულია**, **ვერ მიწოდდა** or **ვადა გაუვიდა**. A message that wasn't delivered can be sent again from the shipment page.
+- **Errors** (wrong key, unknown sender, empty balance, a blocked number…) are shown in Georgian on the shipment with smsoffice.ge's code, and **ხელახლა გაგზავნა** sends again. A message that was already accepted is never sent a second time by a retry.
+- **Restarts:** the reference is saved before the send. If the server stops mid-send, on restart it asks smsoffice.ge about that reference first and sends again only if smsoffice.ge doesn't know the message. A timeout with no answer at all is reported as an error; resending then may text the driver twice.
+- smsoffice.ge's error code 40 says "text over 160 characters". The waybill SMS is Georgian (Unicode) and usually 100–150 characters, so it's billed as more than one message. If your account refuses long texts with code 40, shorten the text in `sendSms` (`server/logic.ts`).
 
 ### Mock assumptions to confirm with the client
 

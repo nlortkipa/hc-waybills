@@ -1,5 +1,5 @@
 /**
- * Encryption at rest for secrets stored in the database (the RS.ge service password).
+ * Encryption at rest for secrets stored in the database (the RS.ge service password, the SMS API key).
  *
  * AES-256-GCM with the key in HC_SECRET_KEY (32 bytes, base64). A copy or backup of hc.db is
  * useless without the key, so keep the key out of those backups. On first start without a key

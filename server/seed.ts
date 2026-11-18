@@ -1,7 +1,8 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
+import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, Database, Shipment, User } from '../src/types.ts'
 
-export const DB_VERSION = 16
+export const DB_VERSION = 17
 
 /** Empty database: only the admin exists (logs in with 575780323); everything else, including other users, is added through the app. */
 export function createSeed(): Database {
@@ -20,6 +21,7 @@ export function createSeed(): Database {
     logs: [],
     cargo: { description: 'ღორღი 0–5 მმ', code: 'CRS-05', quantity: 25 },
     rs: defaultRsSettings(),
+    sms: defaultSmsSettings(),
   }
 }
 
@@ -88,5 +90,7 @@ export function migrate(db: Database): Database | null {
     const { buyerTin: _t, buyerName: _n, buyerForeign: _f, ...rs } = d.rs as typeof d.rs & { buyerTin?: string; buyerName?: string; buyerForeign?: boolean }
     d = { ...d, version: 16, rs }
   }
+  // v16 → v17: real SMS through smsoffice.ge (it was mocked); the account starts empty.
+  if (d.version === 16) d = { ...d, version: 17, sms: defaultSmsSettings() }
   return d.version === DB_VERSION ? d : null
 }

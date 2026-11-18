@@ -5,9 +5,11 @@
 import { canUseCarrier, resolveRoute, routeUsable } from '../src/lib/route.ts'
 import { RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, uid } from '../src/lib/util.ts'
-import type { CargoDefaults, Carrier, CarrierRoute, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, User } from '../src/types.ts'
-import { IntegrationError, sms } from './integrations.ts'
+import { SMS_FINAL } from '../src/lib/sms.ts'
+import type { CargoDefaults, Carrier, CarrierRoute, Database, Driver, RsRemoteWaybill, RsSettings, RsWaybillPayload, Shipment, ShipmentEvent, SmsDelivery, User } from '../src/types.ts'
+import { IntegrationError } from './integrations.ts'
 import { resetRsCache, rsge, storedCreds, type RsCreds } from './rsge.ts'
+import { newReference, SENDER_RE, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
 export class HttpError extends Error {
@@ -41,10 +43,14 @@ export const auth = {
   },
 }
 
-/** What a user is allowed to see: operators only get their own carriers' shipments. The RS.ge password never leaves the server. */
+/** What a user is allowed to see: operators only get their own carriers' shipments. The RS.ge password and SMS key never leave the server. */
 export function viewFor(user: User): Database {
   const raw = db.get()
-  const d: Database = { ...raw, rs: { ...raw.rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' } }
+  const d: Database = {
+    ...raw,
+    rs: { ...raw.rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' },
+    sms: { ...raw.sms, apiKey: '', apiKeySet: !!raw.sms.apiKey },
+  }
   if (user.role !== 'operator') return d
   const mine = new Set(d.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => s.id))
   return { ...d, shipments: d.shipments.filter((s) => mine.has(s.id)), logs: d.logs.filter((l) => l.shipmentId && mine.has(l.shipmentId)) }
@@ -285,6 +291,48 @@ export async function rsNameFromTin(body: { tin?: string; foreign?: boolean } | 
   return { name: await lookupName(tin) }
 }
 
+/* ------------------------------ SMS ------------------------------ */
+
+/** The stored smsoffice.ge account, or null when SMS isn't set up. */
+const smsCreds = (): SmsCreds | null => {
+  const { apiKey, sender } = db.get().sms
+  return apiKey && sender ? { apiKey, sender } : null
+}
+
+/**
+ * Saves the smsoffice.ge account after checking the key (getBalance). An empty key keeps the stored
+ * one. The sender can't be checked without sending: the test SMS does that.
+ */
+export async function connectSms(body: { apiKey?: string; sender?: string } | undefined, user: User) {
+  requireAdmin(user)
+  const prev = db.get().sms
+  const sender = str(body?.sender)
+  if (!sender) fail('შეიყვანე გამგზავნის სახელი')
+  if (!SENDER_RE.test(sender)) fail('გამგზავნის სახელი: მაქსიმუმ 11 ლათინური ასო, ციფრი, „-“ ან „.“')
+  const apiKey = str(body?.apiKey) || prev.apiKey
+  if (!apiKey) fail('შეიყვანე API გასაღები')
+  const balance = await smsoffice.balance({ apiKey }).catch((e: Error) => fail(e.message, 502))
+  db.set('sms', { apiKey, sender, balance, checkedAt: nowIso() })
+  return { balance }
+}
+
+/** Forgets the smsoffice.ge account: drivers get no SMS until it is set up again. */
+export function disconnectSms(user: User) {
+  requireAdmin(user)
+  db.set('sms', { apiKey: '', sender: '' })
+}
+
+/** Sends a test SMS with the stored account, so the admin sees the sender name work. */
+export async function testSms(body: { phone?: string } | undefined, user: User) {
+  requireAdmin(user)
+  const c = smsCreds() ?? fail('ჯერ შეინახე smsoffice.ge-ს API გასაღები და გამგზავნი')
+  const destination = toDestination(str(body?.phone)) ?? fail('შეიყვანე მობილურის ნომერი ფორმატით 5XX XX XX XX')
+  await smsoffice.send(c, destination, 'HC Portal: სატესტო შეტყობინება. SMS მუშაობს.', newReference()).catch((e: Error) => fail(e.message, 502))
+  // The test used one message: show the new balance (not fatal if this fails).
+  const balance = await smsoffice.balance(c).catch(() => undefined)
+  if (balance != null && db.get().sms.apiKey === c.apiKey) db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
+}
+
 /**
  * Tag written into every waybill's COMMENT. If save_waybill's answer is lost, the next attempt
  * finds the waybill by this tag on RS.ge instead of creating a second one.
@@ -410,6 +458,8 @@ export const shipments = {
   async retrySms(id: string, user: User) {
     const s = get(id, user)
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
+    // Sent again only when it failed or the phone never got it, so a double click can't text the driver twice.
+    if (s.sms.status === 'ok' && !smsUndelivered(s)) fail('SMS უკვე გაიგზავნა')
     if (!s.waybillNumber || running.has(id)) return
     running.add(id)
     try {
@@ -477,6 +527,12 @@ export const shipments = {
       void p.catch(() => {}).finally(() => reading.delete(id))
     }
     await p.catch((e: Error) => fail(e.message, 502))
+  },
+
+  /** Asks smsoffice.ge whether the driver got the SMS (opening a shipment calls this). */
+  async refreshSms(id: string, user: User) {
+    get(id, user)
+    await checkDelivery(id).catch((e: Error) => fail(e.message, 502))
   },
 
   /** On server start: finish pipelines interrupted by a restart. */
@@ -691,6 +747,8 @@ async function activate(id: string, waybillId: number): Promise<Activated | null
   }
 }
 
+const smsUndelivered = (s: Shipment) => s.sms.delivery === 'Undelivered' || s.sms.delivery === 'Expired'
+
 async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
@@ -698,17 +756,84 @@ async function sendSms(id: string) {
   const route = resolveRoute(d.carriers, s.carrierId, s.destinationId)
   const truck = d.trucks.find((x) => x.id === s.truckId)!
   const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}. მანქანა: ${truck.plateNumber}.`
-  patch(id, (x) => ({ sms: { ...x.sms, status: 'running', to: driver.phone, text } }))
+  const failed = (msg: string) => patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso(), to: driver.phone, text } }), { level: 'error', message: msg })
+
+  // A send interrupted by a restart: if smsoffice.ge knows the message, it went out. Don't send it twice.
+  if (s.sms.status === 'running' && s.sms.reference && s.sms.destination && s.sms.to === driver.phone) {
+    const known = await smsDelivery(s.sms.destination, s.sms.reference, id).catch(() => null)
+    if (known && known !== 'Unknown') {
+      patch(id, (x) => ({ sms: { ...x.sms, status: 'ok', error: undefined, at: nowIso(), delivery: known, deliveryCheckedAt: nowIso() } }), {
+        level: 'success',
+        message: `მძღოლს გაეგზავნა SMS (${driver.phone})`,
+      })
+      return
+    }
+  }
+
+  const c = smsCreds()
+  const destination = toDestination(driver.phone)
+  if (!c) return failed('SMS-ის პარამეტრები არ არის შევსებული — მიმართე ადმინისტრატორს')
+  if (!destination) return failed(`მძღოლის ნომერი (${driver.phone}) არ არის ქართული მობილურის ნომერი`)
+  const reference = newReference()
+  // Recorded before the call, so a restart in between can ask smsoffice.ge instead of sending again.
+  patch(id, () => ({ sms: { status: 'running', to: driver.phone, text, destination, reference } }))
   try {
-    await sms.send(driver.phone, text, id)
-    patch(id, (x) => ({ sms: { ...x.sms, status: 'ok', error: undefined, at: nowIso() } }), {
+    await smsoffice.send(c, destination, text, reference, id)
+    patch(id, (x) => ({ sms: { ...x.sms, status: 'ok', error: undefined, at: nowIso(), delivery: 'Pending' } }), {
       level: 'success',
       message: `მძღოლს გაეგზავნა SMS (${driver.phone})`,
     })
+    // The phone usually confirms within a minute: look once by then, so lists show it without opening the shipment.
+    setTimeout(() => void checkDelivery(id).catch(() => {}), DELIVERY_FIRST_CHECK_MS).unref()
   } catch (e) {
-    const msg = (e as Error).message
-    patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso() } }), { level: 'error', message: msg })
+    failed((e as Error).message)
   }
+}
+
+/** First delivery check after sending; later ones happen when the shipment is opened. */
+const DELIVERY_FIRST_CHECK_MS = 60_000
+/** Delivery is not asked again within this long. */
+const DELIVERY_FRESH_MS = 15_000
+/** After this long a still-pending SMS is left as it is (smsoffice.ge stops tracking it). */
+const DELIVERY_MAX_AGE_MS = 7 * 86400_000
+const checkingSms = new Map<string, Promise<void>>()
+
+const DELIVERY_EVENT: Partial<Record<SmsDelivery, Omit<ShipmentEvent, 'at'>>> = {
+  Delivered: { level: 'success', message: 'SMS მძღოლს მიუვიდა' },
+  Undelivered: { level: 'error', message: 'SMS მძღოლს ვერ მიუვიდა — შეამოწმე ნომერი და გაგზავნე ხელახლა' },
+  Expired: { level: 'error', message: 'SMS-ის მიწოდების ვადა გავიდა (ტელეფონი გამორთული იყო?) — გაგზავნე ხელახლა' },
+}
+
+/** Delivery of one message, or null when smsoffice.ge doesn't know it. */
+async function smsDelivery(destination: string, reference: string, shipmentId: string): Promise<SmsDelivery | null> {
+  const c = smsCreds()
+  if (!c) return null
+  try {
+    return await smsoffice.status(c, destination, reference, shipmentId)
+  } catch (e) {
+    if (e instanceof IntegrationError && e.rejected) return null
+    throw e
+  }
+}
+
+/** Reads the SMS's delivery status from smsoffice.ge, unless it is final, fresh or too old to ask. */
+function checkDelivery(id: string): Promise<void> {
+  const s = get(id)
+  const { status, reference, destination, delivery, deliveryCheckedAt, at } = s.sms
+  if (status !== 'ok' || !reference || !destination || (delivery && SMS_FINAL.includes(delivery))) return Promise.resolve()
+  if (deliveryCheckedAt && Date.now() - Date.parse(deliveryCheckedAt) < DELIVERY_FRESH_MS) return Promise.resolve()
+  if (at && Date.now() - Date.parse(at) > DELIVERY_MAX_AGE_MS) return Promise.resolve()
+  let p = checkingSms.get(id)
+  if (!p) {
+    p = smsDelivery(destination, reference, id).then((now) => {
+      // Only if this is still the same message (not re-sent meanwhile).
+      if (!now || get(id).sms.reference !== reference) return
+      patch(id, (x) => ({ sms: { ...x.sms, delivery: now, deliveryCheckedAt: nowIso() } }), now !== delivery ? DELIVERY_EVENT[now] : undefined)
+    })
+    checkingSms.set(id, p)
+    void p.catch(() => {}).finally(() => checkingSms.delete(id))
+  }
+  return p
 }
 
 /* ------------------------------ Logs ------------------------------ */

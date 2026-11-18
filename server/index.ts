@@ -11,7 +11,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
-import { auth, connectRs, disconnectRs, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, startRsSync, syncRsNow, viewFor, type RefCollection } from './logic.ts'
+import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, REF_COLLECTIONS, refs, rsNameFromTin, saveCargo, saveRsSettings, shipments, startRsSync, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -44,12 +44,17 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
   ['POST', /^\/api\/rs\/name$/, ({ body, user }) => rsNameFromTin(body, user)],
   ['POST', /^\/api\/rs\/sync$/, ({ user }) => syncRsNow(user)],
+  ['PUT', /^\/api\/sms$/, ({ body, user }) => connectSms(body, user)],
+  ['DELETE', /^\/api\/sms$/, ({ user }) => disconnectSms(user)],
+  ['POST', /^\/api\/sms\/test$/, ({ body, user }) => testSms(body, user)],
   ['POST', /^\/api\/shipments$/, ({ body, user }) => ({ id: shipments.create(body ?? {}, user) })],
   ['POST', /^\/api\/shipments\/([\w-]+)\/run$/, ({ params, user }) => void shipments.run(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/retry-sms$/, ({ params, user }) => void shipments.retrySms(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/(close|cancel)$/, ({ params, user }) => shipments.finish(params[0], params[1] as 'close' | 'cancel', user)],
   // Re-reads the waybill from RS.ge; the result arrives with the next state poll.
   ['POST', /^\/api\/shipments\/([\w-]+)\/rs-refresh$/, ({ params, user }) => shipments.refreshFromRs(params[0], user)],
+  // Asks smsoffice.ge whether the driver got the SMS; the result arrives with the next state poll.
+  ['POST', /^\/api\/shipments\/([\w-]+)\/sms-refresh$/, ({ params, user }) => shipments.refreshSms(params[0], user)],
   ['DELETE', /^\/api\/logs$/, ({ user }) => logs.clear(user)],
 ]
 

@@ -115,6 +115,23 @@ export const rsSettings = {
   },
 }
 
+/* ------------------------------ SMS ------------------------------ */
+
+export const smsSettings = {
+  /** Checks the smsoffice.ge key and stores it with the sender. Empty `apiKey` keeps the stored key. Admin only. */
+  save(value: { apiKey?: string; sender: string }) {
+    return call<{ balance: number }>('PUT', '/api/sms', value)
+  },
+  /** Forgets the smsoffice.ge account. */
+  disconnect() {
+    return call('DELETE', '/api/sms')
+  },
+  /** Sends a test SMS to the number with the stored account. */
+  test(phone: string) {
+    return call('POST', '/api/sms/test', { phone })
+  },
+}
+
 /* ---------------------------- Shipments ---------------------------- */
 
 /** Carriers a user can create shipments for: an operator's own, everyone else's all. Deleted ones are left out. */
@@ -163,6 +180,11 @@ export const shipments = {
   /** Re-reads the shipment's waybill from RS.ge (status, corrections made on the rs.ge portal). */
   async refreshFromRs(id: string) {
     await call('POST', `/api/shipments/${encodeURIComponent(id)}/rs-refresh`)
+  },
+
+  /** Asks smsoffice.ge whether the driver got the SMS. */
+  async refreshSms(id: string) {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/sms-refresh`)
   },
 
   isRunning: (id: string) => {

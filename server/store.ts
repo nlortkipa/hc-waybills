@@ -6,15 +6,16 @@
  * goes to SQLite first and reaches the copy only after it committed.
  *
  * On first start an existing db.json (the previous storage) is imported and renamed to
- * db.json.imported. The RS.ge password is stored encrypted (server/secret.ts); the file is
+ * db.json.imported. The RS.ge password and the SMS API key are stored encrypted (server/secret.ts); the file is
  * still readable by its owner only.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { Database, IntegrationLog, RsSettings } from '../src/types.ts'
+import type { Database, IntegrationLog, RsSettings, SmsSettings } from '../src/types.ts'
 import { decrypt, encrypt, isEncrypted } from './secret.ts'
+import { defaultSmsSettings } from '../src/lib/sms.ts'
 import { createSeed, migrate } from './seed.ts'
 
 const DATA = join(import.meta.dirname, 'data')
@@ -44,7 +45,7 @@ const SESSION_TOUCH_MS = 3600_000
 
 type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
 export type StoredCol = RecordCol | 'shipments'
-type MetaKey = 'cargo' | 'rs'
+type MetaKey = 'cargo' | 'rs' | 'sms'
 
 mkdirSync(dirname(FILE), { recursive: true })
 const sql = new DatabaseSync(FILE)
@@ -80,19 +81,30 @@ function getMeta<T>(key: string): T | undefined {
   return row ? (JSON.parse(row.value) as T) : undefined
 }
 const setMetaStmt = sql.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
-const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(key === 'rs' ? sealRs(value as RsSettings) : value))
+const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(seal(key, value)))
 
-/* The RS.ge password is encrypted in the database and plain only in memory. */
-const sealRs = (rs: RsSettings): RsSettings => ({ ...rs, sp: encrypt(rs.sp ?? '') })
-function openRs(rs: RsSettings): RsSettings {
-  if (!rs?.sp) return rs
+/* Secrets (the RS.ge password, the SMS API key) are encrypted in the database and plain only in memory. */
+const SECRET_FIELD: Record<string, { field: string; what: string }> = {
+  rs: { field: 'sp', what: 'RS.ge password — reconnect RS.ge in settings' },
+  sms: { field: 'apiKey', what: 'SMS API key — enter it again in the SMS settings' },
+}
+function seal(key: string, value: unknown) {
+  const s = SECRET_FIELD[key]
+  if (!s || !value) return value
+  const v = value as Record<string, string>
+  return { ...v, [s.field]: encrypt(v[s.field] ?? '') }
+}
+function openSecret<T>(key: 'rs' | 'sms', value: T): T {
+  const { field, what } = SECRET_FIELD[key]
+  const v = value as Record<string, string> | undefined
+  if (!v?.[field]) return value
   try {
-    return { ...rs, sp: decrypt(rs.sp) }
+    return { ...v, [field]: decrypt(v[field]) } as T
   } catch {
-    // Wrong or lost HC_SECRET_KEY: the password is unreadable. Treat RS.ge as disconnected
+    // Wrong or lost HC_SECRET_KEY: the secret is unreadable. Treat the service as disconnected
     // (the admin enters it again) instead of refusing to start.
-    console.error('[secret] the stored RS.ge password can\'t be decrypted with HC_SECRET_KEY — reconnect RS.ge in settings')
-    return { ...rs, sp: '' }
+    console.error(`[secret] can't decrypt the stored ${what}`)
+    return { ...v, [field]: '' } as T
   }
 }
 
@@ -126,7 +138,9 @@ function readAll(): Database | null {
     shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
     logs: trimLogs(parseRows(sql.prepare('SELECT data FROM logs ORDER BY rowid DESC').all())),
     cargo: getMeta('cargo')!,
-    rs: openRs(getMeta('rs')!),
+    rs: openSecret('rs', getMeta<RsSettings>('rs')!),
+    // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
+    sms: openSecret('sms', getMeta<SmsSettings>('sms') ?? defaultSmsSettings()),
   }
 }
 
@@ -159,6 +173,7 @@ function replaceAll(db: Database) {
     sql.prepare("DELETE FROM meta WHERE key = 'settings'").run()
     setMeta('cargo', db.cargo)
     setMeta('rs', db.rs)
+    setMeta('sms', db.sms)
     if (!instance) setMeta('instance', (instance = randomBytes(6).toString('base64url')))
   })
 }
@@ -207,12 +222,12 @@ let mem: Database = (() => {
 })()
 console.log(`[db] ${FILE}`)
 
-// A password stored before encryption existed: encrypt it now.
-{
-  const sp = getMeta<RsSettings>('rs')?.sp
-  if (sp && !isEncrypted(sp)) {
-    tx(() => setMeta('rs', mem.rs), false)
-    console.log('[secret] encrypted the stored RS.ge password')
+// A secret stored before encryption existed: encrypt it now.
+for (const key of ['rs', 'sms'] as const) {
+  const plain = getMeta<Record<string, string>>(key)?.[SECRET_FIELD[key].field]
+  if (plain && !isEncrypted(plain)) {
+    tx(() => setMeta(key, mem[key]), false)
+    console.log(`[secret] encrypted the stored ${key} secret`)
   }
 }
 

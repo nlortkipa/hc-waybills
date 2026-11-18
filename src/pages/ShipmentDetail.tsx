@@ -8,6 +8,7 @@ import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatTonnes } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { plateKey, RS_STATUS } from '../lib/rs'
+import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { StepStatus } from '../types'
@@ -37,6 +38,13 @@ export function ShipmentDetail() {
       current = false
     }
   }, [readable, id])
+  // …and asks smsoffice.ge whether the driver got the SMS, until the answer is final.
+  const smsOpen = !!s && s.sms.status === 'ok' && !!s.sms.reference && !(s.sms.delivery && SMS_FINAL.includes(s.sms.delivery))
+  const smsRef = s?.sms.reference
+  useEffect(() => {
+    if (smsOpen && id) shipments.refreshSms(id).catch(() => {})
+  }, [smsOpen, smsRef, id])
+
   const readRs = async () => {
     setRsReading(true)
     try {
@@ -67,6 +75,16 @@ export function ShipmentDetail() {
   const r = s.rsRemote
   const rGood = r?.goods[0]
   const rStatus = r && (RS_STATUS[r.status] ?? { label: String(r.status), tone: 'gray' as const })
+  // 'ok' only means smsoffice.ge accepted it; delivery says whether the phone got it.
+  const smsLost = s.sms.status === 'ok' && (s.sms.delivery === 'Undelivered' || s.sms.delivery === 'Expired')
+  const smsBadge =
+    s.sms.status === 'failed'
+      ? { label: 'ვერ გაიგზავნა', tone: 'red' as const }
+      : s.sms.status === 'ok'
+        ? s.sms.delivery
+          ? SMS_DELIVERY[s.sms.delivery]
+          : { label: 'გაგზავნილია', tone: 'green' as const }
+        : { label: 'იგზავნება', tone: 'blue' as const }
 
   const finish = async () => {
     if (!confirm) return
@@ -98,8 +116,11 @@ export function ShipmentDetail() {
       title: 'მძღოლისთვის SMS-ის გაგზავნა',
       icon: <MessageSquare className="size-4" />,
       status: s.sms.status,
-      detail: s.sms.status === 'ok' ? `გაეგზავნა ${s.sms.to}` : s.sms.error ?? (s.sms.status === 'running' ? 'იგზავნება…' : s.sms.status === 'skipped' ? 'გამოტოვებულია' : 'მოლოდინში'),
-      action: canAct && s.sms.status === 'failed' && (
+      detail:
+        s.sms.status === 'ok'
+          ? `გაეგზავნა ${s.sms.to}${s.sms.delivery && s.sms.delivery !== 'Pending' ? ` · ${SMS_DELIVERY[s.sms.delivery].label.toLowerCase()}` : ''}`
+          : s.sms.error ?? (s.sms.status === 'running' ? 'იგზავნება…' : s.sms.status === 'skipped' ? 'გამოტოვებულია' : 'მოლოდინში'),
+      action: canAct && (s.sms.status === 'failed' || smsLost) && (
         <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.retrySms(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა გაგზავნა
         </Button>
@@ -261,7 +282,7 @@ export function ShipmentDetail() {
             <Card className="p-5">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900">SMS მძღოლს</h2>
-                <Badge tone={s.sms.status === 'ok' ? 'green' : s.sms.status === 'failed' ? 'red' : 'blue'}>{s.sms.status === 'ok' ? 'მიწოდებულია' : s.sms.status === 'failed' ? 'ვერ გაიგზავნა' : 'იგზავნება'}</Badge>
+                <Badge tone={smsBadge.tone}>{smsBadge.label}</Badge>
               </div>
               <div className="rounded-2xl rounded-tl-sm bg-slate-100 px-4 py-3 text-sm text-slate-800">{s.sms.text}</div>
               <p className="mt-2 text-xs text-slate-400">მიმღები: {s.sms.to}</p>

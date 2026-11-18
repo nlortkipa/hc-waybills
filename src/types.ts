@@ -117,11 +117,41 @@ export interface Shipment {
    */
   rsRemote?: RsRemoteWaybill
   rs: { status: StepStatus; error?: string; at?: string }
-  sms: { status: StepStatus; error?: string; at?: string; to?: string; text?: string }
+  sms: {
+    status: StepStatus
+    error?: string
+    at?: string
+    to?: string
+    text?: string
+    /** smsoffice.ge's label for the message (international number + reference ask for its delivery status). */
+    destination?: string
+    reference?: string
+    /** Delivery as smsoffice.ge last reported it; 'ok' above only means it was accepted for sending. */
+    delivery?: SmsDelivery
+    deliveryCheckedAt?: string
+  }
   events: ShipmentEvent[]
 }
 
 export type ServiceName = 'RS.ge' | 'SMS'
+
+/** Delivery status of a sent SMS, as smsoffice.ge reports it. */
+export type SmsDelivery = 'Pending' | 'Delivered' | 'Undelivered' | 'Expired' | 'Unknown'
+
+/**
+ * smsoffice.ge account, set by the admin. The API key never leaves the server: clients get '' plus apiKeySet.
+ */
+export interface SmsSettings {
+  /** API key from smsoffice.ge (profile → integration). Empty in every client copy. */
+  apiKey: string
+  /** True when a key is stored on the server. Set only in client copies. */
+  apiKeySet?: boolean
+  /** Sender name registered on smsoffice.ge: up to 11 Latin letters, digits, '-' or '.'. */
+  sender: string
+  /** Messages left on the account when it was last checked. */
+  balance?: number
+  checkedAt?: string
+}
 
 export interface IntegrationLog {
   id: string
@@ -277,4 +307,5 @@ export interface Database {
   logs: IntegrationLog[]
   cargo: CargoDefaults
   rs: RsSettings
+  sms: SmsSettings
 }
