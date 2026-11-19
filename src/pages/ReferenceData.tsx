@@ -1,6 +1,7 @@
-import { AlertTriangle, Building2, Check, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, Check, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { products, refs, trucks, type RefCollection } from '../api'
+import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
+import { TIN_RE } from '../components/TinLookup'
 import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
@@ -41,6 +42,8 @@ interface FieldDef {
   lock?: (d: Database, rec: Rec, isNew: boolean) => string | undefined
   /** Other fields this one fills when it is changed (they stay editable unless locked). */
   fills?: (d: Database, value: string) => Partial<Rec>
+  /** A tax ID: a search button (or Enter) looks its name up on RS.ge and puts it in this other field. */
+  lookup?: string
 }
 
 interface TabDef {
@@ -116,6 +119,7 @@ const TABS: TabDef[] = [
         label: 'ზედნადების ტიპი',
         type: 'select',
         optional: true,
+        wide: true,
         options: () => [{ value: '', label: 'მყიდველის მიხედვით' }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
       },
       {
@@ -123,13 +127,14 @@ const TABS: TabDef[] = [
         label: 'მყიდველის ს/ნ',
         optional: true,
         mono: true,
+        lookup: 'buyerName',
         showIf: (r) => r.waybillType !== '1',
       },
       {
         key: 'buyerName',
         label: 'მყიდველის დასახელება',
         optional: true,
-        showIf: (r) => r.waybillType !== '1' && !!r.buyerTin?.trim(),
+        showIf: (r) => r.waybillType !== '1',
       },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
@@ -583,6 +588,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [searching, setSearching] = useState('')
   const isNew = !rec.id
   /** The record as shown and saved: with the values other fields lock. */
   const view = (x: Rec): Rec => {
@@ -645,6 +651,22 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     if (key === 'role' && value === 'operator' && !carrierIds.length && liveCarriers.length === 1) setCarrierIds([liveCarriers[0].id])
   }
 
+  /** Looks a tax ID field's name up on RS.ge (any number: one RS.ge doesn't know is typed by hand). */
+  const search = async (f: FieldDef) => {
+    const tin = (form[f.key] ?? '').trim()
+    if (!tin) return setErrors((x) => ({ ...x, [f.key]: 'შეიყვანე ნომერი' }))
+    setSearching(f.key)
+    try {
+      const { name } = await rsSettings.nameFromTin(tin, !TIN_RE.test(tin))
+      if (name) setField(f.lookup!, name)
+      setErrors((x) => ({ ...x, [f.key]: name ? '' : 'RS.ge-ზე ვერ მოიძებნა — დასახელება შეიყვანე ხელით' }))
+    } catch (err) {
+      setErrors((x) => ({ ...x, [f.key]: (err as Error).message }))
+    } finally {
+      setSearching('')
+    }
+  }
+
   const r = view(form)
   const fields = tab.fields.filter((f) => !f.showIf || f.showIf(r))
   const routeStart = tab.key === 'routes' ? d.carriers.find((c) => c.id === r.carrierId)?.startAddress : undefined
@@ -686,6 +708,32 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                       </option>
                     ))}
                   </Select>
+                ) : f.lookup ? (
+                  <div className="flex gap-2">
+                    <Input
+                      value={r[f.key] ?? ''}
+                      placeholder={f.placeholder}
+                      inputMode="numeric"
+                      className={f.mono ? 'font-mono' : undefined}
+                      invalid={!!errors[f.key]}
+                      onChange={(e) => setField(f.key, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        e.preventDefault()
+                        void search(f)
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void search(f)}
+                      disabled={searching === f.key}
+                      aria-label="RS.ge-ზე ძებნა"
+                      title="RS.ge-ზე ძებნა"
+                      className="pressable inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-[10px] bg-fill text-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-wait"
+                    >
+                      {searching === f.key ? <Loader2 className="size-[18px] animate-spin" /> : <Search className="size-[18px]" />}
+                    </button>
+                  </div>
                 ) : (
                   <Input
                     type={f.type ?? 'text'}
@@ -699,16 +747,15 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                   />
                 )}
               </Field>
+              {f.key === 'carrierId' && routeStart !== undefined && (
+                <p className="mt-1.5 px-1 text-sm">
+                  <span className="text-slate-500">დაწყების მისამართი: </span>
+                  <span className="font-medium text-slate-900">{routeStart || '—'}</span>
+                </p>
+              )}
             </div>
           )
         })}
-
-        {routeStart !== undefined && (
-          <div className="rounded-[10px] bg-fill px-4 py-3 text-sm sm:col-span-2">
-            <span className="text-slate-500">დაწყების მისამართი: </span>
-            <span className="font-medium text-slate-900">{routeStart || '—'}</span>
-          </div>
-        )}
 
         {pickCarriers && (
           <Chips
