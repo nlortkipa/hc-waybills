@@ -31,7 +31,7 @@ interface FieldDef {
   showIf?: (rec: Rec) => boolean
   mono?: boolean
   /** Value of a new record (default: '' or a select's first option). */
-  initial?: (d: Database) => string
+  initial?: (d: Database, r?: Rec) => string
   /** Can't be changed once saved; `hint` says why. */
   fixed?: boolean
   /** A select with a long list: its menu has a search field. */
@@ -45,6 +45,8 @@ interface FieldDef {
   /** A tax ID: a search button (or Enter) looks its name up on RS.ge and puts it in this other field. */
   lookup?: string
 }
+
+const vFullName = (v: string) => (v.trim().split(/\s+/).length < 2 ? 'შეიყვანე სახელი და გვარი' : null)
 
 interface TabDef {
   key: RefCollection
@@ -118,9 +120,10 @@ const TABS: TabDef[] = [
         key: 'waybillType',
         label: 'ზედნადების ტიპი',
         type: 'select',
-        optional: true,
         wide: true,
-        options: () => [{ value: '', label: 'მყიდველის მიხედვით' }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
+        // Routes saved without a type show the one their waybills got (buyer set → 2, else 1).
+        initial: (d, r) => String(waybillDefaults(d.rs, r as unknown as CarrierRoute | undefined).type),
+        options: () => WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label })),
       },
       {
         key: 'buyerTin',
@@ -164,8 +167,7 @@ const TABS: TabDef[] = [
     singular: 'მძღოლის',
     icon: UserRound,
     fields: [
-      { key: 'firstName', label: 'სახელი' },
-      { key: 'lastName', label: 'გვარი' },
+      { key: 'fullName', label: 'სახელი და გვარი', validate: vFullName },
       { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true },
       { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       {
@@ -246,8 +248,7 @@ const TABS: TabDef[] = [
     singular: 'მომხმარებლის',
     icon: Users,
     fields: [
-      { key: 'firstName', label: 'სახელი' },
-      { key: 'lastName', label: 'გვარი' },
+      { key: 'fullName', label: 'სახელი და გვარი', validate: vFullName },
       { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       { key: 'email', label: 'ელ-ფოსტა', type: 'email', validate: vEmail },
       {
@@ -578,7 +579,9 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     // The form edits text: numbers (a product's unit) become strings.
     const x = Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typeof v === 'number' ? String(v) : v])) as Rec
     // Fields added later (e.g. a product's price and VAT type) start at their default on older records.
-    if (x.id) for (const f of tab.fields) if (x[f.key] == null && f.initial) x[f.key] = f.initial(d)
+    if (x.id) for (const f of tab.fields) if (x[f.key] == null && f.initial) x[f.key] = f.initial(d, x)
+    // სახელი and გვარი are typed in one field.
+    if (tab.fields.some((f) => f.key === 'fullName')) x.fullName = [x.firstName, x.lastName].filter(Boolean).join(' ')
     return tab.key === 'drivers' && !x.citizenship ? { ...x, citizenship: 'GE' } : x
   })
   const liveCarriers = active(d.carriers)
@@ -627,6 +630,11 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         if (f.key === 'plateNumber' || f.key === 'trailerNumber') v = v.toUpperCase()
         if (f.key === 'phone') v = fmtPhone(v)
         if (f.key === 'price') v = v.replace(',', '.')
+        if (f.key === 'fullName') {
+          const [first, ...rest] = v.split(/\s+/)
+          Object.assign(clean, { firstName: first, lastName: rest.join(' ') })
+          continue
+        }
         clean[f.key] = v
       }
       if (pickCarriers) Object.assign(clean, { carrierIds })

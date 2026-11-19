@@ -102,7 +102,7 @@ export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[]
 /** Waybill types this app writes, as the RS.ge portal names them. */
 export const WAYBILL_TYPES: { value: WaybillType; label: string; hint: string }[] = [
   { value: 1, label: 'შიდა გადაზიდვა', hint: 'კომპანიის ობიექტებს შორის — მყიდველი თავად გამყიდველია' },
-  { value: 2, label: 'მიწოდება ტრანსპორტირებით', hint: 'ტვირთი მიდის მყიდველთან' },
+  { value: 2, label: 'ტრანსპორტირებით', hint: 'ტვირთი მიდის მყიდველთან' },
   { value: 3, label: 'ტრანსპორტირების გარეშე', hint: 'მყიდველი ტვირთს ადგილზე იბარებს — მძღოლი და მანქანა არ არის საჭირო' },
   { value: 5, label: 'უკან დაბრუნება', hint: 'საქონლის დაბრუნება მყიდველისგან' },
 ]

@@ -37,8 +37,8 @@ export interface CarrierRoute extends SoftDeletable {
 }
 
 /**
- * RS.ge waybill types this app writes: 1 შიდა გადაზიდვა, 2 მიწოდება ტრანსპორტირებით,
- * 3 მიწოდება ტრანსპორტირების გარეშე, 5 უკან დაბრუნება. (4 დისტრიბუცია and 6 ქვე-ზედნადები are
+ * RS.ge waybill types this app writes: 1 შიდა გადაზიდვა, 2 ტრანსპორტირებით,
+ * 3 ტრანსპორტირების გარეშე, 5 უკან დაბრუნება. (4 დისტრიბუცია and 6 ქვე-ზედნადები are
  * not used: a truck trip here is always one waybill.)
  */
 export type WaybillType = 1 | 2 | 3 | 5
