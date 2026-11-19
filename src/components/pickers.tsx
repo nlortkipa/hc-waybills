@@ -5,7 +5,7 @@
  *  - DatePicker: a date field that opens a mini calendar popover.
  * Focus stays on the trigger; the keyboard drives the open popup from there.
  */
-import { CalendarDays, Check, ChevronLeft, ChevronRight, ChevronsUpDown } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, ChevronsUpDown, Search } from 'lucide-react'
 import {
   Children,
   Fragment,
@@ -97,22 +97,29 @@ const panelCls = `${panelBase} overflow-y-auto overscroll-contain`
 
 /* -------------------------------- Select -------------------------------- */
 
-type Opt = { value: string; label: ReactNode; text: string; disabled?: boolean }
+/** `label`: what the menu row shows; `short`: what the closed button shows; `text`: what search and type-ahead match. */
+type Opt = { value: string; label: ReactNode; short: ReactNode; text: string; disabled?: boolean }
 
+/** Plain text of a node; separate elements are kept apart by a space so search can't match across them. */
 function textOf(node: ReactNode): string {
   return Children.toArray(node)
-    .map((n) => (typeof n === 'string' || typeof n === 'number' ? String(n) : isValidElement(n) ? textOf((n.props as { children?: ReactNode }).children) : ''))
+    .map((n) => (typeof n === 'string' || typeof n === 'number' ? String(n) : isValidElement(n) ? ` ${textOf((n.props as { children?: ReactNode }).children)} ` : ''))
     .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function collectOptions(children: ReactNode): Opt[] {
   const out: Opt[] = []
   Children.forEach(children, (c) => {
     if (!isValidElement(c)) return
-    const el = c as ReactElement<{ value?: string | number; disabled?: boolean; children?: ReactNode }>
+    const el = c as ReactElement<{ value?: string | number; label?: string; disabled?: boolean; children?: ReactNode; 'data-search'?: string }>
     if (el.type === 'option') {
-      const text = textOf(el.props.children)
-      out.push({ value: String(el.props.value ?? text), label: el.props.children, text, disabled: el.props.disabled })
+      const own = textOf(el.props.children)
+      const { label } = el.props
+      // Search also matches the button text and any extra words the option lists (content built from components has no text of its own).
+      const text = [label, el.props['data-search'], own].filter(Boolean).join(' ')
+      out.push({ value: String(el.props.value ?? own), label: el.props.children, short: label ?? el.props.children, text, disabled: el.props.disabled })
     } else if (el.type === Fragment) {
       out.push(...collectOptions(el.props.children))
     }
@@ -126,7 +133,10 @@ export type SelectProps = {
   onChange?: (e: { target: { value: string } }) => void
   /** Shown (dimmed) when no option matches `value`. */
   placeholder?: string
-  /** `<option>` elements, as with a native select. */
+  /**
+   * `<option>` elements, as with a native select. An option's `label` (text) is shown on the closed button instead of its
+   * content; `data-search` adds words the search matches.
+   */
   children?: ReactNode
   invalid?: boolean
   disabled?: boolean
@@ -138,9 +148,16 @@ export type SelectProps = {
   /** Shows only this icon as a small square button (e.g. a lookup next to a field) instead of the field-like button. */
   icon?: ReactNode
   title?: string
+  /**
+   * Options laid out by the caller (icon, title, subtitle…): taller list rows with the checkmark at the trailing edge.
+   * Inside an option, `group-data-hi:` styles apply while its row is highlighted (white on the accent).
+   */
+  rich?: boolean
+  /** Shown at the top of the open menu, above the options (e.g. what they all have in common). */
+  header?: ReactNode
 }
 
-export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title }: SelectProps) {
+export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, header }: SelectProps) {
   const all = collectOptions(children)
   const [query, setQuery] = useState('')
   const q = searchable ? query.trim().toLowerCase() : ''
@@ -153,6 +170,7 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
   const [flash, setFlash] = useState<string | null>(null)
   const btn = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
+  const search = useRef<HTMLInputElement>(null)
   const listId = useId()
   const typed = useRef({ buf: '', t: 0 })
   const style = useAnchoredPosition(open, btn, panel, !icon, query)
@@ -178,6 +196,12 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
     setFlash(o.value)
     window.setTimeout(close, 170)
   }
+
+  // Into the search field once the menu is placed: while it is still hidden for measuring, focus() is ignored.
+  const placed = style.visibility !== 'hidden'
+  useEffect(() => {
+    if (open && placed) search.current?.focus()
+  }, [open, placed])
 
   // Keep the keyboard-highlighted row visible.
   useEffect(() => {
@@ -246,12 +270,12 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
         className={
           icon
             ? cx('grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-40', open && 'bg-brand-50 text-brand-600', className)
-            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', open && 'ring-2 ring-brand-500/50', invalid && invalidCls, className)
+            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', open && 'ring-2 ring-brand-500/50!', invalid && invalidCls, className)
         }
       >
         {icon ?? (
           <>
-            <span className={cx('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>{selected ? selected.label : placeholder}</span>
+            <span className={cx('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>{selected ? selected.short : placeholder}</span>
             <span className="grid size-[22px] shrink-0 place-items-center rounded-[6px] bg-brand-500 text-white shadow-[0_0.5px_1px_rgba(0,0,0,0.2),inset_0_0.5px_0_rgba(255,255,255,0.25)]">
               <ChevronsUpDown className="size-3.5" strokeWidth={2.5} />
             </span>
@@ -273,19 +297,23 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
             onMouseLeave={() => flash == null && setActive(-1)}
           >
             {searchable && (
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setActive(e.target.value.trim() ? 0 : -1)
-                }}
-                onKeyDown={onKeyDown}
-                placeholder="ძებნა…"
-                aria-label="ძებნა"
-                className="mb-1 h-9 w-full shrink-0 rounded-[6px] bg-fill px-2.5 text-[15px] text-slate-900 outline-none placeholder:text-slate-400 sm:h-7 sm:text-[13px]"
-              />
+              <label className="relative mb-1 block shrink-0">
+                <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-slate-400" strokeWidth={2.25} />
+                <input
+                  ref={search}
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value)
+                    setActive(e.target.value.trim() ? 0 : -1)
+                  }}
+                  onKeyDown={onKeyDown}
+                  placeholder="ძებნა"
+                  aria-label="ძებნა"
+                  className="h-9 w-full rounded-[6px] bg-fill pr-2.5 pl-7 text-[15px] text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-brand-500/40 sm:h-7 sm:text-[13px]"
+                />
+              </label>
             )}
+            {header && <div className="mx-1.5 mb-1 shrink-0 border-b border-separator pt-0.5 pb-1.5">{header}</div>}
             <div className={searchable ? 'min-h-0 flex-1 overflow-y-auto overscroll-contain' : 'contents'}>
               {opts.length === 0 && <div className="px-3 py-1.5 text-[15px] text-slate-400 sm:text-[13px]">{q ? 'ვერაფერი მოიძებნა' : 'ვარიანტები არ არის'}</div>}
               {opts.map((o, i) => {
@@ -299,16 +327,21 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                     role="option"
                     aria-selected={on}
                     aria-disabled={o.disabled || undefined}
+                    data-hi={hi || undefined}
                     onMouseMove={() => !o.disabled && flash == null && active !== i && setActive(i)}
                     onClick={() => choose(o)}
                     className={cx(
-                      'flex min-h-9 cursor-default items-center gap-1 rounded-[5px] py-1.5 pr-3 pl-1 text-[15px] leading-snug select-none sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
+                      'group flex cursor-default items-center rounded-[5px] text-[15px] leading-snug select-none',
+                      rich
+                        ? 'min-h-14 gap-2.5 rounded-[7px] py-2 pr-2.5 pl-2 sm:min-h-11 sm:py-1.5 sm:text-[13px]'
+                        : 'min-h-9 gap-1 py-1.5 pr-3 pl-1 sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
                       o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
                       flash === o.value && 'animate-menu-blink',
                     )}
                   >
-                    <Check className={cx('size-3.5 shrink-0', !on && 'invisible')} strokeWidth={3} />
-                    <span className="min-w-0 [overflow-wrap:anywhere] sm:truncate">{o.label}</span>
+                    {!rich && <Check className={cx('size-3.5 shrink-0', !on && 'invisible')} strokeWidth={3} />}
+                    <span className={cx('min-w-0 [overflow-wrap:anywhere]', rich ? 'flex-1' : 'sm:truncate')}>{o.label}</span>
+                    {rich && <Check className={cx('size-4 shrink-0', hi ? 'text-white' : 'text-brand-500', !on && 'invisible')} strokeWidth={2.75} />}
                   </div>
                 )
               })}

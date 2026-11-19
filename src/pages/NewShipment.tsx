@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, FileCheck2, Info, Loader2, PencilLine, Save } from 'lucide-react'
+import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDot, FileCheck2, Info, Loader2, MapPin, PencilLine, Save, Warehouse } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
@@ -313,13 +313,25 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               error={errors.routeId}
               hint={carrier && !routes.length ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.' : undefined}
             >
-              <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length} searchable={routes.length > 8}>
-                {routes.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {routeLabel(d.carriers, x)}
-                    {x.buyerName ? ` · ${x.buyerName}` : ''}
-                  </option>
-                ))}
+              <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length} searchable
+                rich
+                header={
+                  // Every route of a carrier starts at the carrier's address: said once, not on each row.
+                  <span className="flex items-center gap-1.5 px-0.5 text-[13px] text-slate-500 sm:text-[12px]">
+                    <CircleDot className="size-3.5 shrink-0" strokeWidth={2.25} />
+                    <span className="shrink-0">დაწყება</span>
+                    <span className="min-w-0 truncate font-medium text-slate-700">{carrier?.startAddress || '—'}</span>
+                  </span>
+                }
+              >
+                {routes.map((x) => {
+                  const buyer = x.buyerName || x.buyerTin
+                  return (
+                    <option key={x.id} value={x.id} label={`${routeLabel(d.carriers, x)}${buyer ? ` · ${buyer}` : ''}`} data-search={[x.buyerTin, buyer ? '' : 'შიდა გადაზიდვა'].join(' ')}>
+                      <RouteOption end={routeAddresses(d.carriers, x).end} buyerName={x.buyerName} buyerTin={x.buyerTin} />
+                    </option>
+                  )
+                })}
               </Select>
             </Field>
 
@@ -539,5 +551,30 @@ function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
       <dt className="shrink-0 text-slate-500">{k}</dt>
       <dd className={`min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
     </div>
+  )
+}
+
+/** A route in the route picker: where it goes, and to whom (or that it's an internal move). */
+function RouteOption({ end, buyerName, buyerTin }: { end: string; buyerName?: string; buyerTin?: string }) {
+  const Icon = buyerName || buyerTin ? MapPin : Warehouse
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white sm:size-8 sm:rounded-[7px]">
+        <Icon className="size-[17px] sm:size-4" strokeWidth={2} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{end || '—'}</span>
+        <span className="flex min-w-0 gap-1.5 text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]">
+          {buyerName || buyerTin ? (
+            <>
+              {buyerName && <span className="min-w-0 truncate">{buyerName}</span>}
+              {buyerTin && <span className="shrink-0 tabular-nums">{buyerTin}</span>}
+            </>
+          ) : (
+            <span>შიდა გადაზიდვა</span>
+          )}
+        </span>
+      </span>
+    </span>
   )
 }
