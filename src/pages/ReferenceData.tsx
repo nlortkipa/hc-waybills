@@ -47,6 +47,7 @@ interface FieldDef {
 }
 
 const vFullName = (v: string) => (v.trim().split(/\s+/).length < 2 ? 'შეიყვანე სახელი და გვარი' : null)
+const vAnyName = (v: string) => (v.trim() ? null : 'შეიყვანე სახელი')
 
 interface TabDef {
   key: RefCollection
@@ -167,7 +168,7 @@ const TABS: TabDef[] = [
     singular: 'მძღოლის',
     icon: UserRound,
     fields: [
-      { key: 'fullName', label: 'სახელი და გვარი', validate: vFullName },
+      { key: 'fullName', label: 'სახელი და გვარი', validate: vAnyName },
       { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true },
       { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       {
