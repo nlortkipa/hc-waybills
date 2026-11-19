@@ -1,4 +1,4 @@
-import { Building2, Check, Package, Pencil, Plus, RefreshCw, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, Check, Package, Pencil, Plus, RefreshCw, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { products, refs, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
@@ -33,7 +33,7 @@ interface FieldDef {
   /** Value of a new record (default: '' or a select's first option). */
   initial?: (d: Database) => string
   /** Can't be changed once saved; `hint` says why. */
-  fixed?: { hint: string }
+  fixed?: boolean
   /** A select with a long list: its menu has a search field. */
   searchable?: boolean
   /** Under the field. */
@@ -123,7 +123,6 @@ const TABS: TabDef[] = [
         type: 'select',
         optional: true,
         options: (d) => [{ value: '', label: `RS.ge-ს პარამეტრებიდან (${waybillTypeLabel(waybillDefaults(d.rs).type)})` }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
-        hint: 'ოპერატორს რეისზე შეუძლია შეცვალოს.',
       },
       {
         key: 'buyerTin',
@@ -131,14 +130,12 @@ const TABS: TabDef[] = [
         optional: true,
         mono: true,
         showIf: (r) => r.waybillType !== '1',
-        hint: 'ცარიელი — RS.ge-ს პარამეტრების მყიდველი. დასახელება RS.ge-დან შეივსება.',
       },
       {
         key: 'buyerName',
         label: 'მყიდველის დასახელება',
         optional: true,
         showIf: (r) => r.waybillType !== '1' && !!r.buyerTin?.trim(),
-        hint: 'მხოლოდ თუ RS.ge-ზე არ არის (უცხოელი მყიდველი).',
       },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
@@ -228,7 +225,7 @@ const TABS: TabDef[] = [
         label: 'შტრიხკოდი',
         placeholder: 'CRS-05',
         mono: true,
-        fixed: { hint: 'RS.ge-ზე პროდუქტი შტრიხკოდით იძებნება, ამიტომ ის არ იცვლება.' },
+        fixed: true,
         // A saved product's bar code never changes (it is the product on RS.ge).
         lock: (d, r, isNew) => (isNew ? akcizOfRec(d, r)?.code : undefined),
       },
@@ -257,7 +254,6 @@ const TABS: TabDef[] = [
           ...(d.rs.akciz ?? []).map((a) => ({ value: String(a.id), label: `${a.code} · ${a.title}` })),
         ],
         initial: () => '0',
-        hint: 'მხოლოდ აქციზური საქონლისთვის. როგორც RS.ge-ზე, შტრიხკოდი და ერთეული აქციზის კოდიდან ივსება და არ იცვლება.',
         // As on RS.ge's form, the name is filled from the code (and stays editable).
         fills: (d, v) => {
           const a = d.rs.akciz?.find((x) => String(x.id) === v)
@@ -359,7 +355,6 @@ export function ReferenceData() {
     <>
       <PageHeader
         title="ცნობარები"
-        subtitle="კარიერები, მარშრუტები, მძღოლები, მანქანები, პროდუქტები და მომხმარებლები."
         actions={
           <span className="hidden sm:block">
             <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())} disabled={productsLocked}>
@@ -608,6 +603,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const isNew = !rec.id
   /** The record as shown and saved: with the values other fields lock. */
   const view = (x: Rec): Rec => {
@@ -642,6 +638,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         errs.endAddress = 'ამ კარიერს ეს მარშრუტი ამ პროდუქტებით უკვე აქვს'
     }
     setErrors(errs)
+    setSaveError('')
     if (Object.keys(errs).length) return
     setBusy(true)
     try {
@@ -659,7 +656,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
     } catch (err) {
-      toast('error', (err as Error).message)
+      setSaveError((err as Error).message)
       setBusy(false)
     }
   }
@@ -698,12 +695,18 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       }
     >
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2" noValidate>
+        {saveError && (
+          <div role="alert" className="flex items-start gap-2 rounded-[10px] bg-rose-50 px-4 py-3 text-sm text-rose-700 sm:col-span-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-rose-500" />
+            <span>{saveError}</span>
+          </div>
+        )}
         {fields.map((f) => {
           const opts = f.type === 'select' ? f.options!(d, r) : []
           const locked = f.lock?.(d, form, isNew) !== undefined
           return (
             <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : locked ? 'აქციზის კოდით არის განსაზღვრული' : f.fixed && !isNew ? f.fixed.hint : f.hint}>
+              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : undefined}>
                 {f.type === 'select' ? (
                   <Select searchable={f.searchable} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length || locked}>
                     {opts.map((o) => (
@@ -741,7 +744,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         {pickCarriers && (
           <Chips
             label="კარიერები"
-            text="ოპერატორი რეისის შექმნისას აირჩევს ერთ-ერთს და ხედავს მონიშნული კარიერების რეისებს."
             items={liveCarriers.map((c) => ({ id: c.id, label: c.name }))}
             value={carrierIds}
             onChange={(v) => {
@@ -759,11 +761,10 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
 }
 
 /** Toggle buttons for picking several records (an operator's carriers, a route's products). */
-function Chips({ label, text, items, empty, value, onChange, error }: { label: string; text: string; items: { id: string; label: string; sub?: string }[]; empty?: string; value: string[]; onChange: (v: string[]) => void; error?: string }) {
+function Chips({ label, items, empty, value, onChange, error }: { label: string; items: { id: string; label: string; sub?: string }[]; empty?: string; value: string[]; onChange: (v: string[]) => void; error?: string }) {
   return (
     <div className="sm:col-span-2">
       <p className="mb-1.5 text-sm font-medium text-slate-700">{label}</p>
-      <p className="mb-2 text-xs text-slate-500">{text}</p>
       {items.length ? (
         <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
           {items.map((x) => {

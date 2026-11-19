@@ -1,12 +1,11 @@
-import { AlertTriangle, CheckCircle2, FileStack, FileText, PlugZap, RefreshCw, Unplug } from 'lucide-react'
+import { CheckCircle2, FileStack, RefreshCw, Unplug } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { rsSettings } from '../api'
 import { useDb } from '../api/store'
 import { Button, Card, ConfirmModal, Field, Input, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { isInternal, RS_TRANS_OTHER, rsMissing } from '../lib/rs'
-import { active, formatDateTime } from '../lib/util'
+import { isInternal, RS_TRANS_OTHER } from '../lib/rs'
 import type { RsSettings } from '../types'
 import { LookupLine, TIN_RE, useTinName } from '../components/TinLookup'
 
@@ -41,13 +40,11 @@ const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet
 export function RsSettings() {
   const d = useDb()
   const connected = isConnected(d.rs)
-  const missing = [...rsMissing(d.rs, { hasCreds: connected }), ...(!active(d.products).length ? ['პროდუქტი (ცნობარები → პროდუქტები)'] : [])]
 
   return (
     <>
       <PageHeader
         title="RS.ge"
-        subtitle="სერვისის მომხმარებელი, მყიდველი და ზედნადების პარამეტრები. პროდუქტები — ცნობარებში."
         actions={
           connected && (
             <Link to="/waybills" className="pressable inline-flex h-8 items-center gap-1.5 rounded-full bg-fill px-3.5 text-[13px] font-semibold text-brand-600">
@@ -57,20 +54,6 @@ export function RsSettings() {
         }
       />
       <div className="space-y-4">
-        {missing.length > 0 ? (
-          <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-            <div>
-              <p className="font-medium">ზედნადებები ვერ აიტვირთება, სანამ არ შეივსება:</p>
-              <p className="mt-1 text-amber-800">{missing.join(' · ')}</p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex gap-3 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 ring-1 ring-emerald-200">
-            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
-            <p>ყველაფერი შევსებულია — ზედნადებები იტვირთება RS.ge-ზე.</p>
-          </div>
-        )}
         <ConnectionCard />
         <DefaultsForm connected={connected} />
       </div>
@@ -163,11 +146,7 @@ function ConnectionCard() {
               ) : (
                 <p className="text-sm text-slate-500">გამყიდველი იკითხება RS.ge-დან…</p>
               )}
-              <p className="text-xs text-slate-500">
-                სერვისის მომხმარებელი <span className="font-mono">{rs.su}</span>
-                {rs.checkedAt && <> · შემოწმდა {formatDateTime(rs.checkedAt)}</>}
-              </p>
-              <SyncLine rs={rs} />
+              {rs.syncError && <SyncLine error={rs.syncError} />}
             </div>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -205,18 +184,14 @@ function ConnectionCard() {
 
   return (
     <form onSubmit={connect} noValidate>
-      <Section
-        icon={<PlugZap className="size-4" />}
-        title="დაკავშირება RS.ge-სთან"
-        text="შეიყვანე სერვისის მომხმარებელი (ფორმატით სახელი:კოდი, ორ ველად) — იქმნება eservices.rs.ge-ზე (მომხმარებლები → სერვისის მომხმარებლები). შენახვამდე RS.ge-ზე შემოწმდება. პაროლი ინახება მხოლოდ სერვერზე."
-      >
-        <Field label="სერვისის მომხმარებლის სახელი" error={errors.suName} hint={import.meta.env.DEV ? 'სატესტო: YVELAM GAMOIYENET' : 'რაც „:“-მდე წერია'}>
+      <Section title="დაკავშირება RS.ge-სთან">
+        <Field label="სერვისის მომხმარებლის სახელი" error={errors.suName} >
           <Input value={suName} autoComplete="off" className="font-mono" placeholder="NAME" invalid={!!errors.suName} onChange={setUser('suName', setSuName)} />
         </Field>
-        <Field label="საიდენტიფიკაციო კოდი" error={errors.suId} hint={import.meta.env.DEV ? 'სატესტო: 12345678910' : 'რაც „:“-ის შემდეგ წერია (9 ან 11 ციფრი)'}>
+        <Field label="საიდენტიფიკაციო კოდი" error={errors.suId} >
           <Input value={suId} inputMode="numeric" autoComplete="off" className="font-mono" placeholder="206322102" invalid={!!errors.suId} onChange={setUser('suId', setSuId)} />
         </Field>
-        <Field label="პაროლი" error={errors.sp} hint={keepsPassword && !sp ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : import.meta.env.DEV ? 'სატესტო: 123456' : undefined}>
+        <Field label="პაროლი" error={errors.sp} hint={keepsPassword && !sp ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : undefined}>
           <Input
             type="password"
             value={sp}
@@ -235,7 +210,7 @@ function ConnectionCard() {
               გაუქმება
             </Button>
           )}
-          <Button type="submit" loading={busy} icon={<PlugZap className="size-4" />}>
+          <Button type="submit" loading={busy}>
             დაკავშირება
           </Button>
         </div>
@@ -307,18 +282,10 @@ function DefaultsForm({ connected }: { connected: boolean }) {
 
   return (
     <form onSubmit={save} noValidate>
-      {!connected && <p className="mb-3 ml-1 text-sm text-slate-500">ჯერ დაუკავშირდი RS.ge-ს — ნომრების შემოწმება და ცნობარები მის გარეშე არ მუშაობს.</p>}
       <fieldset disabled={!connected} className="space-y-4 disabled:pointer-events-none disabled:opacity-50">
-        <Section
-          title="მყიდველი"
-          text={
-            internal
-              ? 'იგზავნება შიდა გადაზიდვა: ტვირთი გადაადგილდება კომპანიის ობიექტებს შორის და მყიდველი თავად გამყიდველია. სხვა მყიდველისთვის ჩაწერე მისი ნომერი.'
-              : 'ზედნადები იგზავნება როგორც მიწოდება ტრანსპორტირებით. ერთი და იგივე ყველა რეისზე.'
-          }
-        >
+        <Section title="მყიდველი">
           <div>
-            <Field label="საიდენტიფიკაციო / პირადი ნომერი (არასავალდებულო)" error={errors.buyerTin} hint={internal && !buyerTin ? 'ცარიელი — შიდა გადაზიდვა' : undefined}>
+            <Field label="საიდენტიფიკაციო / პირადი ნომერი (არასავალდებულო)" error={errors.buyerTin}>
               <Input value={f.buyerTin} className="font-mono" invalid={!!errors.buyerTin} onChange={set('buyerTin')} />
             </Field>
             {!errors.buyerTin && (buyer.state === 'loading' || buyer.state === 'error') && <LookupLine lookup={buyer} />}
@@ -329,11 +296,11 @@ function DefaultsForm({ connected }: { connected: boolean }) {
                 <FixedValue>{rs.sellerTin ? `${rs.sellerName} (გამყიდველი)` : <span className="text-slate-400">შეივსება RS.ge-სთან დაკავშირებისას</span>}</FixedValue>
               </Field>
             ) : buyer.state === 'missing' ? (
-              <Field label="დასახელება" error={errors.buyerName} hint="RS.ge-ზე ვერ მოიძებნა — ჩაწერე ნებისმიერი დასახელება">
+              <Field label="დასახელება" error={errors.buyerName}>
                 <Input value={f.buyerName} invalid={!!errors.buyerName} onChange={set('buyerName')} />
               </Field>
             ) : (
-              <Field label="დასახელება" hint={buyer.state === 'ok' ? 'RS.ge-ს რეესტრიდან — არ იცვლება' : undefined}>
+              <Field label="დასახელება">
                 <FixedValue>
                   {buyer.state === 'ok' ? (
                     <>
@@ -376,14 +343,14 @@ function DefaultsForm({ connected }: { connected: boolean }) {
             </Select>
           </Field>
           <div className="sm:col-span-2">
-            <Field label="გადამზიდავი კომპანიის ს/ნ (არასავალდებულო)" error={errors.transporterTin} hint={transporter.state === 'idle' ? 'შეავსე მხოლოდ მაშინ, თუ ტრანსპორტირებას სხვა კომპანია ახორციელებს — RS.ge-ზე ზედნადებს ის გააქტიურებს.' : undefined}>
+            <Field label="გადამზიდავი კომპანიის ს/ნ (არასავალდებულო)" error={errors.transporterTin}>
               <Input value={f.transporterTin} inputMode="numeric" className="font-mono" invalid={!!errors.transporterTin} onChange={set('transporterTin')} />
             </Field>
             {!errors.transporterTin && <LookupLine lookup={transporter} />}
           </div>
         </Section>
 
-        <Section icon={<FileText className="size-4" />} title="დამატებითი ინფორმაცია" text="არასავალდებულო. მისაბმელის ნომერი კომენტარს ავტომატურად ემატება.">
+        <Section title="დამატებითი ინფორმაცია">
           <Field label="მიმწოდებლის ინფორმაცია">
             <Input value={f.receptionInfo} onChange={set('receptionInfo')} />
           </Field>
@@ -412,30 +379,23 @@ function FixedValue({ children }: { children: ReactNode }) {
   return <div className="flex h-11 items-center gap-1.5 rounded-[10px] px-3 text-[16px] text-slate-900 ring-1 ring-slate-500/15 ring-inset sm:text-[15px]">{children}</div>
 }
 
-function Section({ title, text, icon, children }: { title: string; text?: string; icon?: ReactNode; children: ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card className="p-5 sm:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        {icon && <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600">{icon}</div>}
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-          {text && <p className="text-xs text-slate-500">{text}</p>}
-        </div>
-      </div>
+      <h3 className="mb-5 text-sm font-semibold text-slate-900">{title}</h3>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
     </Card>
   )
 }
 
-/** Waybills changed on RS.ge: up to when they were checked (while the app is open), why it failed, and a "check now" button. */
-function SyncLine({ rs }: { rs: RsSettings }) {
+/** Shown only when checking RS.ge for changed waybills failed: why, and a retry button. */
+function SyncLine({ error }: { error: string }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
     try {
       await rsSettings.syncNow()
-      toast('success', 'RS.ge-ს ცვლილებები შემოწმდა')
     } catch (e) {
       toast('error', (e as Error).message)
     } finally {
@@ -444,14 +404,10 @@ function SyncLine({ rs }: { rs: RsSettings }) {
   }
   return (
     <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs">
-      {rs.syncError ? (
-        <span className="text-amber-700">ცვლილებების შემოწმება ვერ მოხერხდა: {rs.syncError}</span>
-      ) : (
-        <span className="text-slate-500">{rs.syncedTo ? `RS.ge-ს ცვლილებები შემოწმებულია ${formatDateTime(rs.syncedTo)}-მდე` : 'RS.ge-ს ცვლილებები ჯერ არ შემოწმებულა'}</span>
-      )}
+      <span className="text-amber-700">{error}</span>
       <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
         <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
-        განახლება
+        ხელახლა
       </button>
     </p>
   )

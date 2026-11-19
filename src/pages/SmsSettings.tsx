@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, KeyRound, MessageSquare, Send, Unplug } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Unplug } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { smsSettings } from '../api'
 import { useDb } from '../api/store'
@@ -18,7 +18,7 @@ export function SmsSettings() {
   const connected = isConnected(sms)
   return (
     <>
-      <PageHeader title="SMS" subtitle="მძღოლს ზედნადების ატვირთვისას ეგზავნება SMS smsoffice.ge-ს მეშვეობით." />
+      <PageHeader title="SMS" />
       <div className="space-y-4">
         {connected ? (
           <div className="flex gap-3 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 ring-1 ring-emerald-200">
@@ -139,11 +139,7 @@ function AccountCard() {
 
   return (
     <form onSubmit={save} noValidate>
-      <Section
-        icon={<KeyRound className="size-4" />}
-        title="smsoffice.ge ანგარიში"
-        text="API გასაღები: smsoffice.ge → პროფილი → ინტეგრაცია (იქვე ჩართე API). შენახვამდე გასაღები შემოწმდება. ინახება მხოლოდ სერვერზე, დაშიფრული."
-      >
+      <Section title="smsoffice.ge ანგარიში">
         <Field label="API გასაღები" error={errors.apiKey} hint={sms.apiKeySet && !apiKey ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : undefined}>
           <Input
             type="password"
@@ -158,7 +154,7 @@ function AccountCard() {
             }}
           />
         </Field>
-        <Field label="გამგზავნის სახელი" error={errors.sender} hint="smsoffice.ge-ზე დარეგისტრირებული, ლათინურად, მაქს. 11 სიმბოლო">
+        <Field label="გამგზავნის სახელი" error={errors.sender}>
           <Input
             value={sender}
             autoComplete="off"
@@ -178,7 +174,7 @@ function AccountCard() {
               გაუქმება
             </Button>
           )}
-          <Button type="submit" loading={busy} icon={<KeyRound className="size-4" />}>
+          <Button type="submit" loading={busy}>
             შემოწმება და შენახვა
           </Button>
         </div>
@@ -210,7 +206,7 @@ function TestCard() {
 
   return (
     <form onSubmit={send} noValidate>
-      <Section icon={<MessageSquare className="size-4" />} title="სატესტო SMS" text="გაგზავნის ერთ შეტყობინებას (იხარჯება ბალანსიდან) — ასე ჩანს, მუშაობს თუ არა გამგზავნის სახელი.">
+      <Section title="სატესტო SMS">
         <Field label="ტელეფონი" error={error}>
           <Input
             type="tel"
@@ -225,7 +221,7 @@ function TestCard() {
           />
         </Field>
         <div className="flex items-end justify-end">
-          <Button type="submit" variant="secondary" loading={busy} icon={<Send className="size-4" />}>
+          <Button type="submit" variant="secondary" loading={busy}>
             გაგზავნა
           </Button>
         </div>
@@ -234,16 +230,10 @@ function TestCard() {
   )
 }
 
-function Section({ title, text, icon, children }: { title: string; text?: string; icon?: ReactNode; children: ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card className="p-5 sm:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        {icon && <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600">{icon}</div>}
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-          {text && <p className="text-xs text-slate-500">{text}</p>}
-        </div>
-      </div>
+      <h3 className="mb-5 text-sm font-semibold text-slate-900">{title}</h3>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
     </Card>
   )

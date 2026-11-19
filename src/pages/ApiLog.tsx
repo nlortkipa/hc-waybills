@@ -31,7 +31,7 @@ export function ApiLog() {
 
   return (
     <>
-      <PageHeader title="API მოთხოვნები" subtitle="RS.ge-სა და SMS-ზე გაგზავნილი ყველა მოთხოვნა და პასუხი." />
+      <PageHeader title="API მოთხოვნები" />
 
       <Card className="min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator px-5 py-3">

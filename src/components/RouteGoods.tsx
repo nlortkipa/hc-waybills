@@ -158,9 +158,6 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
   return (
     <div className="sm:col-span-2">
       <p className="mb-1.5 text-sm font-medium text-slate-700">პროდუქტები</p>
-      <p className="mb-2 text-xs text-slate-500">
-        თითოეული ზედნადებზე ცალკე სტრიქონად წავა. ჩაწერე ხელით ან <Search className="inline size-3.5 align-[-2px]" /> ღილაკით შეავსე პროდუქტების ცნობარიდან (კოდი, დასახელება, ერთეული, ფასი, დაბეგვრა, აქციზი) — შემდეგ ყველაფერი შეიძლება შეიცვალოს. ოპერატორი რეისზე მხოლოდ რაოდენობას წერს; აქ მითითებული რაოდენობა (არასავალდებულო) ახალ რეისზე წინასწარ ჩაეწერება.
-      </p>
       <div className="space-y-2">
         {goods.map((g, i) => {
           const err = (f: keyof GoodDraft) => errors[`${g.key}.${f}`]

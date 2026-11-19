@@ -454,10 +454,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
           <Card className="space-y-5 p-5 sm:p-6">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">ზედნადები</h3>
-              <p className="text-xs text-slate-500">შევსებულია მარშრუტიდან და RS.ge-ს პარამეტრებიდან — საჭიროების შემთხვევაში შეცვალე ამ რეისისთვის.</p>
             </div>
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-              <Field label="ზედნადების ტიპი" hint={correcting ? 'აქტიურ ზედნადებზე ტიპი არ იცვლება' : WAYBILL_TYPES.find((t) => t.value === w.type)?.hint}>
+              <Field label="ზედნადების ტიპი">
                 <Select value={String(w.type)} onChange={(e) => setW('type', Number(e.target.value) as WaybillType)} disabled={correcting}>
                   {WAYBILL_TYPES.map((t) => (
                     <option key={t.value} value={String(t.value)}>
@@ -479,7 +478,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 </div>
               )}
               {!internal && buyer.state === 'missing' && (
-                <Field label="მყიდველის დასახელება" error={errors.buyerName} hint="RS.ge-ზე ვერ მოიძებნა — უცხოელი მყიდველის სახელი ჩაწერე ხელით">
+                <Field label="მყიდველის დასახელება" error={errors.buyerName}>
                   <Input value={w.buyerName} invalid={!!errors.buyerName} onChange={(e) => setW('buyerName', e.target.value)} />
                 </Field>
               )}
@@ -538,7 +537,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                     <Input value={w.receiverInfo} maxLength={250} onChange={(e) => setW('receiverInfo', e.target.value)} />
                   </Field>
                   <div className="sm:col-span-2">
-                    <Field label="კომენტარი" hint="მისაბმელის ნომერი კომენტარს ავტომატურად ემატება.">
+                    <Field label="კომენტარი">
                       <Input value={w.comment} maxLength={250} onChange={(e) => setW('comment', e.target.value)} />
                     </Field>
                   </div>

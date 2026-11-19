@@ -115,7 +115,6 @@ export function RsWaybills() {
     <>
       <PageHeader
         title="RS.ge ზედნადებები"
-        subtitle="ყველა ზედნადები RS.ge-ზე — აქედან, პორტალიდან თუ სხვა სისტემიდან შექმნილი."
         actions={
           <>
             <Button variant="secondary" size="sm" icon={<Download className="size-3.5" />} onClick={exportCsv} disabled={!shown.length}>

@@ -84,7 +84,6 @@ export function Reports() {
     <>
       <PageHeader
         title="რეპორტები"
-        subtitle="რეისები და ატვირთული ზედნადებები არჩეული პერიოდისთვის."
         actions={
           <Button variant="secondary" icon={<Download className="size-4" />} onClick={exportCsv} disabled={!rows.length}>
             CSV<span className="hidden sm:inline"> ექსპორტი</span>
