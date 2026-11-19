@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, X } from 'lucide-react'
 import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cx } from '../lib/util'
+import { WAYBILL_TONE } from '../lib/rs'
 import { inputCls, invalidCls } from './fieldStyles'
 import { CodeView } from './codeView'
 import type { Shipment, ShipmentStatus, StepStatus } from '../types'
@@ -117,15 +118,15 @@ export function Badge({ tone: t = 'gray', children, dot, pulse }: { tone?: Tone;
 export const statusMeta: Record<ShipmentStatus, { label: string; tone: Tone; pulse?: boolean }> = {
   uploading: { label: 'იტვირთება', tone: 'blue', pulse: true },
   rs_failed: { label: 'RS.ge შეცდომა', tone: 'red' },
-  saved: { label: 'შენახული', tone: 'amber' },
-  uploaded: { label: 'ატვირთულია', tone: 'green' },
+  saved: { label: 'შენახული', tone: WAYBILL_TONE.saved },
+  uploaded: { label: 'ატვირთულია', tone: WAYBILL_TONE.active },
 }
 
 /** A shipment's state in one word: the upload's, and once on RS.ge, the waybill's there. */
 export function shipmentState(s: Pick<Shipment, 'status' | 'waybillState'>): { label: string; tone: Tone; pulse?: boolean } {
-  if (s.waybillState === 'cancelled') return { label: s.status === 'saved' ? 'წაშლილი' : 'გაუქმებული', tone: 'gray' }
-  if (s.waybillState === 'closed') return { label: 'დასრულებული', tone: 'violet' }
-  if (s.status === 'uploaded') return { label: 'აქტიური', tone: 'green' }
+  if (s.waybillState === 'cancelled') return { label: s.status === 'saved' ? 'წაშლილი' : 'გაუქმებული', tone: WAYBILL_TONE.cancelled }
+  if (s.waybillState === 'closed') return { label: 'დასრულებული', tone: WAYBILL_TONE.closed }
+  if (s.status === 'uploaded') return { label: 'აქტიური', tone: WAYBILL_TONE.active }
   return statusMeta[s.status]
 }
 

@@ -6,14 +6,26 @@ export const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCas
 /** The shipment's quantity as RS.ge has it (once the waybill is there), else as typed; 0 while RS.ge's copy isn't read. */
 export const shipmentQuantity = (s: Shipment) => s.rsRemote?.quantity ?? s.quantity ?? 0
 
+/**
+ * Badge tone of a waybill's state, shared by every list that shows one (the main tab and the RS.ge tab):
+ * loud only for what needs attention, gray once nothing more will happen to it.
+ */
+export const WAYBILL_TONE = {
+  saved: 'amber',
+  active: 'green',
+  withCarrier: 'blue',
+  closed: 'gray',
+  cancelled: 'gray',
+} as const
+
 /** Label and badge tone of an RS.ge waybill status. */
-export const RS_STATUS: Record<number, { label: string; tone: 'blue' | 'green' | 'gray' | 'red' }> = {
-  0: { label: 'შენახული', tone: 'blue' },
-  1: { label: 'აქტიური', tone: 'green' },
-  2: { label: 'დასრულებული', tone: 'gray' },
-  8: { label: 'გადამზიდავთან', tone: 'blue' },
-  [-1]: { label: 'წაშლილი', tone: 'red' },
-  [-2]: { label: 'გაუქმებული', tone: 'red' },
+export const RS_STATUS: Record<number, { label: string; tone: (typeof WAYBILL_TONE)[keyof typeof WAYBILL_TONE] }> = {
+  0: { label: 'შენახული', tone: WAYBILL_TONE.saved },
+  1: { label: 'აქტიური', tone: WAYBILL_TONE.active },
+  2: { label: 'დასრულებული', tone: WAYBILL_TONE.closed },
+  8: { label: 'გადამზიდავთან', tone: WAYBILL_TONE.withCarrier },
+  [-1]: { label: 'წაშლილი', tone: WAYBILL_TONE.cancelled },
+  [-2]: { label: 'გაუქმებული', tone: WAYBILL_TONE.cancelled },
 }
 
 /** UNIT_ID meaning "other": the unit name is then sent in UNIT_TXT. */
