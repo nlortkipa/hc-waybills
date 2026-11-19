@@ -52,6 +52,18 @@ export const tonneUnit = (rs: RsSettings) => rsUnits(rs).find((u) => u.id !== RS
 /** TRANS_ID meaning "other": the transport type is then sent in TRANS_TXT. */
 export const RS_TRANS_OTHER = 4
 
+/** TRANS_ID საავტომობილო: what a new shipment starts with. */
+export const RS_TRANS_CAR = 1
+
+/** RS.ge's transport types; until the connection has read them, the two this app relies on. */
+export const transTypes = (rs: RsSettings) =>
+  rs.transTypes.length
+    ? rs.transTypes
+    : [
+        { id: RS_TRANS_CAR, name: 'საავტომობილო' },
+        { id: RS_TRANS_OTHER, name: 'სხვა' },
+      ]
+
 /** VAT_TYPE of a goods line. */
 export const RS_VAT_TYPES = [
   { value: 0, label: 'ჩვეულებრივი' },
@@ -68,24 +80,13 @@ export function defaultRsSettings(): RsSettings {
     sellerUserId: null,
     sellerTin: '',
     sellerName: '',
-    buyerTin: '',
-    buyerName: '',
-    buyerForeign: false,
-    transporterTin: '',
-    transId: 1,
-    transTxt: '',
-    tranCostPayer: 2,
-    transportCost: 0,
-    receptionInfo: '',
-    receiverInfo: '',
-    comment: '',
     units: [],
     transTypes: [],
   }
 }
 
 /** True when the waybill goes to the seller itself: no buyer set, or the seller's own number. */
-export const isInternal = (rs: Pick<RsSettings, 'buyerTin' | 'sellerTin'>) => !rs.buyerTin || rs.buyerTin === rs.sellerTin
+export const isInternal = (rs: { buyerTin: string; sellerTin: string }) => !rs.buyerTin || rs.buyerTin === rs.sellerTin
 
 /**
  * What is still missing before a waybill can be sent. Empty array = ready.
@@ -95,7 +96,6 @@ export function rsMissing(rs: RsSettings, opts: { hasCreds: boolean }): string[]
   const out: string[] = []
   // Connecting fills in the seller (also the buyer when none is set: შიდა გადაზიდვა).
   if (!opts.hasCreds || !rs.sellerTin) out.push('სერვისის მომხმარებელი და პაროლი')
-  if (rs.transId === RS_TRANS_OTHER && !rs.transTxt) out.push('ტრანსპორტის ტიპის დასახელება')
   return out
 }
 
@@ -118,22 +118,24 @@ export const noTransport = (t: number) => t === 3
 export const MAX_DEFER_MS = 3 * 86400_000
 
 /**
- * The waybill a new shipment on this route starts with: the route's type and buyer, else the
- * settings' (no buyer → შიდა გადაზიდვა). Transport details come from the settings.
+ * The waybill a new shipment on this route starts with: the route's type and buyer (no buyer →
+ * შიდა გადაზიდვა). The rest starts empty (the seller pays transport) and is set per shipment.
  */
 export function waybillDefaults(rs: RsSettings, route?: Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>): ShipmentWaybill {
-  const own = !!route?.buyerTin
-  const buyer = own ? { buyerTin: route!.buyerTin!, buyerName: route!.buyerName ?? '', buyerForeign: !!route!.buyerForeign } : { buyerTin: rs.buyerTin, buyerName: rs.buyerName, buyerForeign: rs.buyerForeign }
+  const buyer = { buyerTin: route?.buyerTin ?? '', buyerName: route?.buyerName ?? '', buyerForeign: !!route?.buyerForeign }
   const internal = isInternal({ buyerTin: buyer.buyerTin, sellerTin: rs.sellerTin })
   const type: WaybillType = route?.waybillType ?? (internal ? 1 : 2)
   return {
     type,
     ...(type === 1 ? { buyerTin: '', buyerName: '', buyerForeign: false } : buyer),
-    transportCost: rs.transportCost,
-    tranCostPayer: rs.tranCostPayer,
-    receptionInfo: rs.receptionInfo,
-    receiverInfo: rs.receiverInfo,
-    comment: rs.comment,
+    transId: RS_TRANS_CAR,
+    transTxt: '',
+    transporterTin: '',
+    transportCost: 0,
+    tranCostPayer: 2,
+    receptionInfo: '',
+    receiverInfo: '',
+    comment: '',
   }
 }
 

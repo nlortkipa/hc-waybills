@@ -16,9 +16,8 @@ export interface Carrier extends SoftDeletable {
 }
 
 /**
- * A route the admin opened for a carrier: the carrier's start address → the end address typed here,
- * with the goods lines carried on it. Operators pick one of these for each shipment and type each
- * line's quantity (dropping the lines the truck doesn't carry).
+ * A route the admin opened for a carrier: the carrier's start address → the end address typed here.
+ * Operators pick one of these for each shipment and add the goods the truck carries there.
  */
 export interface CarrierRoute extends SoftDeletable {
   id: string
@@ -26,13 +25,11 @@ export interface CarrierRoute extends SoftDeletable {
   endAddress: string
   /** ID of the scale at the end address. */
   scaleId: string
-  /** The goods lines of this route's waybills, at least one (none on old routes not set up yet). */
-  goods: RouteGood[]
-  /** Waybill type for shipments on this route; missing = from the RS.ge settings (buyer set → 2, else 1). */
+  /** Waybill type for shipments on this route; missing = by the buyer (buyer set → 2, else 1). */
   waybillType?: WaybillType
   /**
-   * Buyer for shipments on this route; empty = the one in the RS.ge settings. Resolved like the
-   * settings' buyer: RS.ge's name when it knows the number (buyerForeign false), else the typed name.
+   * Buyer for shipments on this route; empty = none (შიდა გადაზიდვა). RS.ge's name when it knows the
+   * number (buyerForeign false), else the typed name.
    */
   buyerTin?: string
   buyerName?: string
@@ -58,6 +55,12 @@ export interface ShipmentWaybill {
   buyerForeign: boolean
   /** Planned start of transport (ISO). Missing = when it is activated. RS.ge allows up to 3 days ahead. */
   beginAt?: string
+  /** TRANS_ID: transport type from get_trans_types. */
+  transId: number
+  /** TRANS_TXT: the type's name when it is "other". */
+  transTxt: string
+  /** TRANSPORTER_TIN: tax ID of a separate transport company; '' = none. */
+  transporterTin: string
   transportCost: number
   tranCostPayer: 1 | 2
   receptionInfo: string
@@ -67,15 +70,11 @@ export interface ShipmentWaybill {
 }
 
 /**
- * One goods line of a route, set up by the admin: bar code, name and unit typed in or filled from the
- * RS.ge product list (and then still editable; nothing is added to RS.ge's list), plus what RS.ge needs
- * besides the quantity, which the operator types on each shipment (prefilled from the line's own
- * quantity, when set). Sent exactly as written here.
+ * One goods line of a shipment's waybill, as the operator writes it: bar code, name and unit typed in
+ * or filled from the RS.ge product list (and then still editable; nothing is added to RS.ge's list),
+ * price, VAT type and quantity. Stored until the waybill is on RS.ge, then RS.ge's goods rows.
  */
-export interface RouteGood {
-  id: string
-  /** The RS.ge product (its bar code) it was filled from, while the bar code is still that; '' otherwise. */
-  productId: string
+export interface ShipmentItem {
   /** W_NAME. */
   name: string
   /** BAR_CODE. */
@@ -91,8 +90,9 @@ export interface RouteGood {
   aId?: number
   /** The excise code as shown, e.g. "2207 · ეთილის სპირტი(2207)_ლიტრი _ (2.6)". */
   aTitle?: string
-  /** Quantity prefilled on this line of a new shipment (the operator can change it); 0 or missing = none. */
-  quantity?: number
+  quantity: number
+  /** QUANTITY_EXT: the optional additional quantity (დამატებითი რაოდენობა). */
+  quantityExt?: number
 }
 
 export interface Driver extends SoftDeletable {
@@ -122,8 +122,8 @@ export interface Truck extends SoftDeletable {
 /**
  * A product (საქონელი): one entry of the connected taxpayer's RS.ge product list (get_bar_codes /
  * save_bar_code), read from RS.ge and never stored here. The bar code is its identity on RS.ge (and
- * its id here), so it can't be changed once saved. Picking a product for a route's goods line fills
- * the line with it; the line's price and VAT type are typed on the route.
+ * its id here), so it can't be changed once saved. Picking a product for a shipment's goods line fills
+ * the line with it; the price, VAT type and quantity are typed on the shipment.
  */
 export interface Product extends SoftDeletable {
   /** = barCode. */
@@ -137,19 +137,6 @@ export interface Product extends SoftDeletable {
   unitTxt: string
   /** A_ID: excise code (RsAkciz.id) on RS.ge; 0 or missing = not excise goods. */
   aId?: number
-}
-
-/**
- * One goods line of a shipment's waybill: a route goods line (lineId) with the quantity the operator
- * typed. The rest is a snapshot of the line, refreshed when the waybill is saved. Once the waybill is
- * on RS.ge, the lines are RS.ge's goods rows (matched to the route's lines by bar code).
- */
-export interface ShipmentItem extends Omit<RouteGood, 'id'> {
-  /** RouteGood.id; '' on shipments from before route goods lines existed. */
-  lineId: string
-  quantity: number
-  /** QUANTITY_EXT: the optional additional quantity (დამატებითი რაოდენობა). */
-  quantityExt?: number
 }
 
 export interface User extends SoftDeletable {
@@ -324,7 +311,7 @@ export interface RsRefItem {
 }
 
 /**
- * RS.ge waybill settings: the same on every shipment, set by the admin.
+ * RS.ge connection: the service user, set by the admin. Everything on a waybill is set per shipment.
  * The password (sp) never leaves the server: clients get '' plus spSet.
  * Fields marked "from RS.ge" are never stored: the server reads them from RS.ge and adds them to each view.
  */
@@ -341,34 +328,10 @@ export interface RsSettings {
   sellerUserId: number | null
   sellerTin: string
   sellerName: string
-  /**
-   * Buyer of every waybill. Empty (or the seller's own number): შიდა გადაზიდვა, the buyer is the seller.
-   * Any other number: მიწოდება ტრანსპორტირებით. The name is RS.ge's when RS.ge knows the number
-   * (`buyerForeign` false), else typed by the admin and sent unchecked (`buyerForeign` true).
-   */
-  buyerTin: string
-  buyerName: string
-  buyerForeign: boolean
   /** From RS.ge: when the seller was read. */
   checkedAt?: string
   /** From RS.ge: why the seller couldn't be read (RS.ge unreachable, password changed…). */
   accountError?: string
-
-  /** Optional: tax ID of a separate transport company (TRANSPORTER_TIN). */
-  transporterTin: string
-  /** TRANS_ID: transport type from get_trans_types. */
-  transId: number
-  /** TRANS_TXT: required when the transport type is "other". */
-  transTxt: string
-  /** TRAN_COST_PAYER: 1 buyer, 2 seller. */
-  tranCostPayer: 1 | 2
-  /** TRANSPORT_COAST (sic): transport cost, GEL. */
-  transportCost: number
-
-  receptionInfo: string
-  receiverInfo: string
-  /** Extra COMMENT text. The trailer number is always added to the comment. */
-  comment: string
 
   /** From RS.ge: reference lists. */
   units: RsRefItem[]

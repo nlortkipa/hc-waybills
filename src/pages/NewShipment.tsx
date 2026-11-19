@@ -1,22 +1,17 @@
-import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, FileCheck2, Info, Loader2, PencilLine, Plus, Save, X } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, FileCheck2, Info, Loader2, PencilLine, Save } from 'lucide-react'
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput, type NewShipmentItem } from '../api'
+import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
 import { Button, Card, EmptyState, Field, Input, PageHeader, Segmented, Select } from '../components/ui'
-import { LookupLine, useTinName } from '../components/TinLookup'
+import { LookupLine, TIN_RE, useTinName } from '../components/TinLookup'
+import { blankGood, checkGoods, draftLine, fromDrafts, ShipmentGoodsEditor, toDraft, type GoodDraft } from '../components/ShipmentGoods'
 import { active, cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { routeAddresses, routeLabel, routeUsable, canUseCarrier } from '../lib/route'
-import { editable, MAX_DEFER_MS, noTransport, rsMissing, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
+import { editable, MAX_DEFER_MS, noTransport, RS_TRANS_OTHER, rsMissing, transTypes, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { Database, Shipment, ShipmentWaybill, WaybillType } from '../types'
-
-/** A quantity as typed: a number above 0, else null. Accepts a comma as the decimal sign. */
-const qty = (v: string) => {
-  const n = Number(v.trim().replace(',', '.'))
-  return v.trim() && Number.isFinite(n) && n > 0 ? Math.round(n * 1000) / 1000 : null
-}
 
 /** Waybill fields as typed. */
 type WaybillForm = {
@@ -26,6 +21,9 @@ type WaybillForm = {
   begin: 'now' | 'later'
   /** datetime-local, Georgian time. */
   beginAt: string
+  transId: string
+  transTxt: string
+  transporterTin: string
   transportCost: string
   tranCostPayer: '1' | '2'
   receptionInfo: string
@@ -40,6 +38,9 @@ const toWaybillForm = (w: ShipmentWaybill): WaybillForm => ({
   buyerName: w.buyerForeign ? w.buyerName : '',
   begin: w.beginAt && Date.parse(w.beginAt) > Date.now() ? 'later' : 'now',
   beginAt: w.beginAt && Date.parse(w.beginAt) > Date.now() ? toTbilisiInput(w.beginAt) : '',
+  transId: String(w.transId),
+  transTxt: w.transTxt,
+  transporterTin: w.transporterTin,
   transportCost: w.transportCost ? String(w.transportCost) : '',
   tranCostPayer: String(w.tranCostPayer) as '1' | '2',
   receptionInfo: w.receptionInfo,
@@ -48,22 +49,24 @@ const toWaybillForm = (w: ShipmentWaybill): WaybillForm => ({
 })
 
 /** Where the form starts: empty, a copy of another shipment (`?from=`), or the shipment being edited. */
-type Seed = { carrierId: string; routeId: string; driverId: string; truckId: string; qty: Record<string, string>; ext: Record<string, string>; removed: string[]; waybill?: Partial<WaybillForm> }
+type Seed = { carrierId: string; routeId: string; driverId: string; truckId: string; goods: GoodDraft[]; waybill?: Partial<WaybillForm> }
 
-function seedFrom(d: Database, s: Shipment, keepBegin: boolean): Seed {
-  const route = d.routes.find((r) => r.id === s.routeId)
-  const inItems = new Set(s.items.map((i) => i.lineId))
+function seedFrom(s: Shipment, keepBegin: boolean): Seed {
   const w = s.waybill && toWaybillForm(s.waybill)
   return {
     carrierId: s.carrierId,
     routeId: s.routeId,
     driverId: s.driverId,
     truckId: s.truckId,
-    qty: Object.fromEntries(s.items.filter((i) => i.lineId).map((i) => [i.lineId, String(i.quantity)])),
-    ext: Object.fromEntries(s.items.filter((i) => i.lineId && i.quantityExt).map((i) => [i.lineId, String(i.quantityExt)])),
-    removed: (route?.goods ?? []).filter((g) => !inItems.has(g.id)).map((g) => g.id),
+    goods: s.items.map(toDraft),
     ...(w && { waybill: keepBegin ? w : { ...w, begin: 'now', beginAt: '' } }),
   }
+}
+
+/** A new shipment's goods: those of the last shipment on the route whose goods are known here, else one empty line. */
+function lastGoods(d: Database, routeId: string): GoodDraft[] {
+  const last = [...d.shipments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((s) => s.routeId === routeId && s.items.length)
+  return last ? last.items.map(toDraft) : [blankGood(d)]
 }
 
 /** Waiting for RS.ge's copy of a waybill: its goods and options are read from RS.ge, not stored here. */
@@ -82,7 +85,7 @@ export function NewShipment() {
   const from = d.shipments.find((x) => x.id === params.get('from') && canUseCarrier(user, x.carrierId))
   if (from && needsRs(from)) return <ReadingFromRs s={from} />
   // A copy of another shipment: same route, people, goods and options; a new waybill.
-  return <ShipmentForm key={from?.id ?? 'new'} seed={from ? seedFrom(d, from, false) : undefined} copiedFrom={from} />
+  return <ShipmentForm key={from?.id ?? 'new'} seed={from ? seedFrom(from, false) : undefined} copiedFrom={from} />
 }
 
 export function EditShipment() {
@@ -104,7 +107,7 @@ export function EditShipment() {
       />
     )
   }
-  return <ShipmentForm key={s.id} seed={seedFrom(d, s, true)} editing={s} />
+  return <ShipmentForm key={s.id} seed={seedFrom(s, true)} editing={s} />
 }
 
 /** The truck a driver drove last (and the other way round), so picking one suggests the other. */
@@ -152,24 +155,15 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
 
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
-  // The route's goods lines (set by the admin in ცნობარები → მარშრუტები): the operator types each
-  // quantity and drops the lines this truck doesn't carry. Another route starts over.
-  const routeGoods = route?.goods ?? []
-  type Entry = { routeId: string; qty: Record<string, string>; ext: Record<string, string>; removed: string[] }
-  const [entry, setEntry] = useState<Entry>({ routeId: seed?.routeId ?? '', qty: seed?.qty ?? {}, ext: seed?.ext ?? {}, removed: seed?.removed ?? [] })
-  const cur: Entry = entry.routeId === (route?.id ?? '') ? entry : { routeId: route?.id ?? '', qty: {}, ext: {}, removed: [] }
-  const update = (patch: Partial<Entry>) => setEntry({ ...cur, ...patch })
-  // A line's own quantity, if the admin set one, is prefilled.
-  const qtyOf = (lineId: string) => cur.qty[lineId] ?? (routeGoods.find((g) => g.id === lineId)?.quantity || '').toString()
-  const shown = routeGoods.filter((g) => !cur.removed.includes(g.id))
-  const hidden = routeGoods.filter((g) => cur.removed.includes(g.id))
-
-  // The additional quantity is optional: empty is fine, anything typed must be a number above 0.
-  const extOf = (lineId: string) => cur.ext[lineId] ?? ''
-  const lines = shown.map((g) => ({ key: g.id, name: g.name, unit: g.unitTxt, price: g.price, quantity: qty(qtyOf(g.id)), ext: extOf(g.id).trim() ? qty(extOf(g.id)) : undefined }))
-  const complete = lines.length > 0 && lines.every((l) => l.quantity)
+  // The goods: until the operator touches them, those of the last shipment on the route.
+  const [typedGoods, setGoods] = useState<GoodDraft[] | null>(seed?.goods ?? null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keys must stay put while the route is the same
+  const routeGoods = useMemo(() => (route ? lastGoods(d, route.id) : [blankGood(d)]), [route?.id])
+  const goods = typedGoods ?? routeGoods
+  const lines = goods.map((g) => draftLine(d, g))
+  const complete = lines.length > 0 && lines.every((l) => l.quantity && l.price != null)
   const total = complete ? lines.reduce((a, l) => a + l.quantity!, 0) : null
-  const amount = complete ? lines.reduce((a, l) => a + Math.round(l.quantity! * l.price * 100) / 100, 0) : null
+  const amount = complete ? lines.reduce((a, l) => a + Math.round(l.quantity! * l.price! * 100) / 100, 0) : null
 
   /* ------------------------------ Waybill ------------------------------ */
 
@@ -183,6 +177,8 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   }
   const internal = w.type === 1
   const still = noTransport(w.type)
+  const transporterTin = w.transporterTin.trim()
+  const transporter = useTinName(still ? '' : transporterTin, true)
   const buyerTin = w.buyerTin.trim()
   // Any number: RS.ge's name when it knows it (not editable), else whatever the user types.
   const buyer = useTinName(internal ? '' : buyerTin, true, true)
@@ -204,12 +200,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
       if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
       if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
     }
-    if (route && !routeGoods.length) err.routeId = 'ამ მარშრუტს პროდუქტები არ აქვს — მიმართე ადმინისტრატორს'
-    else if (route && !lines.length) err.items = 'რეისზე მინიმუმ ერთი პროდუქტი უნდა იყოს'
-    for (const l of lines) {
-      if (!l.quantity) err[`${l.key}.quantity`] = 'რაოდენობა: შეიყვანე 0-ზე მეტი'
-      else if (l.ext === null) err[`${l.key}.quantity`] = 'დამატებითი რაოდენობა: შეიყვანე 0-ზე მეტი ან დატოვე ცარიელი'
-    }
+    Object.assign(err, checkGoods(goods))
+    // Error keys name the lines: they stay put from now on.
+    setGoods(goods)
     if (!internal) {
       if (!buyerTin) err.buyerTin = 'ამ ტიპის ზედნადებს მყიდველი სჭირდება'
       else if (buyerTin === d.rs.sellerTin) err.buyerTin = 'მყიდველი გამყიდველს ემთხვევა — აირჩიე „შიდა გადაზიდვა“'
@@ -223,11 +216,16 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
       else if (t < Date.now()) err.beginAt = 'დრო უკვე გავიდა'
       else if (t > Date.now() + MAX_DEFER_MS - 5 * 60_000) err.beginAt = 'მაქსიმუმ 3 დღით ადრე'
     }
-    if (w.transportCost.trim() && !(Number(w.transportCost.replace(',', '.')) >= 0)) err.transportCost = 'შეიყვანე 0 ან მეტი'
+    if (!still) {
+      if (w.transportCost.trim() && !(Number(w.transportCost.replace(',', '.')) >= 0)) err.transportCost = 'შეიყვანე 0 ან მეტი'
+      if (Number(w.transId) === RS_TRANS_OTHER && !w.transTxt.trim()) err.transTxt = 'სავალდებულო ველი'
+      if (transporterTin && !TIN_RE.test(transporterTin)) err.transporterTin = '9 ან 11 ციფრი'
+      else if (transporter.state === 'error') err.transporterTin = transporter.message
+    }
     setErrors(err)
-    if (err.transportCost) setMore(true)
+    if (err.transportCost || err.transTxt || err.transporterTin) setMore(true)
     if (Object.keys(err).length || !carrier || !route) return
-    const items: NewShipmentItem[] = lines.map((l) => ({ lineId: l.key, quantity: l.quantity!, ...(l.ext && { quantityExt: l.ext }) }))
+    const items = fromDrafts(d, goods)
     const input: NewShipmentInput = {
       carrierId: carrier.id,
       routeId: route.id,
@@ -239,6 +237,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         buyerTin: internal ? '' : buyerTin,
         buyerName: buyer.state === 'ok' ? buyer.name : w.buyerName.trim(),
         ...(!correcting && { beginAt: beginIso }),
+        transId: Number(w.transId),
+        transTxt: Number(w.transId) === RS_TRANS_OTHER ? w.transTxt.trim() : '',
+        transporterTin: still ? '' : transporterTin,
         transportCost: Number(w.transportCost.replace(',', '.') || 0),
         tranCostPayer: Number(w.tranCostPayer) as 1 | 2,
         receptionInfo: w.receptionInfo.trim(),
@@ -310,115 +311,19 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             <Field
               label="მარშრუტი"
               error={errors.routeId}
-              hint={
-                carrier && !routes.length
-                  ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.'
-                  : route && !routeGoods.length
-                    ? 'ამ მარშრუტს პროდუქტები არ აქვს — მიმართე ადმინისტრატორს.'
-                    : undefined
-              }
+              hint={carrier && !routes.length ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.' : undefined}
             >
               <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length} searchable={routes.length > 8}>
                 {routes.map((x) => (
                   <option key={x.id} value={x.id}>
                     {routeLabel(d.carriers, x)}
-                    {x.goods.length ? ` · ${x.goods.length === 1 ? x.goods[0].name : `${x.goods.length} პროდუქტი`}` : ''}
+                    {x.buyerName ? ` · ${x.buyerName}` : ''}
                   </option>
                 ))}
               </Select>
             </Field>
 
-            {route && routeGoods.length > 0 && (
-              <div>
-                <p className="mb-1.5 ml-1 text-[13px] text-slate-500">პროდუქტები</p>
-                <div className="divide-y divide-separator rounded-[10px] ring-1 ring-slate-200">
-                  {shown.map((g) => {
-                    const error = errors[`${g.id}.quantity`]
-                    return (
-                      <div key={g.id} className="px-3 py-2.5">
-                        <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-                          <div className="min-w-0 flex-1 basis-full self-center sm:basis-0">
-                            <p className="text-sm font-medium [overflow-wrap:anywhere] text-slate-900">{g.name}</p>
-                            <p className="text-xs text-slate-500">
-                              <span className="font-mono">{g.barCode}</span> · {g.price.toFixed(2)} ₾ / {g.unitTxt}
-                              {g.aId ? ' · აქციზური' : ''}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 items-end gap-2">
-                            <label className="block w-28">
-                              <span className="mb-1 block truncate text-[11px] text-slate-500" title={`რაოდენობა · ${g.unitTxt}`}>
-                                რაოდ. · {g.unitTxt}
-                              </span>
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                value={qtyOf(g.id)}
-                                invalid={!!error}
-                                onChange={(e) => {
-                                  update({ qty: { ...cur.qty, [g.id]: e.target.value } })
-                                  clear(`${g.id}.quantity`)
-                                }}
-                                className="text-right"
-                              />
-                            </label>
-                            <label className="block w-24" title="დამატებითი რაოდენობა (არასავალდებულო)">
-                              <span className="mb-1 block truncate text-[11px] text-slate-500">დამატ. რაოდ.</span>
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                value={extOf(g.id)}
-                                placeholder="—"
-                                onChange={(e) => {
-                                  update({ ext: { ...cur.ext, [g.id]: e.target.value } })
-                                  clear(`${g.id}.quantity`)
-                                }}
-                                className="text-right"
-                              />
-                            </label>
-                          </div>
-                          {routeGoods.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                update({ removed: [...cur.removed, g.id] })
-                                clear(`${g.id}.quantity`)
-                              }}
-                              className="-mr-1 mb-1.5 shrink-0 self-end rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                              aria-label={`${g.name}: მოხსნა`}
-                              title="ამ რეისზე არ მიაქვს"
-                            >
-                              <X className="size-4" />
-                            </button>
-                          )}
-                        </div>
-                        {error && <p className="mt-1 text-right text-xs text-rose-600">{error}</p>}
-                      </div>
-                    )
-                  })}
-                  {!shown.length && <p className="px-3 py-2.5 text-sm text-slate-500">ყველა პროდუქტი მოხსნილია.</p>}
-                </div>
-                {hidden.length > 0 && (
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="ml-1 text-xs text-slate-500">მოხსნილი:</span>
-                    {hidden.map((g) => (
-                      <button
-                        key={g.id}
-                        type="button"
-                        onClick={() => {
-                          update({ removed: cur.removed.filter((x) => x !== g.id) })
-                          clear('items')
-                        }}
-                        className="inline-flex h-7 items-center gap-1 rounded-full bg-fill px-2.5 text-xs text-slate-700 hover:bg-slate-200"
-                      >
-                        <Plus className="size-3.5" />
-                        {g.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {errors.items && <p className="mt-1 ml-1 text-xs text-rose-600">{errors.items}</p>}
-              </div>
-            )}
+            <ShipmentGoodsEditor d={d} goods={goods} onChange={setGoods} errors={errors} onClearError={(k) => clear(k)} />
 
             {still ? (
               <div className="rounded-[10px] bg-fill px-4 py-3 text-sm text-slate-600">ტრანსპორტირების გარეშე: მძღოლი და მანქანა არ მიეთითება, ტვირთი ბარდება {start.start || 'დაწყების მისამართზე'}.</div>
@@ -513,12 +418,34 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               <button type="button" onClick={() => setMore((x) => !x)} className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-600">
                 <ChevronDown className={cx('size-4 transition-transform', more && 'rotate-180')} />
                 დამატებითი ველები
-                {!more && <span className="font-normal text-slate-400"> · ტრანსპორტირების ღირებულება, მიმწოდებელი, მიმღები, კომენტარი</span>}
+                {!more && <span className="font-normal text-slate-400"> · {still ? 'მიმწოდებელი, მიმღები, კომენტარი' : 'ტრანსპორტი, ღირებულება, კომენტარი…'}</span>}
               </button>
               {more && (
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {!still && (
                     <>
+                      <Field label="ტრანსპორტის ტიპი">
+                        <Select value={w.transId} onChange={(e) => setW('transId', e.target.value)}>
+                          {transTypes(d.rs).map((t) => (
+                            <option key={t.id} value={String(t.id)}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      {Number(w.transId) === RS_TRANS_OTHER ? (
+                        <Field label="ტრანსპორტის ტიპის დასახელება" error={errors.transTxt}>
+                          <Input value={w.transTxt} maxLength={250} invalid={!!errors.transTxt} onChange={(e) => setW('transTxt', e.target.value)} />
+                        </Field>
+                      ) : (
+                        <div className="hidden sm:block" />
+                      )}
+                      <div className="sm:col-span-2">
+                        <Field label="გადამზიდავი კომპანიის ს/ნ (არასავალდებულო)" error={errors.transporterTin}>
+                          <Input value={w.transporterTin} inputMode="numeric" className="font-mono" invalid={!!errors.transporterTin} onChange={(e) => setW('transporterTin', e.target.value)} />
+                        </Field>
+                        {!errors.transporterTin && <LookupLine lookup={transporter} />}
+                      </div>
                       <Field label="ტრანსპორტირების ღირებულება (₾)" error={errors.transportCost}>
                         <Input type="text" inputMode="decimal" value={w.transportCost} placeholder="0" invalid={!!errors.transportCost} onChange={(e) => setW('transportCost', e.target.value)} />
                       </Field>
@@ -546,7 +473,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             </div>
           </Card>
 
-          {rsNotReady && <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge პარამეტრები (ტრანსპორტი) არ არის შევსებული — მიმართე ადმინისტრატორს.</div>}
+          {rsNotReady && <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge არ არის დაკავშირებული — მიმართე ადმინისტრატორს.</div>}
 
           <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
             <Button type="button" variant="ghost" onClick={() => nav(-1)}>

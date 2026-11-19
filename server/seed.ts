@@ -2,7 +2,7 @@ import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 25
+export const DB_VERSION = 27
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -46,6 +46,10 @@ type V21Shipment = Omit<Shipment, 'items'> & { productId: string; cargo: { descr
 /** v22: a list of products per route; shipment items without price and VAT. */
 type V22Route = Omit<CarrierRoute, 'goods'> & { productIds: string[] }
 type V22Item = Omit<ShipmentItem, 'lineId' | 'price' | 'vatType'>
+/** v23–v25: routes carried the goods lines; shipment items named the line they came from. */
+type V25Good = Omit<ShipmentItem, 'quantity'> & { id: string; productId: string; quantity?: number }
+type V25Route = CarrierRoute & { goods: V25Good[] }
+type V25Item = ShipmentItem & { lineId?: string; productId?: string }
 /** Before v23 price and VAT type were global settings. */
 type V22Rs = RsSettings & { price?: number; vatType?: 0 | 1 | 2 }
 
@@ -163,7 +167,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     d = { ...d, version: 20, routes: routes as unknown as CarrierRoute[] }
   }
   // v20 → v21: a buyer can be set again; none (the default) keeps შიდა გადაზიდვა.
-  if (d.version === 20) d = { ...d, version: 21, rs: { ...d.rs, buyerTin: '', buyerName: '', buyerForeign: false } }
+  if (d.version === 20) d = { ...d, version: 21, rs: { ...d.rs, buyerTin: '', buyerName: '', buyerForeign: false } as RsSettings }
   // v21 → v22: a waybill carries several products. Routes get a list of products, shipments a list of
   // goods lines (each with its own quantity); the settings' quantity is only prefilled from now on.
   if (d.version === 21) {
@@ -181,7 +185,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
   // type) instead of product ids; price and VAT type leave the settings for the lines.
   if (d.version === 22) {
     const { price = 0, vatType = 0, ...rs } = d.rs as V22Rs
-    const routes: CarrierRoute[] = (d.routes as unknown as V22Route[]).map(({ productIds, ...r }) => ({
+    const routes: V25Route[] = (d.routes as unknown as V22Route[]).map(({ productIds, ...r }) => ({
       ...r,
       goods: (productIds ?? []).flatMap((id, i) => {
         const p = d.products.find((x) => x.id === id)
@@ -195,7 +199,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
         return { ...i, lineId: '', price: g?.price ?? price, vatType: g?.vatType ?? vatType }
       }),
     }))
-    d = { ...d, version: 23, rs, routes, shipments }
+    d = { ...d, version: 23, rs, routes: routes as unknown as CarrierRoute[], shipments }
   }
   // v23 → v24: RS.ge's data is no longer stored. Products go (RS.ge's list is read live, the bar code
   // is a product's id); the seller, reference lists and sync state go from the settings (store.ts drops
@@ -203,16 +207,48 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
   if (d.version === 23) {
     const codeOf = (id: string) => d.products.find((p) => p.id === id)?.barCode
     const product = <T extends { productId: string; barCode: string }>(g: T): T => ({ ...g, productId: g.productId && codeOf(g.productId) === g.barCode ? g.barCode : '' })
-    const routes = d.routes.map((r) => ({ ...r, goods: r.goods.map(product) }))
-    const shipments = d.shipments.map((s) => storedShipment({ ...s, items: (s.items ?? []).map(product) }))
+    const routes = (d.routes as V25Route[]).map((r) => ({ ...r, goods: r.goods.map(product) }))
+    const shipments = d.shipments.map((s) => storedShipment({ ...s, items: ((s.items ?? []) as V25Item[]).map((i) => product({ ...i, productId: i.productId ?? '' })) }))
     d = { ...d, version: 24, routes, shipments }
   }
   // v24 → v25: the quantity prefilled on new shipments is set per goods line of a route, not once in
   // the settings. Every line takes the settings' old value.
   if (d.version === 24) {
     const { quantity = 0, ...rs } = d.rs as RsSettings & { quantity?: number }
-    const routes = d.routes.map((r) => ({ ...r, goods: r.goods.map((g) => (quantity > 0 ? { ...g, quantity } : g)) }))
+    const routes = (d.routes as V25Route[]).map((r) => ({ ...r, goods: r.goods.map((g) => (quantity > 0 ? { ...g, quantity } : g)) }))
     d = { ...d, version: 25, rs, routes }
+  }
+  // v25 → v26: the buyer and transport cost are per waybill, not in the settings. A settings buyer
+  // moves onto the routes that had none (and weren't შიდა გადაზიდვა), so their waybills keep it.
+  if (d.version === 25) {
+    const { buyerTin = '', buyerName = '', buyerForeign = false, transportCost: _c, ...rs } = d.rs as RsSettings & { buyerTin?: string; buyerName?: string; buyerForeign?: boolean; transportCost?: number }
+    const own = buyerTin && buyerTin !== rs.sellerTin
+    const routes = d.routes.map((r) => (own && !r.buyerTin && r.waybillType !== 1 ? { ...r, buyerTin, buyerName, ...(buyerForeign && { buyerForeign }) } : r))
+    d = { ...d, version: 26, rs, routes }
+  }
+  // v26 → v27: the RS.ge settings keep only the service user: everything on a waybill is set per
+  // shipment, and the goods are chosen on the shipment instead of the route.
+  // - The transport type and transporter go onto the shipments not on RS.ge yet, so retries send the same.
+  // - Those shipments' goods lines take their route line as it is now (what a retry used to send).
+  if (d.version === 26) {
+    type V26Rs = RsSettings & { transId?: number; transTxt?: string; transporterTin?: string }
+    const old = d.rs as V26Rs
+    const { transId = 1, transTxt = '', transporterTin = '' } = old
+    const rs = { ...old } as Record<string, unknown>
+    for (const k of ['buyerTin', 'buyerName', 'buyerForeign', 'transId', 'transTxt', 'transporterTin', 'transportCost', 'tranCostPayer', 'receptionInfo', 'receiverInfo', 'comment', 'unitId', 'unitTxt']) delete rs[k]
+    const oldRoutes = d.routes as V25Route[]
+    const routes: CarrierRoute[] = oldRoutes.map(({ goods: _g, ...r }) => r)
+    const shipments = d.shipments.map((s) => {
+      const items = (s.items as V25Item[] | undefined)?.map(({ lineId, productId: _p, ...i }) => {
+        const line = lineId ? oldRoutes.find((r) => r.id === s.routeId)?.goods?.find((g) => g.id === lineId) : undefined
+        if (!line) return i
+        const { id: _id, productId: _lp, quantity: _q, ...g } = line
+        return { ...i, ...g }
+      })
+      const waybill = s.waybill && { ...s.waybill, transId: s.waybill.transId ?? transId, transTxt: s.waybill.transTxt ?? transTxt, transporterTin: s.waybill.transporterTin ?? transporterTin }
+      return { ...s, ...(items && { items }), ...(waybill && { waybill }) }
+    })
+    d = { ...d, version: 27, rs: rs as unknown as RsSettings, routes, shipments }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d

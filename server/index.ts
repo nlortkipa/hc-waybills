@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, saveRsSettings, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -56,7 +56,6 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/trucks\/sync$/, ({ body, user }) => readRsList('plates', body, user)],
   // Puts stored trucks' plates that RS.ge's car-number list lacks onto it.
   ['POST', /^\/api\/trucks\/push$/, ({ user }) => pushPlates(user)],
-  ['PUT', /^\/api\/rs$/, ({ body, user }) => saveRsSettings(body ?? {}, user)],
   ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
   ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
   ['POST', /^\/api\/rs\/name$/, ({ body, user }) => rsNameFromTin(body, user)],

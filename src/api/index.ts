@@ -5,7 +5,7 @@
 import { useEffect } from 'react'
 import { canUseCarrier } from '../lib/route'
 import { active, shipmentUses } from '../lib/util'
-import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, RsSettings, Shipment, ShipmentWaybill, User } from '../types'
+import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, Shipment, ShipmentItem, ShipmentWaybill, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -131,10 +131,6 @@ export const rsPending = (s: Shipment) => !!s.rsWaybillId && !s.rsRemote
 /* ------------------------------ RS.ge ------------------------------ */
 
 export const rsSettings = {
-  /** Saves the waybill defaults. A buyer RS.ge knows always gets RS.ge's name; otherwise the typed one is kept. Admin only. */
-  async save(value: Partial<RsSettings>) {
-    await call('PUT', '/api/rs', value)
-  },
   /** Checks a service user on RS.ge and stores it only if it works. Empty `sp` re-checks the stored password. */
   connect(creds: { su: string; sp?: string }) {
     return call<{ tin: string; name: string }>('POST', '/api/rs/connection', creds)
@@ -187,8 +183,8 @@ export function visibleShipments(d: Database, user: User): Shipment[] {
   return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-/** A goods line: one of the route's lines and the quantity the truck carries. */
-export type NewShipmentItem = { lineId: string; quantity: number; quantityExt?: number }
+/** A goods line as the operator wrote it. */
+export type NewShipmentItem = Omit<ShipmentItem, 'aTitle'>
 
 /** Waybill options sent with a shipment; `beginAt` '' or missing = start when activated. */
 export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string }

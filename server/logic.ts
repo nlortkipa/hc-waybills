@@ -3,8 +3,8 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeText, routeUsable } from '../src/lib/route.ts'
-import { akcizUnit, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
-import { active, nowIso, phoneKey, sameIds, shipmentUses, uid } from '../src/lib/util.ts'
+import { akcizUnit, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
+import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
   Carrier,
@@ -16,7 +16,6 @@ import type {
   RsRemoteWaybill,
   RsSettings,
   RsWaybillPayload,
-  RouteGood,
   Shipment,
   ShipmentEvent,
   ShipmentItem,
@@ -124,23 +123,18 @@ function typedComment(comment: string, shipmentId: string) {
   return c
 }
 
-/** RS.ge's goods rows as the shipment's goods lines, each tied to the route's line with its bar code. */
-function itemsFrom(w: RsRemoteWaybill, route: CarrierRoute | undefined, akciz: RsSettings['akciz']): ShipmentItem[] {
-  const free = [...(route?.goods ?? [])]
+/** RS.ge's goods rows as the shipment's goods lines. */
+function itemsFrom(w: RsRemoteWaybill, akciz: RsSettings['akciz']): ShipmentItem[] {
   return w.goods.map((g) => {
-    const k = free.findIndex((x) => x.barCode.toLowerCase() === g.barCode.toLowerCase())
-    const line = k >= 0 ? free.splice(k, 1)[0] : undefined
     const a = g.aId ? akciz?.find((x) => x.id === g.aId) : undefined
     return {
-      lineId: line?.id ?? '',
-      productId: line?.productId ?? '',
       name: g.name,
       barCode: g.barCode,
       unitId: g.unitId ?? RS_UNIT_OTHER,
       unitTxt: g.unitTxt,
       price: g.price,
       vatType: ([0, 1, 2] as const).find((v) => v === g.vatType) ?? 0,
-      ...(g.aId ? { aId: g.aId, aTitle: a ? `${a.code} · ${a.title}` : (line?.aTitle ?? String(g.aId)) } : {}),
+      ...(g.aId ? { aId: g.aId, aTitle: a ? `${a.code} · ${a.title}` : String(g.aId) } : {}),
       quantity: g.quantity,
       ...(g.quantityExt ? { quantityExt: g.quantityExt } : {}),
     }
@@ -155,6 +149,9 @@ function waybillFrom(w: RsRemoteWaybill, shipmentId: string): ShipmentWaybill {
     type,
     ...buyer,
     ...(w.beginAt && Date.parse(w.beginAt) > Date.now() && { beginAt: w.beginAt }),
+    transId: w.transId || RS_TRANS_CAR,
+    transTxt: w.transId === RS_TRANS_OTHER ? (w.transTxt ?? '') : '',
+    transporterTin: w.transporterTin ?? '',
     transportCost: w.transportCost,
     tranCostPayer: w.tranCostPayer === 1 ? 1 : 2,
     receptionInfo: w.receptionInfo ?? '',
@@ -168,7 +165,7 @@ function waybillFrom(w: RsRemoteWaybill, shipmentId: string): ShipmentWaybill {
  * invoice and, once only RS.ge has them, its goods, quantity and waybill options. Without RS.ge's copy
  * (not read yet, or RS.ge unreachable) those stay empty.
  */
-export function withRs(s: Shipment, d: StoredDatabase = db.get(), akciz = rsge.account()?.akciz): Shipment {
+export function withRs(s: Shipment, akciz = rsge.account()?.akciz): Shipment {
   const w = s.rsWaybillId ? rsCache.waybill(s.rsWaybillId) : undefined
   // State and invoice count once the pipeline is done with RS.ge (a retry in progress records its own).
   const settled = s.status === 'uploaded' || s.status === 'saved'
@@ -176,7 +173,7 @@ export function withRs(s: Shipment, d: StoredDatabase = db.get(), akciz = rsge.a
     ? { ...s, rsRemote: w, ...(settled && { waybillState: stateOf(w.status), invoiceId: w.invoiceId }), waybillNumber: s.waybillNumber || (w.status > 0 && w.number) || undefined }
     : { ...s }
   if (!s.items) {
-    out.items = w ? itemsFrom(w, d.routes.find((r) => r.id === s.routeId), akciz) : []
+    out.items = w ? itemsFrom(w, akciz) : []
     out.quantity = w?.quantity ?? 0
     if (w) out.waybill = { ...waybillFrom(w, s.id), ...(s.waybill?.beginAt && { beginAt: s.waybill.beginAt }) }
   }
@@ -196,7 +193,7 @@ export function viewFor(user: User): Database {
     sms: { ...raw.sms, apiKey: '', apiKeySet: !!raw.sms.apiKey },
     products: rsCache.products(),
     trucks: trucksView(raw.trucks),
-    shipments: raw.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => withRs(s, raw, rs.akciz)),
+    shipments: raw.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => withRs(s, rs.akciz)),
   }
   if (user.role !== 'operator') return d
   const mine = new Set(d.shipments.map((s) => s.id))
@@ -234,24 +231,18 @@ function dropCarrierRoutes(carrierId: string) {
 const MAX_GOODS = 50
 
 /**
- * A route's goods lines, checked. Each is sent as written (filled from the product list or typed in):
- * RS.ge requires a name, bar code and unit on every line. Price ≥ 0, VAT 0/1/2. productId (the list
- * product it was filled from) is kept only while the bar code is still that product's.
+ * The goods lines of a shipment, checked. Each is sent as written (filled from the product list or
+ * typed in): RS.ge requires a name, bar code and unit on every line. Price ≥ 0, VAT 0/1/2, quantity > 0.
+ * A unit or excise code RS.ge no longer lists is accepted only on a line the shipment already had.
  */
-function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGood[] {
+function parseItems(raw: unknown, prev: ShipmentItem[] = []): ShipmentItem[] {
   const rs = rsView()
-  const products = rsCache.products()
   const list = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []
-  if (!list.length) fail('დაამატე მინიმუმ ერთი პროდუქტი')
-  if (list.length > MAX_GOODS) fail(`ერთ მარშრუტზე მაქსიმუმ ${MAX_GOODS} პროდუქტია`)
+  if (!list.length) fail('რეისზე მინიმუმ ერთი პროდუქტი უნდა იყოს')
+  if (list.length > MAX_GOODS) fail(`ერთ ზედნადებზე მაქსიმუმ ${MAX_GOODS} პროდუქტია`)
   const units = rsUnits(rs)
-  const ids = new Set<string>()
   const codes = new Set<string>()
   return list.map((x) => {
-    // Line ids are kept, so shipments made from a line find it again on retries.
-    let id = str(x?.id)
-    if (!id || ids.has(id)) id = uid('g')
-    ids.add(id)
     const name = str(x?.name)
     const barCode = str(x?.barCode)
     const unitId = num(x?.unitId, RS_UNIT_OTHER)
@@ -260,33 +251,30 @@ function parseRouteGoods(raw: unknown, prev: CarrierRoute | undefined): RouteGoo
     if (!barCode) fail(`„${label}“: ჩაწერე შტრიხკოდი — RS.ge მას ყველა პროდუქტზე ითხოვს`)
     if (!name) fail(`„${label}“: ჩაწერე დასახელება`)
     if (name.length > 250 || barCode.length > 50) fail(`„${label}“: დასახელება ან შტრიხკოდი ძალიან გრძელია`)
-    // A unit RS.ge no longer lists is accepted only when the line already had it.
-    const keptUnit = prev?.goods.some((y) => y.id === id && y.unitId === unitId)
-    if (!units.some((u) => u.id === unitId) && !keptUnit) fail(`„${label}“: აირჩიე საზომი ერთეული`)
+    const was = prev.find((y) => y.barCode.toLowerCase() === barCode.toLowerCase())
+    if (!units.some((u) => u.id === unitId) && was?.unitId !== unitId) fail(`„${label}“: აირჩიე საზომი ერთეული`)
     if (!unitTxt) fail(`„${label}“: ჩაწერე ერთეულის დასახელება`)
-    if (codes.has(barCode.toLowerCase())) fail(`„${label}“: ეს შტრიხკოდი მარშრუტზე ორჯერ არის`)
+    if (codes.has(barCode.toLowerCase())) fail(`„${label}“: ეს შტრიხკოდი ზედნადებზე ორჯერ არის`)
     codes.add(barCode.toLowerCase())
     const price = x?.price === '' || x?.price == null ? NaN : Number(x.price)
     if (!(price >= 0)) fail(`„${label}“: შეიყვანე ფასი (0 ან მეტი)`)
     const vatType = ([0, 1, 2] as const).find((v) => v === Number(x?.vatType))
     if (vatType == null) fail(`„${label}“: აირჩიე დაბეგვრის ტიპი`)
-    // Optional: prefilled on new shipments.
-    const quantity = x?.quantity === '' || x?.quantity == null ? 0 : Number(x.quantity)
-    if (!(quantity >= 0)) fail(`„${label}“: რაოდენობა უნდა იყოს 0 ან მეტი`)
-    // The RS.ge product it was filled from, while the bar code is still that product's.
-    const p = str(x?.productId) ? products.find((y) => y.id === str(x.productId) && y.barCode.toLowerCase() === barCode.toLowerCase()) : undefined
-    const keptProduct = !p && str(x?.productId) && prev?.goods.some((y) => y.id === id && y.productId === str(x.productId) && y.barCode === barCode)
+    const quantity = Math.round(num(x?.quantity) * 1000) / 1000
+    if (!(quantity > 0)) fail(`„${label}“: რაოდენობა უნდა იყოს 0-ზე მეტი`)
+    const quantityExt = Math.round(num(x?.quantityExt) * 1000) / 1000
+    if (quantityExt < 0) fail(`„${label}“: დამატებითი რაოდენობა არ შეიძლება იყოს უარყოფითი`)
     // Excise goods: a code RS.ge lists (or the one the line already had, if RS.ge's list isn't loaded).
     const aId = Math.max(0, Math.trunc(num(x?.aId)))
     const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
-    const kept = aId ? prev?.goods.find((y) => y.id === id && y.aId === aId) : undefined
+    const kept = aId && was?.aId === aId ? was : undefined
     if (aId && !akciz && !kept) fail(`„${label}“: აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან`)
     // As on RS.ge's form, excise goods go under their excise goods code.
     if (akciz && akciz.code.toLowerCase() !== barCode.toLowerCase()) fail(`„${label}“: აქციზური საქონლის შტრიხკოდი მისი აქციზის კოდია (${akciz.code})`)
     const fixed = akciz && akcizUnit(rs, akciz)
     if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== unitTxt))) fail(`„${label}“: აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
     const excise = aId ? { aId, aTitle: akciz ? `${akciz.code} · ${akciz.title}` : (kept!.aTitle ?? String(aId)) } : {}
-    return { id, productId: p?.id ?? (keptProduct ? str(x.productId) : ''), name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise, ...(quantity > 0 && { quantity: Math.round(quantity * 1000) / 1000 }) }
+    return { name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise, quantity, ...(quantityExt > 0 && { quantityExt }) }
   })
 }
 
@@ -357,21 +345,19 @@ export const refs = {
         carrierId: str(r.carrierId),
         endAddress: str(r.endAddress).trim(),
         scaleId: str(r.scaleId).trim(),
-        goods: parseRouteGoods(r.goods, was),
         ...(await routeWaybill(r, was)),
       })
-      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'goods', 'waybillType', 'buyerTin', 'buyerName', 'buyerForeign'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
+      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'waybillType', 'buyerTin', 'buyerName', 'buyerForeign'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
       if (r.waybillType == null) delete r.waybillType
       if (!r.buyerTin) for (const k of ['buyerTin', 'buyerName', 'buyerForeign'] as const) delete r[k]
       const carrier = d.carriers.find((c) => c.id === r.carrierId)
       if (!carrier || carrier.deletedAt) fail('აირჩიე კარიერი')
       if (!r.endAddress) fail('შეიყვანე დასრულების მისამართი')
       if (!r.scaleId) fail('შეიყვანე სასწორის ID')
-      // The same addresses may be opened again with other products.
-      const codes = (x: CarrierRoute) => x.goods.map((g) => g.barCode.toLowerCase())
-      const same = (x: CarrierRoute) =>
-        x.id !== r.id && x.carrierId === r.carrierId && sameIds(codes(x), codes(r)) && x.endAddress.trim().toLowerCase() === r.endAddress.toLowerCase()
-      if (active(d.routes).some(same)) fail('ეს მარშრუტი უკვე არსებობს')
+      // The same address may be opened again for another buyer or waybill type. Checked only when one of
+      // these changes: routes that differed only by their goods before v26 can still be edited.
+      const key = (x: CarrierRoute) => [x.carrierId, x.endAddress.trim().toLowerCase(), x.waybillType ?? '', x.buyerTin ?? ''].join('|')
+      if ((!was || key(was) !== key(r)) && active(d.routes).some((x) => x.id !== r.id && key(x) === key(r))) fail('ეს მარშრუტი უკვე არსებობს')
     }
     db.put(col, rec as never)
     if (revokeSessions) db.sessions.deleteForUser(rec.id, rec.id === by.id ? token : undefined)
@@ -403,8 +389,8 @@ export const refs = {
 const waybillType = (v: unknown): WaybillType | undefined => ([1, 2, 3, 5] as const).find((t) => t === Number(v))
 
 /**
- * A route's own waybill type and buyer (both optional: missing ones come from the RS.ge settings).
- * The buyer is looked up on RS.ge like the settings' one. Checked against what RS.ge refuses:
+ * A route's own waybill type and buyer (both optional: no type → by the buyer, no buyer → შიდა გადაზიდვა).
+ * The buyer is looked up on RS.ge. Checked against what RS.ge refuses:
  * a buyer is needed on every type but შიდა გადაზიდვა (-1004), and may not be the seller (-1047).
  */
 async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Promise<Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
@@ -414,7 +400,7 @@ async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Pr
   if (tin && rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
   const buyer = tin ? await resolveBuyer(tin, str(r.buyerName), { buyerTin: prev?.buyerTin ?? '', buyerName: prev?.buyerName ?? '', buyerForeign: !!prev?.buyerForeign }) : { buyerTin: '', buyerName: '', buyerForeign: false }
   const effective = waybillDefaults(rs, { waybillType: type, ...buyer })
-  if (effective.type !== 1 && !effective.buyerTin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება — ჩაწერე აქ ან RS.ge-ს პარამეტრებში')
+  if (effective.type !== 1 && !effective.buyerTin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება')
   return { waybillType: type, ...buyer }
 }
 
@@ -584,40 +570,10 @@ function truckRecord(id: string): string {
 const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
 
 /**
- * Saves the waybill defaults (buyer, transport…). The service user is not part of this: it is
- * set only by connectRs, after RS.ge accepted it. With no buyer the waybill is შიდა გადაზიდვა (the
- * buyer is the seller). A buyer RS.ge knows always gets RS.ge's name; for one it doesn't, the typed
- * name is kept and the number is sent unchecked.
- */
-export async function saveRsSettings(v: Partial<RsSettings>, user: User) {
-  requireAdmin(user)
-  const prev = db.get().rs
-  const next: RsSettings = {
-    ...prev,
-    ...(await resolveBuyer(str(v.buyerTin), str(v.buyerName), prev)),
-    transporterTin: str(v.transporterTin),
-    transId: num(v.transId, 1),
-    transTxt: str(v.transTxt),
-    tranCostPayer: Number(v.tranCostPayer) === 1 ? 1 : 2,
-    transportCost: num(v.transportCost),
-    receptionInfo: str(v.receptionInfo),
-    receiverInfo: str(v.receiverInfo),
-    comment: str(v.comment),
-  }
-  // Left over from before v19 (unit), v23 (price, VAT type) and v25 (quantity): now set on each route's
-  // goods lines. RS.ge's fields (seller, lists, read times) are dropped when stored.
-  for (const k of ['unitId', 'unitTxt', 'price', 'vatType', 'quantity']) delete (next as unknown as Record<string, unknown>)[k]
-  if (next.transporterTin && !/^\d{9}$|^\d{11}$/.test(next.transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
-  if (next.transportCost < 0) fail('თანხა არ შეიძლება იყოს უარყოფითი')
-  if (next.transId === RS_TRANS_OTHER && !next.transTxt) fail('„სხვა“ ტრანსპორტისთვის შეიყვანე ტიპის დასახელება')
-  db.set('rs', next)
-}
-
-/**
  * The buyer as it is stored: RS.ge's name when it knows the number, else the typed one (required).
- * If RS.ge can't be asked, an unchanged number keeps what was saved, so other settings still save.
+ * If RS.ge can't be asked, an unchanged number keeps what was saved.
  */
-type Buyer = Pick<RsSettings, 'buyerTin' | 'buyerName' | 'buyerForeign'>
+type Buyer = { buyerTin: string; buyerName: string; buyerForeign: boolean }
 
 async function resolveBuyer(tin: string, typedName: string, prev: Buyer): Promise<Buyer> {
   if (!tin) return { buyerTin: '', buyerName: '', buyerForeign: false }
@@ -744,9 +700,7 @@ type WaybillSource = Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 
 
 /**
  * Builds the waybill for a shipment from its waybill options (type, buyer, transport details), the
- * chosen route, driver, truck and goods lines, and the admin's transport settings. Each line is read
- * from the route as it is now, so a retry picks up a fix to it; a line gone from the route is sent as
- * it was when the shipment was made.
+ * chosen route, driver, truck and goods lines.
  */
 function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
   const rs = rsView()
@@ -755,22 +709,18 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
   const driver = d.drivers.find((x) => x.id === s.driverId)
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const moving = !noTransport(w.type)
-  const goods = s.items.map((i) => {
-    // The route's line as it is now (a fix the admin made after a refusal applies), else the item's snapshot.
-    const g = (i.lineId && route.route?.goods.find((x) => x.id === i.lineId)) || i
-    return {
-      name: g.name,
-      barCode: g.barCode,
-      unitId: g.unitId,
-      unitTxt: g.unitTxt,
-      quantity: i.quantity,
-      price: g.price,
-      amount: Math.round(i.quantity * g.price * 100) / 100,
-      vatType: g.vatType,
-      aId: g.aId ?? 0,
-      ...(i.quantityExt && { quantityExt: i.quantityExt }),
-    }
-  })
+  const goods = s.items.map((g) => ({
+    name: g.name,
+    barCode: g.barCode,
+    unitId: g.unitId,
+    unitTxt: g.unitTxt,
+    quantity: g.quantity,
+    price: g.price,
+    amount: Math.round(g.quantity * g.price * 100) / 100,
+    vatType: g.vatType,
+    aId: g.aId ?? 0,
+    ...(g.quantityExt && { quantityExt: g.quantityExt }),
+  }))
   return {
     type: w.type,
     // შიდა გადაზიდვა: the buyer is the seller (with any other type RS.ge refuses buyer = seller: -1047).
@@ -783,11 +733,11 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     driverName: moving && driver ? `${driver.firstName} ${driver.lastName}` : '',
     // RS.ge stores plates without dashes: AA-123-BB → AA123BB.
     carNumber: moving && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
-    transId: rs.transId,
-    transTxt: rs.transId === RS_TRANS_OTHER ? rs.transTxt : '',
+    transId: w.transId,
+    transTxt: w.transId === RS_TRANS_OTHER ? w.transTxt : '',
     tranCostPayer: w.tranCostPayer,
     transportCost: moving ? w.transportCost : 0,
-    transporterTin: moving ? rs.transporterTin : '',
+    transporterTin: moving ? w.transporterTin : '',
     receptionInfo: w.receptionInfo,
     receiverInfo: w.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
@@ -839,8 +789,8 @@ const noReport = (user: User) => user.role === 'report' && fail('რეპორ
 
 const running = new Set<string>()
 
-/** A goods line as the client sends it: one of the route's lines, its quantity and the optional additional quantity. */
-export type NewShipmentItem = { lineId: string; quantity: number; quantityExt?: number }
+/** A goods line as the client sends it; checked by parseItems. */
+export type NewShipmentItem = Omit<ShipmentItem, 'aTitle'>
 
 /** Waybill options as the client sends them; anything left out comes from the route and the settings. */
 export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string | null }
@@ -856,32 +806,11 @@ export interface NewShipmentInput {
   draft?: boolean
 }
 
-/**
- * The goods lines of a new shipment: lines of the route (each at most once), with a quantity > 0.
- * Everything but the quantity comes from the route, never from the request.
- */
-function parseItems(raw: unknown, route: CarrierRoute): ShipmentItem[] {
-  const list = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []
-  if (!list.length) fail('რეისზე მინიმუმ ერთი პროდუქტი უნდა იყოს')
-  const seen = new Set<string>()
-  return list.map((x) => {
-    const lineId = str(x?.lineId)
-    const { id: _id, ...g } = route.goods.find((x) => x.id === lineId) ?? fail('მარშრუტის პროდუქტები შეიცვალა — განაახლე გვერდი')
-    if (seen.has(lineId)) fail(`„${g.name}“ ორჯერ არის`)
-    seen.add(lineId)
-    const quantity = Math.round(num(x?.quantity) * 1000) / 1000
-    if (!(quantity > 0)) fail(`„${g.name}“: რაოდენობა უნდა იყოს 0-ზე მეტი`)
-    const quantityExt = Math.round(num(x?.quantityExt) * 1000) / 1000
-    if (quantityExt < 0) fail(`„${g.name}“: დამატებითი რაოდენობა არ შეიძლება იყოს უარყოფითი`)
-    return { lineId, ...g, quantity, ...(quantityExt > 0 && { quantityExt }) }
-  })
-}
-
 const MAX_INFO = 250
 
 /**
  * A shipment's waybill options: what the client chose, else the route's, else the settings'. The buyer
- * is looked up on RS.ge (its name wins) unless it is the one already resolved for the route or settings.
+ * is looked up on RS.ge (its name wins) unless it is the one already resolved for the route.
  * `keepBegin`: a correction keeps the start RS.ge already has.
  */
 async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRoute, prev?: ShipmentWaybill): Promise<ShipmentWaybill> {
@@ -891,7 +820,7 @@ async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRo
   const type = x.type == null ? base.type : (waybillType(x.type) ?? fail('აირჩიე ზედნადების ტიპი'))
   let buyer: Buyer = { buyerTin: '', buyerName: '', buyerForeign: false }
   if (type !== 1) {
-    // The route's (or settings') buyer when the type alone was changed and none is typed.
+    // The route's buyer when the type alone was changed and none is typed.
     const fallback = base.buyerTin ? base : waybillDefaults(rs, { ...route, waybillType: 2 })
     const tin = x.buyerTin == null ? fallback.buyerTin : str(x.buyerTin)
     if (!tin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება — ჩაწერე მყიდველის საიდენტიფიკაციო ნომერი')
@@ -916,10 +845,20 @@ async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRo
     if (t.length > MAX_INFO) fail(`${label}: მაქსიმუმ ${MAX_INFO} სიმბოლო`)
     return t
   }
+  // A transport type RS.ge lists (or the one the waybill already had, if RS.ge's list isn't loaded).
+  const transId = x.transId == null ? base.transId : Math.trunc(num(x.transId, NaN))
+  if (!(transId > 0) || (transId !== base.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტის ტიპი')
+  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, base.transTxt, 'ტრანსპორტის ტიპი') : ''
+  if (transId === RS_TRANS_OTHER && !transTxt && !noTransport(type)) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე ტიპის დასახელება')
+  const transporterTin = x.transporterTin == null ? base.transporterTin : str(x.transporterTin)
+  if (transporterTin && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
   return {
     type,
     ...buyer,
     ...(beginAt && { beginAt }),
+    transId,
+    transTxt,
+    transporterTin,
     transportCost: Math.round(transportCost * 100) / 100,
     tranCostPayer: x.tranCostPayer == null ? base.tranCostPayer : Number(x.tranCostPayer) === 1 ? 1 : 2,
     receptionInfo: text(x.receptionInfo, base.receptionInfo, 'მიმწოდებლის ინფორმაცია'),
@@ -948,7 +887,7 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
     // Trucks are RS.ge's car numbers (with the model and trailer stored here).
     if (!usable(trucksView(d.trucks), input.truckId, prev?.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
   }
-  const items = parseItems(body.items, picked!)
+  const items = parseItems(body.items, prev?.items)
   const quantity = Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000
   return { ...input, items, quantity, waybill }
 }
@@ -957,8 +896,7 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
 function sentItems(s: Shipment, payload: RsWaybillPayload): ShipmentItem[] {
   return s.items.map((i, k) => {
     const g = payload.goods[k]
-    const line = i.lineId ? resolveRoute(db.get(), s.routeId).route?.goods.find((x) => x.id === i.lineId) : undefined
-    return { ...i, name: g.name, barCode: g.barCode, unitId: g.unitId, unitTxt: g.unitTxt, price: g.price, vatType: g.vatType, aId: g.aId, aTitle: line ? line.aTitle : i.aTitle }
+    return { ...i, name: g.name, barCode: g.barCode, unitId: g.unitId, unitTxt: g.unitTxt, price: g.price, vatType: g.vatType, aId: g.aId }
   })
 }
 

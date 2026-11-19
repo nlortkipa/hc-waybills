@@ -3,13 +3,12 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 're
 import { products, refs, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx, formatDateTime, phoneKey, sameIds } from '../lib/util'
+import { active, cx, formatDateTime, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
 import { akcizUnit, RS_UNIT_OTHER, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
-import type { CarrierRoute, Database, RouteGood } from '../types'
-import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
+import type { CarrierRoute, Database } from '../types'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -82,9 +81,6 @@ const carrierNames = (d: Database, r: Rec) =>
     .join(', ') || '—'
 
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
-/** A route record's goods lines. */
-const goodsOf = (_d: Database, r: Rec) => (r as unknown as { goods?: RouteGood[] }).goods ?? []
-const productNames = (d: Database, r: Rec) => goodsOf(d, r).map((g) => g.name).join(', ')
 /** A route record resolved to its carrier and addresses. */
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
 
@@ -122,11 +118,11 @@ const TABS: TabDef[] = [
         label: 'ზედნადების ტიპი',
         type: 'select',
         optional: true,
-        options: (d) => [{ value: '', label: `RS.ge-ს პარამეტრებიდან (${waybillTypeLabel(waybillDefaults(d.rs).type)})` }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
+        options: () => [{ value: '', label: 'მყიდველის მიხედვით' }, ...WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label }))],
       },
       {
         key: 'buyerTin',
-        label: 'მყიდველის ს/ნ (არასავალდებულო)',
+        label: 'მყიდველის ს/ნ',
         optional: true,
         mono: true,
         showIf: (r) => r.waybillType !== '1',
@@ -139,7 +135,7 @@ const TABS: TabDef[] = [
       },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
-    subtitle: (r, d) => `${carrierName(d, r.carrierId)} · ${productNames(d, r) || 'პროდუქტი არ არის'}`,
+    subtitle: (r, d) => [carrierName(d, r.carrierId), r.buyerName || r.buyerTin].filter(Boolean).join(' · '),
     columns: [
       { label: 'კარიერი', render: (r, d) => <span className="font-medium text-slate-900">{carrierName(d, r.carrierId)}</span> },
       { label: 'დაწყების მისამართი', render: (r, d) => routeOf(d, r).start || '—' },
@@ -155,14 +151,6 @@ const TABS: TabDef[] = [
               {w.type !== 1 && <span className="block text-xs text-slate-500">{w.buyerName || w.buyerTin || 'მყიდველი არ არის'}</span>}
             </span>
           )
-        },
-      },
-      {
-        label: 'პროდუქტები',
-        render: (r, d) => {
-          const g = goodsOf(d, r)
-          if (!g.length) return <Badge tone="amber">არ არის მითითებული</Badge>
-          return g.length > 2 ? `${g[0].name}, ${g[1].name} +${g.length - 2}` : g.map((x) => x.name).join(', ')
         },
       },
     ],
@@ -323,7 +311,7 @@ export function ReferenceData() {
     const text = (r: Rec): string[] => {
       if (tab.key === 'routes') {
         const x = routeOf(d, r)
-        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', ...goodsOf(d, r).flatMap((g) => [g.name, g.barCode])]
+        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', r.buyerName ?? '', r.buyerTin ?? '']
       }
       return [...Object.values(r).filter((v) => typeof v === 'string'), ...(tab.key === 'users' ? [carrierNames(d, r)] : [])]
     }
@@ -474,7 +462,6 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
   const blocker = refs.blocker(col, id, user)
   const used = refs.shipmentCount(col, id)
   const routeCount = col === 'carriers' ? active(d.routes).filter((x) => x.carrierId === id).length : 0
-  const productRoutes = col === 'products' ? active(d.routes).filter((x) => x.goods.some((g) => g.productId === id)).length : 0
   return (
     <>
       <b className="text-slate-900">{name}</b> წაიშლება სიიდან და ახალ რეისებში ვეღარ აირჩევა.
@@ -484,9 +471,6 @@ function DeleteMessage({ col, id, name }: { col: RefCollection; id: string; name
         <p className="mt-2 rounded-lg bg-slate-100 p-2 text-slate-600">გამოიყენება {used} რეისში — ეს რეისები და რეპორტები კვლავ აჩვენებს ამ ჩანაწერს.</p>
       ) : null}
       {!blocker && col === 'products' && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">პროდუქტი RS.ge-ს პროდუქტების სიიდანაც წაიშლება. უკვე ატვირთული ზედნადებები არ შეიცვლება.</p>}
-      {!blocker && productRoutes > 0 && (
-        <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">გამოიყენება {productRoutes} მარშრუტში — იქ დარჩება ისე, როგორც ჩაწერილია, და ზედნადებზე ასევე წავა.</p>
-      )}
       {!blocker && routeCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">მასთან ერთად წაიშლება ამ კარიერის {routeCount} მარშრუტი.</p>}
       {!blocker && col === 'users' && id === user.id && (
         <p className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-800">ეს შენი ანგარიშია — წაშლის შემდეგ სისტემიდან გამოხვალ.</p>
@@ -596,11 +580,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   // Deleted carriers drop out of the list; saving removes them from the operator.
   const [carrierIds, setCarrierIds] = useState<string[]>(() => carrierIdsOf(rec).filter((id) => liveCarriers.some((c) => c.id === id)))
   const pickCarriers = tab.key === 'users' && form.role === 'operator'
-  const pickGoods = tab.key === 'routes'
-  const [goods, setGoods] = useState<GoodDraft[]>(() => {
-    const stored = (rec as unknown as { goods?: RouteGood[] }).goods ?? []
-    return stored.length ? stored.map(toDraft) : [blankGood(d)]
-  })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -630,13 +609,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       if (msg) errs[f.key] = msg
     }
     if (pickCarriers && !carrierIds.length) errs.carrierIds = liveCarriers.length ? 'მონიშნე მინიმუმ ერთი კარიერი' : 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
-    if (pickGoods) Object.assign(errs, checkGoods(goods))
-    if (pickGoods && !errs.endAddress) {
-      const end = (r.endAddress ?? '').trim().toLowerCase()
-      const codes = fromDrafts(d, goods).map((g) => g.barCode.toLowerCase())
-      if (active(d.routes).some((x) => x.id !== r.id && x.carrierId === r.carrierId && sameIds(x.goods.map((g) => g.barCode.toLowerCase()), codes) && x.endAddress.trim().toLowerCase() === end))
-        errs.endAddress = 'ამ კარიერს ეს მარშრუტი ამ პროდუქტებით უკვე აქვს'
-    }
     setErrors(errs)
     setSaveError('')
     if (Object.keys(errs).length) return
@@ -651,7 +623,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         clean[f.key] = v
       }
       if (pickCarriers) Object.assign(clean, { carrierIds })
-      if (pickGoods) Object.assign(clean, { goods: fromDrafts(d, goods) })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -680,7 +651,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   return (
     <Modal
       open
-      wide={pickGoods}
       onClose={onClose}
       title={`${tab.singular} ${isNew ? 'დამატება' : 'რედაქტირება'}`}
       footer={
@@ -738,8 +708,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
             <span className="font-medium text-slate-900">{routeStart || '—'}</span>
           </div>
         )}
-
-        {pickGoods && <RouteGoodsEditor d={d} goods={goods} onChange={setGoods} errors={errors} onClearError={(k) => setErrors((x) => (x[k] ? { ...x, [k]: '' } : x))} />}
 
         {pickCarriers && (
           <Chips

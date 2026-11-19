@@ -1,23 +1,19 @@
 /*
- * The goods lines of a route, as the admin sets them up: bar code, name and unit typed in (or filled
- * from the RS.ge product list with the search button, and then still editable; nothing is added to
- * RS.ge's list), plus the price, VAT type and an optional quantity prefilled on new shipments. The
- * operator types only the quantities on each shipment.
+ * The goods lines of a shipment, as the operator writes them: bar code, name and unit typed in (or
+ * filled from the RS.ge product list with the search button, and then still editable; nothing is added
+ * to RS.ge's list), plus the price, VAT type, quantity and optional additional quantity.
  */
 import { Plus, Search, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
 import { active, cx, uid } from '../lib/util'
 import { akcizUnit, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
-import type { Database, RouteGood } from '../types'
+import type { Database, ShipmentItem } from '../types'
+import type { NewShipmentItem } from '../api'
 
 /** A goods line in the form: every value as typed. */
 export interface GoodDraft {
   /** React key; stays the same while the form is open. */
   key: string
-  /** RouteGood.id; '' for a new line (the server gives it one). */
-  id: string
-  /** The list product it was filled from; it no longer counts once the bar code is changed. */
-  productId: string
   name: string
   barCode: string
   unitId: string
@@ -27,14 +23,13 @@ export interface GoodDraft {
   /** Excise code id; '' = not excise goods. aTitle shows a stored code RS.ge's list doesn't have (yet). */
   aId: string
   aTitle: string
-  /** Prefilled on new shipments; '' = none. */
   quantity: string
+  /** '' = none. */
+  quantityExt: string
 }
 
 export const blankGood = (d: Database): GoodDraft => ({
   key: uid('k'),
-  id: '',
-  productId: '',
   name: '',
   barCode: '',
   unitId: String(tonneUnit(d.rs)),
@@ -44,12 +39,11 @@ export const blankGood = (d: Database): GoodDraft => ({
   aId: '',
   aTitle: '',
   quantity: '',
+  quantityExt: '',
 })
 
-export const toDraft = (g: RouteGood): GoodDraft => ({
+export const toDraft = (g: ShipmentItem): GoodDraft => ({
   key: uid('k'),
-  id: g.id,
-  productId: g.productId,
   name: g.name,
   barCode: g.barCode,
   unitId: String(g.unitId),
@@ -59,6 +53,7 @@ export const toDraft = (g: RouteGood): GoodDraft => ({
   aId: g.aId ? String(g.aId) : '',
   aTitle: g.aTitle ?? '',
   quantity: g.quantity ? String(g.quantity) : '',
+  quantityExt: g.quantityExt ? String(g.quantityExt) : '',
 })
 
 /** The excise code of an excise line, when RS.ge's list has it: its bar code and unit are locked to it. */
@@ -66,8 +61,8 @@ const akcizOf = (d: Database, g: GoodDraft) => (g.aId ? d.rs.akciz?.find((a) => 
 
 const strUnit = (u: { unitId: number; unitTxt: string }) => ({ unitId: String(u.unitId), unitTxt: u.unitTxt })
 
-const priceOf = (g: GoodDraft) => g.price.trim().replace(',', '.')
-const qtyOf = (g: GoodDraft) => g.quantity.trim().replace(',', '.')
+/** A number as typed (a comma is the decimal sign too); NaN when it isn't one, null when empty. */
+const numOf = (v: string) => (v.trim() ? Number(v.trim().replace(',', '.')) : null)
 
 /** Errors by `${key}.${field}`; empty when every line is complete. */
 export function checkGoods(goods: GoodDraft[]): Record<string, string> {
@@ -78,39 +73,51 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
     const code = g.barCode.trim().toLowerCase()
     // RS.ge requires a bar code, a name and a unit on every goods line.
     if (!code) e[at('barCode')] = 'სავალდებულო ველი'
-    else if (seen.has(code)) e[at('barCode')] = 'ეს შტრიხკოდი მარშრუტზე უკვე არის'
+    else if (seen.has(code)) e[at('barCode')] = 'ეს შტრიხკოდი ზედნადებზე უკვე არის'
     seen.add(code)
     if (!g.name.trim()) e[at('name')] = 'სავალდებულო ველი'
     if (Number(g.unitId) === RS_UNIT_OTHER && !g.unitTxt.trim()) e[at('unitTxt')] = 'სავალდებულო ველი'
-    if (!priceOf(g) || !(Number(priceOf(g)) >= 0)) e[at('price')] = 'შეიყვანე 0 ან მეტი'
-    if (qtyOf(g) && !(Number(qtyOf(g)) >= 0)) e[at('quantity')] = 'შეიყვანე 0 ან მეტი'
+    const price = numOf(g.price)
+    if (price == null || !(price >= 0)) e[at('price')] = 'შეიყვანე 0 ან მეტი'
+    const q = numOf(g.quantity)
+    if (q == null || !(q > 0)) e[at('quantity')] = 'შეიყვანე 0-ზე მეტი'
+    const ext = numOf(g.quantityExt)
+    if (ext != null && !(ext > 0)) e[at('quantityExt')] = '0-ზე მეტი ან ცარიელი'
   }
   if (!goods.length) e.goods = 'დაამატე მინიმუმ ერთი პროდუქტი'
   return e
 }
 
-/** The lines as the server takes them. */
-export function fromDrafts(d: Database, goods: GoodDraft[]) {
+/** The lines as the server takes them. Call after checkGoods passed. */
+export function fromDrafts(d: Database, goods: GoodDraft[]): NewShipmentItem[] {
   const units = rsUnits(d.rs)
   return goods.map((g) => {
     const a = akcizOf(d, g)
     const unitId = a ? akcizUnit(d.rs, a).unitId : Number(g.unitId)
+    const ext = numOf(g.quantityExt)
     return {
-      id: g.id,
-      productId: g.productId,
       name: g.name.trim(),
       barCode: (a?.code ?? g.barCode).trim(),
       unitId,
       unitTxt: a ? akcizUnit(d.rs, a).unitTxt : unitId === RS_UNIT_OTHER ? g.unitTxt.trim() : (units.find((u) => u.id === unitId)?.name ?? g.unitTxt.trim()),
-      price: Number(priceOf(g)),
-      vatType: Number(g.vatType),
-      aId: Number(g.aId || 0),
-      quantity: Number(qtyOf(g) || 0),
+      price: numOf(g.price) ?? 0,
+      vatType: Number(g.vatType) as 0 | 1 | 2,
+      ...(g.aId && { aId: Number(g.aId) }),
+      quantity: Math.round((numOf(g.quantity) ?? 0) * 1000) / 1000,
+      ...(ext && { quantityExt: Math.round(ext * 1000) / 1000 }),
     }
   })
 }
 
-export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
+/** What the summary shows for a line: its quantity when it is a valid one. */
+export const draftLine = (d: Database, g: GoodDraft) => {
+  const a = akcizOf(d, g)
+  const q = numOf(g.quantity)
+  const price = numOf(g.price)
+  return { key: g.key, name: g.name.trim(), unit: a ? akcizUnit(d.rs, a).unitTxt : g.unitTxt, quantity: q && q > 0 ? q : null, price: price != null && price >= 0 ? price : null }
+}
+
+export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
   const products = active(d.products)
   const units = rsUnits(d.rs)
   const set = (key: string, patch: Partial<GoodDraft>) => {
@@ -126,15 +133,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
   const pickAkciz = (g: GoodDraft, id: string) => {
     const a = akciz.find((x) => String(x.id) === id)
     if (!a) return set(g.key, { aId: '', aTitle: '' })
-    set(g.key, {
-      aId: id,
-      aTitle: '',
-      barCode: a.code,
-      name: a.title,
-      ...strUnit(akcizUnit(d.rs, a)),
-      // Another bar code is another product: the line no longer comes from the list.
-      productId: products.find((x) => x.id === g.productId)?.barCode === a.code ? g.productId : '',
-    })
+    set(g.key, { aId: id, aTitle: '', barCode: a.code, name: a.title, ...strUnit(akcizUnit(d.rs, a)) })
   }
   /** Fills the line from a product of RS.ge's list; every field stays editable. */
   const fill = (key: string, productId: string) => {
@@ -144,7 +143,6 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     const listed = units.some((u) => u.id === p.unitId)
     const a = p.aId ? akciz.find((x) => x.id === p.aId) : undefined
     set(key, {
-      productId: a && a.code !== p.barCode ? '' : p.id,
       // An excise product goes on the waybill under its excise goods code, as on RS.ge's form.
       barCode: a ? a.code : p.barCode,
       name: p.name,
@@ -156,8 +154,8 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
   }
 
   return (
-    <div className="sm:col-span-2">
-      <p className="mb-1.5 text-sm font-medium text-slate-700">პროდუქტები</p>
+    <div>
+      <p className="mb-1.5 ml-1 text-[13px] text-slate-500">პროდუქტები</p>
       <div className="space-y-2">
         {goods.map((g, i) => {
           const err = (f: keyof GoodDraft) => errors[`${g.key}.${f}`]
@@ -177,8 +175,8 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                   <X className="size-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="col-span-2 sm:col-span-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="col-span-2">
                   <Field label="დასახელება" error={err('name')}>
                     <div className="relative">
                       <Input value={g.name} placeholder="ღორღი 0–5 მმ" invalid={!!err('name')} className={products.length ? 'pr-11' : undefined} onChange={(e) => set(g.key, { name: e.target.value })} />
@@ -204,9 +202,18 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                       title={locked != null ? 'აქციზური საქონლის კოდი — იცვლება აქციზის არჩევით' : undefined}
                       className={cx('font-mono', locked != null && 'bg-slate-50 text-slate-500')}
                       invalid={!!err('barCode')}
-                      // Another bar code is another product: the line no longer comes from the list.
-                      onChange={(e) => set(g.key, { barCode: e.target.value, productId: products.find((x) => x.id === g.productId)?.barCode === e.target.value.trim() ? g.productId : '' })}
+                      onChange={(e) => set(g.key, { barCode: e.target.value })}
                     />
+                  </Field>
+                </div>
+                <div className="col-span-1">
+                  <Field label="რაოდენობა" error={err('quantity')}>
+                    <Input type="text" inputMode="decimal" value={g.quantity} invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value })} />
+                  </Field>
+                </div>
+                <div className="col-span-1">
+                  <Field label="დამატებითი რაოდენობა" error={err('quantityExt')}>
+                    <Input type="text" inputMode="decimal" value={g.quantityExt} placeholder="—" invalid={!!err('quantityExt')} onChange={(e) => set(g.key, { quantityExt: e.target.value })} />
                   </Field>
                 </div>
                 <div className="col-span-1">
@@ -243,13 +250,8 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                     </Select>
                   </Field>
                 </div>
-                <div className="col-span-1">
-                  <Field label="რაოდენობა" error={err('quantity')}>
-                    <Input type="text" inputMode="decimal" value={g.quantity} placeholder="—" title="ახალ რეისზე წინასწარ ჩაეწერება; ოპერატორს შეუძლია შეცვალოს" invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value })} />
-                  </Field>
-                </div>
                 {(akciz.length > 0 || g.aId) && (
-                  <div className="col-span-2 sm:col-span-4">
+                  <div className="col-span-2 sm:col-span-3">
                     <Field label="აქციზი (მხოლოდ აქციზური საქონლისთვის)">
                       <Select searchable value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
                         <option value="">არ არის აქციზური</option>
@@ -271,7 +273,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
       <Button type="button" variant="secondary" size="sm" className="mt-2" icon={<Plus className="size-4" />} onClick={() => onChange([...goods, blankGood(d)])}>
         პროდუქტის დამატება
       </Button>
-      {errors.goods && <p className="mt-2 text-xs text-rose-600">{errors.goods}</p>}
+      {errors.goods && <p className="mt-2 ml-1 text-xs text-rose-600">{errors.goods}</p>}
     </div>
   )
 }
