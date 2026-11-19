@@ -1,9 +1,9 @@
-import { CheckCircle2, FileStack, RefreshCw, Unplug } from 'lucide-react'
+import { CheckCircle2, FileStack, Unplug } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { rsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, ConfirmModal, Field, Input, PageHeader } from '../components/ui'
+import { Button, Card, RefreshButton, ConfirmModal, Field, Input, PageHeader } from '../components/ui'
 import { useToast } from '../components/toast'
 import type { RsSettings } from '../types'
 
@@ -144,8 +144,8 @@ function ConnectionCard() {
         </div>
         <ConfirmModal
           open={askDisconnect}
-          title="RS.ge-სთან კავშირის გათიშვა"
-          message="სერვისის მომხმარებელი წაიშლება და ახალი ზედნადებები ვერ აიტვირთება, სანამ თავიდან არ დაუკავშირდები. RS.ge-ზე უკვე ატვირთული ზედნადებები არ შეიცვლება."
+          title="გაითიშოს RS.ge?"
+          message="ახალი ზედნადებები ვერ აიტვირთება."
           confirmLabel="გათიშვა"
           busy={busy}
           onConfirm={() => void disconnect()}
@@ -216,12 +216,9 @@ function SyncLine({ error }: { error: string }) {
     }
   }
   return (
-    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs">
+    <p className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
       <span className="text-amber-700">{error}</span>
-      <button type="button" onClick={() => void run()} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
-        <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
-        ხელახლა
-      </button>
+      <RefreshButton busy={busy} onClick={() => void run()}>ხელახლა</RefreshButton>
     </p>
   )
 }

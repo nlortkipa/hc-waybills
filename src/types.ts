@@ -121,9 +121,9 @@ export interface Truck extends SoftDeletable {
 
 /**
  * A product (საქონელი): one entry of the connected taxpayer's RS.ge product list (get_bar_codes /
- * save_bar_code), read from RS.ge and never stored here. The bar code is its identity on RS.ge (and
- * its id here), so it can't be changed once saved. Picking a product for a shipment's goods line fills
- * the line with it; the price, VAT type and quantity are typed on the shipment.
+ * save_bar_code), read from RS.ge. The bar code is its identity on RS.ge (and its id here), so it
+ * can't be changed once saved. The unit price and VAT type, which RS.ge's API doesn't carry, are
+ * stored here by bar code. Picking a product for a shipment's goods line fills the line with it.
  */
 export interface Product extends SoftDeletable {
   /** = barCode. */
@@ -135,8 +135,12 @@ export interface Product extends SoftDeletable {
   /** UNIT_ID from get_waybill_units; 99 = "other", then unitTxt is the unit name. */
   unitId: number
   unitTxt: string
-  /** A_ID: excise code (RsAkciz.id) on RS.ge; 0 or missing = not excise goods. */
+  /** A_ID: excise code (RsAkciz.id) on RS.ge; 0 or missing = not excise goods. Not edited here: kept as RS.ge has it. */
   aId?: number
+  /** Unit price, GEL (stored here). */
+  price?: number
+  /** VAT type: 0 ჩვეულებრივი, 1 ნულოვანი, 2 დაუბეგრავი (stored here). */
+  vatType?: 0 | 1 | 2
 }
 
 export interface User extends SoftDeletable {

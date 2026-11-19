@@ -426,39 +426,40 @@ async function saveProduct(input: Product, prev: Product | undefined): Promise<P
   productCreds()
   const rs = rsView()
   const unitId = Number(input.unitId)
-  const aId = Math.max(0, Math.trunc(num(input.aId)))
   const barCode = str(input.barCode)
+  const price = str(input.price) === '' ? NaN : Number(input.price)
+  const vatType = ([0, 1, 2] as const).find((v) => v === Number(input.vatType))
   const p: Product = {
     id: prev?.id ?? barCode,
     name: str(input.name),
     barCode,
     unitId,
     unitTxt: unitId === RS_UNIT_OTHER ? str(input.unitTxt) : (rsUnits(rs).find((u) => u.id === unitId)?.name ?? ''),
-    aId,
+    // The excise code isn't edited here: a product keeps the one RS.ge has.
+    aId: prev?.aId ?? 0,
+    price: Math.round(price * 10000) / 10000,
+    vatType: vatType!,
   }
-  // An excise code RS.ge lists (or the one the product already has, if the list isn't loaded).
-  if (aId && aId !== (prev?.aId ?? 0) && !rs.akciz?.some((a) => a.id === aId)) fail('აქციზის კოდი ვერ მოიძებნა — აირჩიე სიიდან')
-  // As on RS.ge's form, an excise code fixes the unit, and a new product's bar code.
-  const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
-  if (akciz && !prev && akciz.code.toLowerCase() !== barCode.toLowerCase()) fail(`აქციზური საქონლის შტრიხკოდი მისი აქციზის კოდია (${akciz.code})`)
-  const fixed = akciz && akcizUnit(rs, akciz)
-  if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== p.unitTxt))) fail(`აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
-  if (!p.name) fail('შეიყვანე პროდუქტის დასახელება')
-  if (!p.barCode) fail('შეიყვანე შტრიხკოდი')
+  if (!p.barCode) fail('შეიყვანე საქონლის კოდი')
+  if (!p.name) fail('შეიყვანე საქონლის დასახელება')
   // RS.ge knows a product only by its bar code: a new code would be a different product there.
-  if (prev && prev.barCode !== p.barCode) fail('შტრიხკოდის შეცვლა შეუძლებელია — წაშალე ეს პროდუქტი და დაამატე ახალი')
-  if (!(unitId > 0) || !p.unitTxt) fail(unitId === RS_UNIT_OTHER ? '„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება' : 'აირჩიე საზომი ერთეული')
+  if (prev && prev.barCode !== p.barCode) fail('საქონლის კოდის შეცვლა შეუძლებელია — წაშალე ეს პროდუქტი და დაამატე ახალი')
+  if (!(unitId > 0) || !p.unitTxt) fail(unitId === RS_UNIT_OTHER ? '„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება' : 'აირჩიე ზომის ერთეული')
+  if (!(price >= 0)) fail('შეიყვანე ერთეულის თანხა (0 ან მეტი)')
+  if (vatType == null) fail('აირჩიე დაბეგვრა')
   const key = p.barCode.toLowerCase()
-  if (!prev && rsCache.products().some((x) => x.barCode.toLowerCase() === key)) fail('ამ შტრიხკოდით პროდუქტი უკვე არსებობს')
-  if (prev && prev.name === p.name && prev.unitId === p.unitId && prev.unitTxt === p.unitTxt && (prev.aId ?? 0) === aId) return prev
-  // A code already on RS.ge (added on the portal since the list was read) is overwritten there, as on the portal.
-  await rsge.saveBarCode({ ...p, aId }).catch((e: Error) => fail(e.message, 502))
-  // RS.ge answers "saved" even when it drops the code, so only what it reads back counts.
-  const got = await rsge.barCode(p.barCode).catch((e: Error) => fail(`RS.ge-მ შენახვა დაადასტურა, მაგრამ შემოწმება ვერ მოხერხდა: ${e.message}`, 502))
-  await rsCache.loadProducts().catch(() => {})
-  if (!got) fail(`RS.ge-მ შტრიხკოდი „${p.barCode}“ არ შეინახა — სავარაუდოდ ის უკვე სხვა გადამხდელს აქვს რეგისტრირებული. გამოიყენე სხვა, უნიკალური შტრიხკოდი.`, 502)
-  if (got!.name !== p.name || got!.unitId !== p.unitId) fail('RS.ge-მ ცვლილება არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
-  if (got!.aId !== aId) fail('RS.ge-მ აქციზის კოდი არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
+  if (!prev && rsCache.products().some((x) => x.barCode.toLowerCase() === key)) fail('ამ კოდით პროდუქტი უკვე არსებობს')
+  // Price and VAT type are stored here only: RS.ge is written to when what it keeps changed.
+  if (!prev || prev.name !== p.name || prev.unitId !== p.unitId || prev.unitTxt !== p.unitTxt) {
+    // A code already on RS.ge (added on the portal since the list was read) is overwritten there, as on the portal.
+    await rsge.saveBarCode({ ...p, aId: p.aId ?? 0 }).catch((e: Error) => fail(e.message, 502))
+    // RS.ge answers "saved" even when it drops the code, so only what it reads back counts.
+    const got = await rsge.barCode(p.barCode).catch((e: Error) => fail(`RS.ge-მ შენახვა დაადასტურა, მაგრამ შემოწმება ვერ მოხერხდა: ${e.message}`, 502))
+    await rsCache.loadProducts().catch(() => {})
+    if (!got) fail(`RS.ge-მ კოდი „${p.barCode}“ არ შეინახა — სავარაუდოდ ის უკვე სხვა გადამხდელს აქვს რეგისტრირებული. გამოიყენე სხვა, უნიკალური კოდი.`, 502)
+    if (got!.name !== p.name || got!.unitId !== p.unitId) fail('RS.ge-მ ცვლილება არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
+  }
+  db.productPrices.set(p.barCode, p.price!, p.vatType!)
   return p
 }
 
@@ -466,7 +467,27 @@ async function removeProduct(id: string) {
   productCreds()
   const p = rsCache.products().find((x) => x.id === id) ?? fail('ჩანაწერი ვერ მოიძებნა', 404)
   await rsge.deleteBarCode(p.barCode).catch((e: Error) => fail(e.message, 502))
+  db.productPrices.remove([p.barCode])
   await rsCache.loadProducts().catch(() => {})
+}
+
+/**
+ * Deletes every product, here and on RS.ge (RS.ge has no "delete all": each code is deleted on its
+ * own). The list is read from RS.ge first, so codes added on the portal go too. Codes RS.ge still
+ * lists afterwards are counted as not deleted.
+ */
+export function clearProducts(user: User) {
+  requireAdmin(user)
+  return productLock(async () => {
+    productCreds()
+    const list = await rsCache.loadProducts().catch((e: Error) => fail(`RS.ge-დან პროდუქტების სია ვერ წაიკითხა: ${e.message}`, 502))
+    for (const p of list) await rsge.deleteBarCode(p.barCode).catch(() => {})
+    const left = await rsCache.loadProducts().catch((e: Error) => fail(`წაშლის შემდეგ RS.ge-დან სია ვერ წაიკითხა: ${e.message}`, 502))
+    const kept = new Set(left.map((p) => p.barCode.toLowerCase()))
+    const gone = list.filter((p) => !kept.has(p.barCode.toLowerCase()))
+    db.productPrices.remove(gone.map((p) => p.barCode))
+    return { deleted: gone.length, failed: left.length }
+  })
 }
 
 /** The product list is read again on page open only when the last read is older than this. */

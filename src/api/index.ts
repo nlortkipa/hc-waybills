@@ -91,6 +91,10 @@ export const products = {
   sync(force = false) {
     return call('POST', '/api/products/sync', { force })
   },
+  /** Deletes every product, here and on RS.ge. `failed`: codes RS.ge still lists afterwards. */
+  clear() {
+    return call<{ deleted: number; failed: number }>('POST', '/api/products/clear')
+  },
 }
 
 export const trucks = {

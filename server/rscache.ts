@@ -201,6 +201,7 @@ export const rsCache = {
   products(): Product[] {
     // RS.ge leaves the unit's name out for its own units: it comes from the units list.
     const units = rsge.account()?.units ?? []
+    const prices = db.productPrices.all()
     return (products.value ?? []).map((p) => ({
       id: p.barCode,
       name: p.name || p.barCode,
@@ -208,6 +209,7 @@ export const rsCache = {
       unitId: p.unitId,
       unitTxt: p.unitTxt || units.find((u) => u.id === p.unitId)?.name || '',
       aId: p.aId,
+      ...prices.get(p.barCode.toLowerCase()),
     }))
   },
   productsStatus: () => ({ at: products.at, error: products.error }),

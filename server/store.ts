@@ -2,7 +2,8 @@
  * The database: SQLite through Node's built-in node:sqlite (no dependencies).
  *
  * Only what RS.ge doesn't have is stored. RS.ge's data (products, car numbers, waybills, the seller)
- * is read from RS.ge on demand and kept in memory (server/rscache.ts).
+ * is read from RS.ge on demand and kept in memory (server/rscache.ts). A product's unit price and VAT
+ * type are shown on RS.ge's portal but its API doesn't carry them, so they are stored here by bar code.
  *
  * Each record is one row holding its JSON, so a change writes only the rows it touches,
  * inside a transaction. A copy of the data is kept in memory for fast reads; every write
@@ -73,6 +74,7 @@ sql.exec(`
   CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, at TEXT NOT NULL, shipment_id TEXT, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL);
   CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
+  CREATE TABLE IF NOT EXISTS product_prices (bar_code TEXT PRIMARY KEY, price REAL NOT NULL, vat_type INTEGER NOT NULL);
 `)
 
 /* ------------------------------ Low level ------------------------------ */
@@ -289,6 +291,23 @@ export const store = {
       sql.prepare(`DELETE FROM logs WHERE NOT ${isRead} AND rowid NOT IN (SELECT rowid FROM logs WHERE NOT ${isRead} ORDER BY rowid DESC LIMIT ${LOG_LIMIT})`).run()
     })
     mem = { ...mem, logs: trimLogs([entry, ...mem.logs]) }
+  },
+
+  /** Unit price and VAT type of RS.ge's products, by bar code (lower case). */
+  productPrices: {
+    all(): Map<string, { price: number; vatType: 0 | 1 | 2 }> {
+      const rows = sql.prepare('SELECT bar_code, price, vat_type FROM product_prices').all() as { bar_code: string; price: number; vat_type: number }[]
+      return new Map(rows.map((r) => [r.bar_code, { price: r.price, vatType: r.vat_type as 0 | 1 | 2 }]))
+    },
+    set(barCode: string, price: number, vatType: 0 | 1 | 2) {
+      tx(() => sql.prepare('INSERT INTO product_prices VALUES (?, ?, ?) ON CONFLICT (bar_code) DO UPDATE SET price = excluded.price, vat_type = excluded.vat_type').run(barCode.toLowerCase(), price, vatType))
+    },
+    remove(barCodes: string[]) {
+      if (!barCodes.length) return
+      tx(() => {
+        for (const b of barCodes) sql.prepare('DELETE FROM product_prices WHERE bar_code = ?').run(b.toLowerCase())
+      })
+    },
   },
 
   clearLogs() {

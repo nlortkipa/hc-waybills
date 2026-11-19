@@ -1,12 +1,12 @@
-import { Ban, CheckCheck, ChevronRight, Download, ExternalLink, FileText, Loader2, Play, Printer, ReceiptText, RefreshCw, Search, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react'
+import { Ban, CheckCheck, ChevronRight, Download, ExternalLink, FileText, Loader2, Play, Printer, ReceiptText, Search, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { rsWaybills, type RsWaybillAction, type RsWaybillDetail } from '../api'
 import { useDb } from '../api/store'
-import { Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, PageHeader, Segmented } from '../components/ui'
+import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, PageHeader, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
-import { cx, downloadCsv, formatDateTime, formatNumber, tbilisiStamp } from '../lib/util'
+import { downloadCsv, formatDateTime, formatNumber, tbilisiStamp } from '../lib/util'
 import { useUser } from '../session'
 import type { RsListWaybill } from '../types'
 import { ActivateModal, CloseModal } from './ShipmentDetail'
@@ -120,9 +120,7 @@ export function RsWaybills() {
             <Button variant="secondary" size="sm" icon={<Download className="size-3.5" />} onClick={exportCsv} disabled={!shown.length}>
               ექსპორტი
             </Button>
-            <Button variant="secondary" size="sm" icon={<RefreshCw className={cx('size-3.5', loading && 'animate-spin')} />} onClick={() => void load()} disabled={loading || !connected}>
-              განახლება
-            </Button>
+            <RefreshButton busy={loading} onClick={() => void load()} disabled={!connected} />
           </>
         }
       />
@@ -351,9 +349,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                 </Button>
               )}
               {admin && mine && w.status === 0 && (
-                <Button size="sm" variant="ghost" className="text-rose-600" icon={<Trash2 className="size-3.5" />} onClick={() => setDialog('delete')}>
-                  წაშლა
-                </Button>
+                <DeleteButton onClick={() => setDialog('delete')} />
               )}
               {admin && mine && (w.status === 1 || w.status === 2) && !w.invoiceId && (
                 <Button size="sm" variant="ghost" className="text-rose-600" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')}>
@@ -426,18 +422,16 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
             busy={busy}
             onClose={() => setDialog(null)}
             onConfirm={() => void act('cancel', undefined, 'ზედნადები გაუქმდა')}
-            title="გაუქმდეს ზედნადები?"
+            title={`გაუქმდეს ზედნადები №${w.number}?`}
             confirmLabel="გაუქმება"
-            message={`ზედნადები №${w.number} RS.ge-ზე გაუქმდება. ეს მოქმედება შეუქცევადია.`}
           />
           <ConfirmModal
             open={dialog === 'delete'}
             busy={busy}
             onClose={() => setDialog(null)}
             onConfirm={() => void act('delete', undefined, 'ზედნადები წაიშალა')}
-            title="წაიშალოს შენახული ზედნადები?"
+            title="წაიშალოს ზედნადები?"
             confirmLabel="წაშლა"
-            message="გაუაქტიურებელი ზედნადები RS.ge-დან წაიშლება."
           />
           <ConfirmModal
             open={dialog === 'reject'}
@@ -446,12 +440,12 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
             onConfirm={() => void act('reject', undefined, 'ზედნადები უარყოფილია')}
             title="არ ეთანხმები ზედნადებს?"
             confirmLabel="არ ვეთანხმები"
-            message={`გამყიდველი (${w.sellerName}) RS.ge-ზე დაინახავს, რომ ზედნადებში შევსებულ ინფორმაციას არ ეთანხმები.`}
+            message={`${w.sellerName} ამას RS.ge-ზე დაინახავს.`}
           />
           <Modal
             open={dialog === 'invoice'}
             onClose={() => setDialog(null)}
-            title="ანგარიშ-ფაქტურის გამოწერა"
+            title="გამოიწეროს ანგარიშ-ფაქტურა?"
             footer={
               <>
                 <Button variant="secondary" onClick={() => setDialog(null)}>
@@ -464,9 +458,8 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
             }
           >
             <div className="space-y-2 text-sm text-slate-600">
-              <p>ზედნადებიდან №{w.number} გამოიწერება ანგარიშ-ფაქტურა მყიდველზე ({w.buyerName}).</p>
-              <p className="rounded-lg bg-amber-50 p-2 text-amber-800">ფაქტურაზე მიბმული ზედნადების კორექტირება და გაუქმება აღარ იქნება შესაძლებელი.</p>
-              {!started && <p className="text-rose-600">ფაქტურა გამოიწერება ტრანსპორტირების დაწყების შემდეგ ({formatDateTime(w.beginAt)}).</p>}
+              <p>ზედნადებს ვეღარ შეცვლი და ვეღარ გააუქმებ.</p>
+              {!started && <p className="text-rose-600">შესაძლებელია {formatDateTime(w.beginAt)}-დან.</p>}
             </div>
           </Modal>
         </>

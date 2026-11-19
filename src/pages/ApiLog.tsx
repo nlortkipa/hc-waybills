@@ -97,7 +97,6 @@ export function ApiLog() {
         open={confirmClear}
         onClose={() => setConfirmClear(false)}
         title="გასუფთავდეს ლოგი?"
-        message="წაიშლება ყველა ჩანაწერი RS.ge-სა და SMS-ის მოთხოვნების შესახებ. რეისები არ შეიცვლება."
         confirmLabel="გასუფთავება"
         onConfirm={() => {
           setConfirmClear(false)

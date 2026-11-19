@@ -1,13 +1,13 @@
-import { AlertTriangle, Building2, Check, Package, Pencil, Plus, RefreshCw, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, Check, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { products, refs, trucks, type RefCollection } from '../api'
-import { Badge, Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
+import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx, formatDateTime, phoneKey } from '../lib/util'
+import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
-import { akcizUnit, RS_UNIT_OTHER, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
+import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import type { CarrierRoute, Database } from '../types'
 
 type Rec = Record<string, string | undefined> & { id: string }
@@ -43,13 +43,6 @@ interface FieldDef {
   fills?: (d: Database, value: string) => Partial<Rec>
 }
 
-/** A product's excise code, when RS.ge's list has it: as on RS.ge's form, it fixes the bar code and unit. */
-const akcizOfRec = (d: Database, r: Rec) => (Number(r.aId) > 0 ? d.rs.akciz?.find((a) => String(a.id) === r.aId) : undefined)
-const lockedUnit = (d: Database, r: Rec) => {
-  const a = akcizOfRec(d, r)
-  return a && akcizUnit(d.rs, a)
-}
-
 interface TabDef {
   key: RefCollection
   label: string
@@ -69,6 +62,11 @@ const fmtPhone = (v: string) => phoneKey(v).replace(/^(\d{3})(\d{2})(\d{2})(\d{2
 const vPid = (v: string, r: Rec) => (r.citizenship === 'foreign' || /^\d{11}$/.test(v.trim()) ? null : 'პირადი ნომერი უნდა იყოს 11 ციფრი')
 const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-ფოსტა არასწორია')
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
+
+const vPrice = (v: string) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი')
+/** A product's unit price as RS.ge shows it: 10 → '10.00'. */
+const fmtPrice = (v?: string) => (Number(v) || 0).toFixed(2)
+const vatLabel = (v?: string) => RS_VAT_TYPES.find((x) => String(x.value) === (v || '0'))?.label ?? '—'
 
 /** User records carry the operator's carrier ids. */
 const carrierIdsOf = (r: Rec) => (r as unknown as { carrierIds?: string[] }).carrierIds ?? []
@@ -206,56 +204,35 @@ const TABS: TabDef[] = [
     label: 'პროდუქტები',
     singular: 'პროდუქტის',
     icon: Package,
+    // The same fields as RS.ge's own შტრიხკოდები list.
     fields: [
-      { key: 'name', label: 'დასახელება', placeholder: 'ღორღი 0–5 მმ', wide: true },
-      {
-        key: 'barCode',
-        label: 'შტრიხკოდი',
-        placeholder: 'CRS-05',
-        mono: true,
-        fixed: true,
-        // A saved product's bar code never changes (it is the product on RS.ge).
-        lock: (d, r, isNew) => (isNew ? akcizOfRec(d, r)?.code : undefined),
-      },
+      { key: 'barCode', label: 'საქონლის კოდი', placeholder: 'CRS-05', mono: true, fixed: true },
+      { key: 'name', label: 'საქონლის დასახელება', placeholder: 'ღორღი 0–5 მმ' },
       {
         key: 'unitId',
-        label: 'საზომი ერთეული',
+        label: 'ზომის ერთეული',
         type: 'select',
         options: (d) => rsUnits(d.rs).map((u) => ({ value: String(u.id), label: u.name })),
         initial: (d) => String(tonneUnit(d.rs)),
-        lock: (d, r) => {
-          const u = lockedUnit(d, r)
-          return u && String(u.unitId)
-        },
       },
-      { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა', lock: (d, r) => lockedUnit(d, r)?.unitTxt },
+      { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა' },
+      { key: 'price', label: 'ერთეულის თანხა (₾)', placeholder: '0.00', initial: () => '0', validate: vPrice },
       {
-        key: 'aId',
-        label: 'აქციზი',
+        key: 'vatType',
+        label: 'დაბეგვრა',
         type: 'select',
-        searchable: true,
-        wide: true,
-        options: (d, r) => [
-          { value: '0', label: 'არ არის აქციზური' },
-          // A code RS.ge's list doesn't have (yet) stays pickable.
-          ...(r.aId && r.aId !== '0' && !d.rs.akciz?.some((a) => String(a.id) === r.aId) ? [{ value: r.aId, label: `აქციზის კოდი ${r.aId}` }] : []),
-          ...(d.rs.akciz ?? []).map((a) => ({ value: String(a.id), label: `${a.code} · ${a.title}` })),
-        ],
+        options: () => RS_VAT_TYPES.map((v) => ({ value: String(v.value), label: v.label })),
         initial: () => '0',
-        // As on RS.ge's form, the name is filled from the code (and stays editable).
-        fills: (d, v) => {
-          const a = d.rs.akciz?.find((x) => String(x.id) === v)
-          return a ? { name: a.title } : {}
-        },
       },
     ],
     title: (r) => r.name!,
-    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'}`,
+    subtitle: (r) => `${r.barCode} · ${r.unitTxt || '—'} · ${fmtPrice(r.price)} ₾ · ${vatLabel(r.vatType)}`,
     columns: [
-      { label: 'დასახელება', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
-      { label: 'შტრიხკოდი', render: (r) => <span className="font-mono text-[13px]">{r.barCode}</span> },
-      { label: 'ერთეული', render: (r) => r.unitTxt || '—' },
-      { label: 'აქციზი', render: (r) => (Number(r.aId) > 0 ? <Badge tone="violet">აქციზური</Badge> : '—') },
+      { label: 'საქონლის კოდი', render: (r) => <span className="font-mono text-[13px]">{r.barCode}</span> },
+      { label: 'საქონლის დასახელება', render: (r) => <span className="font-medium text-slate-900">{r.name}</span> },
+      { label: 'ზომის ერთეული', render: (r) => r.unitTxt || '—' },
+      { label: 'ერთეულის თანხა', render: (r) => <span className="tabular-nums">{fmtPrice(r.price)}</span> },
+      { label: 'დაბეგვრა', render: (r) => vatLabel(r.vatType) },
     ],
   },
   {
@@ -484,8 +461,8 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
   const d = useDb()
   const toast = useToast()
   const [busy, setBusy] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const isProducts = what === 'products'
-  const at = isProducts ? d.rs.productsSyncedAt : d.rs.platesReadAt
   const error = isProducts ? d.rs.productsSyncError : d.rs.platesError
   const list = isProducts ? 'პროდუქტების სია' : 'მანქანების ნომრების სია'
   if (!rsConnected(d)) {
@@ -508,6 +485,20 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
   }
   // Trucks stored here whose plate RS.ge's list doesn't have: hidden from the pickers until it does.
   const offRs = isProducts ? [] : d.trucks.filter((t) => t.deletedAt === 'rs')
+  const clear = async () => {
+    setBusy(true)
+    try {
+      const r = await products.clear()
+      if (r.failed) toast('error', `წაიშალა ${r.deleted} პროდუქტი, RS.ge-მ ${r.failed} არ წაშალა`)
+      else toast('success', `წაიშალა ${r.deleted} პროდუქტი`)
+      setClearing(false)
+    } catch (e) {
+      toast('error', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const count = isProducts ? active(d.products).length : 0
   const push = async () => {
     setBusy(true)
     try {
@@ -531,23 +522,32 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
           </Button>
         </div>
       )}
-      <RsReadLine at={at} error={error} list={list} busy={busy} onRefresh={() => void run()} />
+      <div className="flex flex-wrap items-start justify-between gap-x-3">
+        <RsReadLine error={error} busy={busy} onRefresh={() => void run()} />
+        {count > 0 && (
+          <DeleteButton onClick={() => setClearing(true)} disabled={busy} className="mb-4">
+            ყველას წაშლა
+          </DeleteButton>
+        )}
+      </div>
+      <ConfirmModal
+        open={clearing}
+        onClose={() => setClearing(false)}
+        onConfirm={() => void clear()}
+        busy={busy}
+        title={`წაიშალოს ${count} პროდუქტი?`}
+        confirmLabel="წაშლა"
+        message="RS.ge-დანაც წაიშლება."
+      />
     </>
   )
 }
 
-function RsReadLine({ at, error, list, busy, onRefresh }: { at?: string; error?: string; list: string; busy: boolean; onRefresh: () => void }) {
+function RsReadLine({ error, busy, onRefresh }: { error?: string; busy: boolean; onRefresh: () => void }) {
   return (
-    <p className="mb-4 ml-1 flex flex-wrap items-center gap-x-1.5 text-xs">
-      {error ? (
-        <span className="text-amber-700">{error}</span>
-      ) : (
-        <span className="text-slate-500">{at ? `RS.ge-ს ${list} წაკითხულია ${formatDateTime(at)}` : `RS.ge-ს ${list} ჯერ არ წაკითხულა`}</span>
-      )}
-      <button type="button" onClick={onRefresh} disabled={busy} className="inline-flex items-center gap-1 font-medium text-brand-600 hover:text-brand-700 disabled:opacity-60">
-        <RefreshCw className={busy ? 'size-3 animate-spin' : 'size-3'} />
-        განახლება
-      </button>
+    <p className="mb-4 ml-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+      {error && <span className="text-amber-700">{error}</span>}
+      <RefreshButton busy={busy} onClick={onRefresh} />
     </p>
   )
 }
@@ -572,8 +572,8 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [form, setR] = useState<Rec>(() => {
     // The form edits text: numbers (a product's unit) become strings.
     const x = Object.fromEntries(Object.entries(rec).map(([k, v]) => [k, typeof v === 'number' ? String(v) : v])) as Rec
-    // Fields added later (e.g. a product's VAT type) start at their default on older records.
-    if (x.id) for (const f of tab.fields) if (x[f.key] == null && f.initial && f.type === 'select') x[f.key] = f.initial(d)
+    // Fields added later (e.g. a product's price and VAT type) start at their default on older records.
+    if (x.id) for (const f of tab.fields) if (x[f.key] == null && f.initial) x[f.key] = f.initial(d)
     return tab.key === 'drivers' && !x.citizenship ? { ...x, citizenship: 'GE' } : x
   })
   const liveCarriers = active(d.carriers)
@@ -620,6 +620,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         let v = (r[f.key] ?? '').trim()
         if (f.key === 'plateNumber' || f.key === 'trailerNumber') v = v.toUpperCase()
         if (f.key === 'phone') v = fmtPhone(v)
+        if (f.key === 'price') v = v.replace(',', '.')
         clean[f.key] = v
       }
       if (pickCarriers) Object.assign(clean, { carrierIds })

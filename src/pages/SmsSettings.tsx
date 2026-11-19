@@ -126,8 +126,8 @@ function AccountCard() {
         </div>
         <ConfirmModal
           open={askDisconnect}
-          title="SMS-ის გათიშვა"
-          message="API გასაღები წაიშლება და მძღოლები SMS-ს აღარ მიიღებენ, სანამ თავიდან არ დააყენებ."
+          title="გაითიშოს SMS?"
+          message="მძღოლები SMS-ს აღარ მიიღებენ."
           confirmLabel="გათიშვა"
           busy={busy}
           onConfirm={() => void disconnect()}

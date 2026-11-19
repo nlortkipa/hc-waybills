@@ -149,7 +149,9 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
       ...(a ? strUnit(akcizUnit(d.rs, a)) : { unitId: String(listed ? p.unitId : RS_UNIT_OTHER), unitTxt: p.unitTxt }),
       aId: p.aId ? String(p.aId) : '',
       aTitle: p.aId ? (a ? `${a.code} · ${a.title}` : String(p.aId)) : '',
-      // RS.ge's products have no price or VAT type: what is typed on the line stays.
+      // The product's price and VAT type, when it has them; otherwise what is typed on the line stays.
+      ...(p.price != null && { price: String(p.price) }),
+      ...(p.vatType != null && { vatType: String(p.vatType) }),
     })
   }
 

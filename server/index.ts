@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, clearProducts, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsNameFromTin, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -53,6 +53,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['DELETE', /^\/api\/refs\/(\w+)\/([^/]+)$/, ({ params, user }) => refs.remove(refCol(params[0]), decodeURIComponent(params[1]), user)],
   // Reads the product list / car-number list from RS.ge; the result arrives with the next state poll.
   ['POST', /^\/api\/products\/sync$/, ({ body, user }) => readRsList('products', body, user)],
+  // Deletes every product, here and on RS.ge.
+  ['POST', /^\/api\/products\/clear$/, ({ user }) => clearProducts(user)],
   ['POST', /^\/api\/trucks\/sync$/, ({ body, user }) => readRsList('plates', body, user)],
   // Puts stored trucks' plates that RS.ge's car-number list lacks onto it.
   ['POST', /^\/api\/trucks\/push$/, ({ user }) => pushPlates(user)],

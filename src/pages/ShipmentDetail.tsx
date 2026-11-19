@@ -1,8 +1,8 @@
-import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, CopyPlus, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RefreshCw, RotateCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, CopyPlus, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RotateCw } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { Badge, Button, Card, ConfirmModal, EmptyState, Input, Modal, Segmented, ShipmentBadge, StepIcon } from '../components/ui'
+import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, ShipmentBadge, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
@@ -223,9 +223,7 @@ export function ShipmentDetail() {
             </Button>
           )}
           {canAct && isDraft && (
-            <Button variant="ghost" size="sm" icon={<Trash2 className="size-3.5" />} onClick={() => setDialog('delete')} className="text-rose-600">
-              წაშლა
-            </Button>
+            <DeleteButton onClick={() => setDialog('delete')} />
           )}
           {canAct && onRs && s.waybillState !== 'cancelled' && !s.invoiceId && (
             <Button variant="ghost" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')} className="text-rose-600">
@@ -269,16 +267,7 @@ export function ShipmentDetail() {
                   {r?.confirmed === 1 && <Badge tone="green">მყიდველმა დაადასტურა</Badge>}
                   {r?.confirmed === -1 && <Badge tone="red">მყიდველი არ ეთანხმება</Badge>}
                   {readable && (
-                    <button
-                      type="button"
-                      onClick={() => void readRs()}
-                      disabled={rsReading}
-                      title="RS.ge-დან განახლება"
-                      aria-label="RS.ge-დან განახლება"
-                      className="grid size-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
-                    >
-                      <RefreshCw className={cx('size-3.5', rsReading && 'animate-spin')} />
-                    </button>
+                    <RefreshButton busy={rsReading} onClick={() => void readRs()} />
                   )}
                 </div>
               </div>
@@ -427,23 +416,21 @@ export function ShipmentDetail() {
         onClose={() => setDialog(null)}
         onConfirm={() => void run(() => shipments.finish(s.id, 'cancel'), 'ზედნადები გაუქმდა')}
         busy={busy}
-        title="გაუქმდეს ზედნადები?"
+        title={`გაუქმდეს ზედნადები №${s.waybillNumber}?`}
         confirmLabel="გაუქმება"
-        message={`ზედნადები №${s.waybillNumber} RS.ge-ზე გაუქმდება${s.waybillState === 'closed' ? ', მიუხედავად იმისა, რომ დასრულებულია' : ''}. ეს მოქმედება შეუქცევადია.`}
       />
       <ConfirmModal
         open={dialog === 'delete'}
         onClose={() => setDialog(null)}
         onConfirm={() => void run(() => shipments.finish(s.id, 'delete'), 'შენახული ზედნადები წაიშალა')}
         busy={busy}
-        title="წაიშალოს შენახული ზედნადები?"
+        title="წაიშალოს ზედნადები?"
         confirmLabel="წაშლა"
-        message="ზედნადები ჯერ არ არის გააქტიურებული და RS.ge-დან წაიშლება. რეისი დარჩება ისტორიაში."
       />
       <Modal
         open={dialog === 'invoice'}
         onClose={() => setDialog(null)}
-        title="ანგარიშ-ფაქტურის გამოწერა"
+        title="გამოიწეროს ანგარიშ-ფაქტურა?"
         footer={
           <>
             <Button variant="secondary" onClick={() => setDialog(null)}>
@@ -456,9 +443,8 @@ export function ShipmentDetail() {
         }
       >
         <div className="space-y-2 text-sm text-slate-600">
-          <p>RS.ge-ზე ზედნადებიდან №{s.waybillNumber} გამოიწერება საგადასახადო ანგარიშ-ფაქტურა მყიდველზე.</p>
-          <p className="rounded-lg bg-amber-50 p-2 text-amber-800">ფაქტურაზე მიბმული ზედნადების კორექტირება და გაუქმება RS.ge-ზე აღარ იქნება შესაძლებელი.</p>
-          {!started && <p className="text-rose-600">ფაქტურა გამოიწერება ტრანსპორტირების დაწყების შემდეგ ({formatDateTime(begin)}).</p>}
+          <p>ზედნადებს ვეღარ შეცვლი და ვეღარ გააუქმებ.</p>
+          {!started && <p className="text-rose-600">შესაძლებელია {formatDateTime(begin)}-დან.</p>}
         </div>
       </Modal>
     </>
@@ -476,7 +462,7 @@ export function ActivateModal({ open, busy, onClose, onConfirm }: { open: boolea
     <Modal
       open={open}
       onClose={onClose}
-      title="ზედნადების გააქტიურება"
+      title="გააქტიურდეს ზედნადები?"
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
@@ -489,7 +475,6 @@ export function ActivateModal({ open, busy, onClose, onConfirm }: { open: boolea
       }
     >
       <div className="space-y-3 text-sm text-slate-600">
-        <p>RS.ge ზედნადებს მიანიჭებს ნომერს და ტრანსპორტირება დაიწყება. მძღოლს SMS გაეგზავნება.</p>
         <Segmented
           value={mode}
           onChange={setMode}
@@ -501,7 +486,7 @@ export function ActivateModal({ open, busy, onClose, onConfirm }: { open: boolea
         {mode === 'later' && (
           <div>
             <Input type="datetime-local" value={at} min={toTbilisiInput()} max={toTbilisiInput(new Date(Date.now() + MAX_DEFER_MS - 10 * 60_000))} invalid={!!error} onChange={(e) => setAt(e.target.value)} />
-            <p className={cx('mt-1 ml-1 text-xs', error ? 'text-rose-600' : 'text-slate-500')}>{error || 'საქართველოს დროით · მაქსიმუმ 3 დღით ადრე'}</p>
+            {error && <p className="mt-1 ml-1 text-xs text-rose-600">{error}</p>}
           </div>
         )}
       </div>
@@ -522,7 +507,7 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
     <Modal
       open={open}
       onClose={onClose}
-      title="დასრულდეს ზედნადები?"
+      title={`დასრულდეს ზედნადები №${number}?`}
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
@@ -535,9 +520,8 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
       }
     >
       <div className="space-y-3 text-sm text-slate-600">
-        <p>ზედნადები №{number} RS.ge-ზე მოინიშნება მიწოდებულად. ამის შემდეგ მისი კორექტირება აღარ იქნება შესაძლებელი.</p>
         {notStarted ? (
-          <p className="text-rose-600">ტრანსპორტირება ჯერ არ დაწყებულა ({formatDateTime(begin)}) — დასრულება შესაძლებელია მის შემდეგ.</p>
+          <p className="text-rose-600">შესაძლებელია {formatDateTime(begin)}-დან.</p>
         ) : (
           <>
             <Segmented
@@ -551,7 +535,7 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
             {mode === 'at' && (
               <div>
                 <Input type="datetime-local" value={at} min={begin ? toTbilisiInput(begin) : undefined} max={toTbilisiInput()} invalid={!!error} onChange={(e) => setAt(e.target.value)} />
-                <p className={cx('mt-1 ml-1 text-xs', error ? 'text-rose-600' : 'text-slate-500')}>{error || 'მიწოდების დრო, საქართველოს დროით'}</p>
+                {error && <p className="mt-1 ml-1 text-xs text-rose-600">{error}</p>}
               </div>
             )}
           </>

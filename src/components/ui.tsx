@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, RefreshCw, Trash2, X } from 'lucide-react'
 import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cx } from '../lib/util'
 import { WAYBILL_TONE } from '../lib/rs'
@@ -8,10 +8,12 @@ import type { Shipment, ShipmentStatus, StepStatus } from '../types'
 
 /* ----------------------------- Button ----------------------------- */
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
+type Variant = 'primary' | 'secondary' | 'secondaryBrand' | 'secondaryDanger' | 'ghost' | 'danger'
 const variants: Record<Variant, string> = {
   primary: 'bg-brand-600 text-white hover:brightness-110 disabled:opacity-40',
   secondary: 'bg-fill text-brand-600 hover:bg-slate-500/20 disabled:opacity-40',
+  secondaryBrand: 'bg-fill text-brand-600 hover:bg-brand-500/15 disabled:opacity-40',
+  secondaryDanger: 'bg-fill text-rose-600 hover:bg-rose-500/15 disabled:opacity-40',
   ghost: 'text-brand-600 hover:bg-fill disabled:opacity-40',
   danger: 'bg-rose-600 text-white hover:brightness-110 disabled:opacity-40',
 }
@@ -31,7 +33,7 @@ export function Button({
       {...rest}
       disabled={disabled || loading}
       className={cx(
-        'pressable inline-flex items-center justify-center gap-1.5 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed',
+        'pressable inline-flex cursor-pointer items-center justify-center gap-1.5 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed',
         size === 'sm' && 'h-8 rounded-full px-3.5 text-[13px]',
         size === 'md' && 'h-10 rounded-[10px] px-4 text-[15px]',
         size === 'lg' && 'h-[50px] rounded-[14px] px-5 text-[17px]',
@@ -42,6 +44,24 @@ export function Button({
       {loading ? <Loader2 className="size-4 animate-spin" /> : icon}
       {children}
     </button>
+  )
+}
+
+/** The one refresh button used everywhere: small secondary pill, spinning icon while busy. */
+export function RefreshButton({ busy, onClick, disabled, children = 'განახლება', className }: { busy?: boolean; onClick: () => void; disabled?: boolean; children?: ReactNode; className?: string }) {
+  return (
+    <Button type="button" variant="secondaryBrand" size="sm" className={className} icon={<RefreshCw className={cx('size-3.5', busy && 'animate-spin')} />} onClick={onClick} disabled={busy || disabled}>
+      {children}
+    </Button>
+  )
+}
+
+/** The one delete button used everywhere: same pill as RefreshButton, in red. */
+export function DeleteButton({ onClick, disabled, loading, children = 'წაშლა', className }: { onClick: () => void; disabled?: boolean; loading?: boolean; children?: ReactNode; className?: string }) {
+  return (
+    <Button type="button" variant="secondaryDanger" size="sm" className={className} icon={<Trash2 className="size-3.5" />} onClick={onClick} disabled={disabled} loading={loading}>
+      {children}
+    </Button>
   )
 }
 
@@ -206,7 +226,7 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
   )
 }
 
-export function ConfirmModal({ open, title, message, confirmLabel = 'წაშლა', onConfirm, onClose, busy, disabled }: { open: boolean; title: string; message: ReactNode; confirmLabel?: string; onConfirm: () => void; onClose: () => void; busy?: boolean; disabled?: boolean }) {
+export function ConfirmModal({ open, title, message, confirmLabel = 'წაშლა', onConfirm, onClose, busy, disabled }: { open: boolean; title: string; message?: ReactNode; confirmLabel?: string; onConfirm: () => void; onClose: () => void; busy?: boolean; disabled?: boolean }) {
   return (
     <Modal
       open={open}
@@ -223,7 +243,7 @@ export function ConfirmModal({ open, title, message, confirmLabel = 'წაშ�
         </>
       }
     >
-      <div className="text-sm text-slate-600">{message}</div>
+      {message && <div className="text-sm text-slate-600">{message}</div>}
     </Modal>
   )
 }
