@@ -1,8 +1,8 @@
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, Trash2, Waypoints } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, ChevronDown, Waypoints } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { logs as logsApi } from '../api'
-import { Badge, Card, ConfirmModal, EmptyState, JsonBlock, PageHeader, Segmented } from '../components/ui'
+import { Badge, Card, ConfirmModal, DeleteButton, EmptyState, JsonBlock, PageHeader, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatTime } from '../lib/util'
@@ -35,16 +35,15 @@ export function ApiLog() {
 
       <Card className="min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator px-5 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">ლოგი</h2>
-          <div className="flex items-center gap-1">
-            <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
-            {user.role === 'admin' && <button onClick={() => setConfirmClear(true)} className="ml-1 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="ლოგის გასუფთავება" aria-label="ლოგის გასუფთავება">
-              <Trash2 className="size-4" />
-            </button>}
-          </div>
+          <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
+          {user.role === 'admin' && d.logs.length > 0 && (
+            <DeleteButton onClick={() => setConfirmClear(true)}>
+              <span className="hidden sm:inline">გასუფთავება</span>
+            </DeleteButton>
+          )}
         </div>
         {logs.length === 0 ? (
-          <EmptyState icon={<Waypoints className="size-6" />} title="მოთხოვნები ჯერ არ არის" text="შექმენი რეისი და ყველა RS.ge და SMS მოთხოვნა აქ გამოჩნდება." />
+          <EmptyState icon={<Waypoints className="size-6" />} title="მოთხოვნები ჯერ არ არის" text="RS.ge-სა და SMS-ის ყველა მოთხოვნა აქ გამოჩნდება." />
         ) : (
           <ul className="divide-y divide-separator">
             {logs.map((l) => {

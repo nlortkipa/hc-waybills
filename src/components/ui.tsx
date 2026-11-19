@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, CircleDashed, Loader2, MinusCircle, RefreshCw, Trash2, X } from 'lucide-react'
 import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { cx } from '../lib/util'
 import { WAYBILL_TONE } from '../lib/rs'
 import { inputCls, invalidCls } from './fieldStyles'
@@ -18,6 +19,17 @@ const variants: Record<Variant, string> = {
   danger: 'bg-rose-600 text-white hover:brightness-110 disabled:opacity-40',
 }
 
+type Size = 'sm' | 'md' | 'lg'
+const buttonCls = (variant: Variant, size: Size, className?: string) =>
+  cx(
+    'pressable inline-flex cursor-pointer items-center justify-center gap-1.5 font-semibold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed',
+    size === 'sm' && 'h-8 rounded-full px-3.5 text-[13px]',
+    size === 'md' && 'h-10 rounded-[10px] px-4 text-[15px]',
+    size === 'lg' && 'h-[50px] rounded-[14px] px-5 text-[17px]',
+    variants[variant],
+    className,
+  )
+
 export function Button({
   variant = 'primary',
   size = 'md',
@@ -27,23 +39,22 @@ export function Button({
   children,
   disabled,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg'; loading?: boolean; icon?: ReactNode }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; loading?: boolean; icon?: ReactNode }) {
   return (
-    <button
-      {...rest}
-      disabled={disabled || loading}
-      className={cx(
-        'pressable inline-flex cursor-pointer items-center justify-center gap-1.5 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-not-allowed',
-        size === 'sm' && 'h-8 rounded-full px-3.5 text-[13px]',
-        size === 'md' && 'h-10 rounded-[10px] px-4 text-[15px]',
-        size === 'lg' && 'h-[50px] rounded-[14px] px-5 text-[17px]',
-        variants[variant],
-        className,
-      )}
-    >
+    <button {...rest} disabled={disabled || loading} className={buttonCls(variant, size, className)}>
       {loading ? <Loader2 className="size-4 animate-spin" /> : icon}
       {children}
     </button>
+  )
+}
+
+/** A link that looks like a Button (a button inside a link is invalid HTML). */
+export function LinkButton({ to, variant = 'primary', size = 'md', icon, className, children, ...rest }: { to: string; variant?: Variant; size?: Size; icon?: ReactNode; className?: string; children?: ReactNode; 'aria-label'?: string }) {
+  return (
+    <Link to={to} className={buttonCls(variant, size, className)} {...rest}>
+      {icon}
+      {children}
+    </Link>
   )
 }
 
@@ -83,6 +94,16 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   )
 }
 
+/** A card with a title over a two-column form grid (settings pages). */
+export function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card className="p-5 sm:p-6">
+      <h2 className="mb-5 text-sm font-semibold text-slate-900">{title}</h2>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
+    </Card>
+  )
+}
+
 /* ------------------------------ Form ------------------------------ */
 
 export function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: ReactNode }) {
@@ -100,19 +121,6 @@ export function Input({ className, invalid, ...rest }: InputHTMLAttributes<HTMLI
 }
 
 export { DatePicker, Select } from './pickers'
-
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)} className="flex w-full items-center justify-between gap-3 text-left text-[15px] text-slate-900">
-      {label}
-      <span className={cx('relative inline-flex h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200', checked ? 'bg-emerald-500' : 'bg-fill ring-1 ring-inset ring-slate-500/10')}>
-        <span
-          className={cx('absolute top-[2px] size-[27px] rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.15),0_3px_1px_rgba(0,0,0,0.06)] transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]', checked ? 'translate-x-[22px]' : 'translate-x-[2px]')}
-        />
-      </span>
-    </button>
-  )
-}
 
 /* ----------------------------- Badges ----------------------------- */
 
@@ -152,15 +160,6 @@ export function shipmentState(s: Pick<Shipment, 'status' | 'waybillState'>): { l
 
 export function ShipmentBadge({ s }: { s: Pick<Shipment, 'status' | 'waybillState'> }) {
   const m = shipmentState(s)
-  return (
-    <Badge tone={m.tone} dot pulse={m.pulse}>
-      {m.label}
-    </Badge>
-  )
-}
-
-export function StatusBadge({ status }: { status: ShipmentStatus }) {
-  const m = statusMeta[status]
   return (
     <Badge tone={m.tone} dot pulse={m.pulse}>
       {m.label}
@@ -267,7 +266,7 @@ export function Stat({ label, value, sub, icon, accent = 'bg-brand-500' }: { lab
     <Card className="p-4">
       <div className="flex items-center gap-2">
         <span className={cx('grid size-7 shrink-0 place-items-center rounded-[7px] text-white [&>svg]:size-4', accent)}>{icon}</span>
-        <p className="min-w-0 truncate text-[13px] font-semibold text-slate-500">{label}</p>
+        <p className="min-w-0 text-[13px] leading-tight font-semibold text-slate-500 [overflow-wrap:anywhere]">{label}</p>
       </div>
       <p className="mt-3 text-[28px] leading-none font-bold whitespace-nowrap tabular-nums tracking-tight text-slate-900">{value}</p>
       {sub && <p className="mt-1.5 text-[13px] leading-snug text-slate-500">{sub}</p>}

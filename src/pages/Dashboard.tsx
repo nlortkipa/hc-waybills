@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
-import { Button, Card, EmptyState, PageHeader, Stat } from '../components/ui'
+import { Card, EmptyState, LinkButton, PageHeader, Stat } from '../components/ui'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
 import { tbilisiDay } from '../lib/util'
@@ -26,9 +26,11 @@ export function Dashboard() {
         title={`გამარჯობა, ${user.firstName}`}
         subtitle={mine.length ? `${mine.length > 1 ? 'კარიერები' : 'კარიერი'}: ${mine.map((c) => c.name).join(', ')}` : 'ყველა კარიერის მიმოხილვა'}
         actions={
-          <Link to="/new" className="hidden sm:block">
-            <Button icon={<Plus className="size-4" />}>ახალი რეისი</Button>
-          </Link>
+          <span className="hidden sm:block">
+            <LinkButton to="/new" icon={<Plus className="size-4" />}>
+              ახალი რეისი
+            </LinkButton>
+          </span>
         }
       />
 
@@ -40,11 +42,11 @@ export function Dashboard() {
       </div>
 
       {/* Mobile primary action */}
-      <Link to="/new" className="mt-4 block sm:hidden">
-        <Button size="lg" className="w-full" icon={<Plus className="size-5" />}>
+      <div className="mt-4 sm:hidden">
+        <LinkButton to="/new" size="lg" className="w-full" icon={<Plus className="size-5" />}>
           ახალი რეისი
-        </Button>
-      </Link>
+        </LinkButton>
+      </div>
 
       {failed.length > 0 && (
         <Card className="mt-6 overflow-hidden">

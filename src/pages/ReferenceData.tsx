@@ -10,6 +10,8 @@ import { roleLabel, useUser } from '../session'
 import { routeAddresses, routeLabel } from '../lib/route'
 import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import type { CarrierRoute, Database } from '../types'
+import { OptionRow } from '../components/pickers'
+import { WAYBILL_TYPE_ICON } from '../components/icons'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -18,12 +20,8 @@ interface FieldDef {
   label: string
   type?: 'text' | 'tel' | 'email' | 'select'
   placeholder?: string
-  /** `rec` is the record being edited, for options that depend on another field. */
-  options?: (d: Database, rec: Rec) => { value: string; label: string }[]
-  /** Picked again (first option) when this other field changes. */
-  resetOn?: string
-  /** Under a select whose options depend on another field: why there are none. */
-  emptyHint?: (d: Database, rec: Rec) => string | undefined
+  /** A select's options; with an `icon` they are listed as rich rows (icon, title, `sub`) with a search field. */
+  options?: (d: Database) => { value: string; label: string; icon?: ReactNode; sub?: string }[]
   /** Takes the full row of the form. */
   wide?: boolean
   validate?: (v: string, rec: Rec) => string | null
@@ -32,16 +30,8 @@ interface FieldDef {
   mono?: boolean
   /** Value of a new record (default: '' or a select's first option). */
   initial?: (d: Database, r?: Rec) => string
-  /** Can't be changed once saved; `hint` says why. */
+  /** Can't be changed once saved. */
   fixed?: boolean
-  /** A select with a long list: its menu has a search field. */
-  searchable?: boolean
-  /** Under the field. */
-  hint?: string
-  /** The value another field fixes (shown, can't be changed, saved); undefined = free. */
-  lock?: (d: Database, rec: Rec, isNew: boolean) => string | undefined
-  /** Other fields this one fills when it is changed (they stay editable unless locked). */
-  fills?: (d: Database, value: string) => Partial<Rec>
   /** A tax ID: a search button (or Enter) looks its name up on RS.ge and puts it in this other field. */
   lookup?: string
 }
@@ -114,7 +104,7 @@ const TABS: TabDef[] = [
     singular: 'მარშრუტის',
     icon: Route,
     fields: [
-      { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name })) },
+      { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name, icon: <Building2 />, sub: c.startAddress })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
       {
@@ -124,7 +114,7 @@ const TABS: TabDef[] = [
         wide: true,
         // Routes saved without a type show the one their waybills got (buyer set → 2, else 1).
         initial: (d, r) => String(waybillDefaults(d.rs, r as unknown as CarrierRoute | undefined).type),
-        options: () => WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label })),
+        options: () => WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label, icon: WAYBILL_TYPE_ICON[t.value], sub: t.hint })),
       },
       {
         key: 'buyerTin',
@@ -305,7 +295,7 @@ export function ReferenceData() {
   const blank = (): Rec => {
     const r: Rec = { id: '' }
     // Options can depend on fields before them.
-    tab.fields.forEach((f) => (r[f.key] = f.initial ? f.initial(d) : f.type === 'select' ? (f.options!(d, r)[0]?.value ?? '') : ''))
+    tab.fields.forEach((f) => (r[f.key] = f.initial ? f.initial(d) : f.type === 'select' ? (f.options!(d)[0]?.value ?? '') : ''))
     return r
   }
 
@@ -351,7 +341,7 @@ export function ReferenceData() {
           >
             <t.icon className="size-4" />
             {t.label}
-            <span className="rounded-md bg-slate-200/70 px-1.5 text-[11px] text-slate-600 tabular-nums">{active(d[t.key] as { deletedAt?: string }[]).length}</span>
+            <span className={cx('rounded-md px-1.5 text-[11px] tabular-nums', tabKey === t.key ? 'bg-white/25 text-white sm:bg-slate-500/15 sm:text-slate-600' : 'bg-slate-500/15 text-slate-600')}>{active(d[t.key] as { deletedAt?: string }[]).length}</span>
           </button>
         ))}
       </div>
@@ -376,9 +366,9 @@ export function ReferenceData() {
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-separator text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <tr className="border-b border-separator text-left text-xs text-slate-500">
                     {tab.columns.map((c) => (
-                      <th key={c.label} className="px-5 py-3 first:pl-5">
+                      <th key={c.label} className="px-5 py-3 font-medium">
                         {c.label}
                       </th>
                     ))}
@@ -404,7 +394,7 @@ export function ReferenceData() {
             <ul className="divide-y divide-separator md:hidden">
               {rows.map((r) => (
                 <li key={r.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-500">
+                  <div className="grid size-10 shrink-0 place-items-center rounded-[10px] bg-brand-500/12 text-brand-600">
                     <tab.icon className="size-5" />
                   </div>
                   <button className="min-w-0 flex-1 text-left" onClick={() => setEditing({ ...r })}>
@@ -428,13 +418,7 @@ export function ReferenceData() {
         disabled={!!deleting && !!refs.blocker(tab.key, deleting.id, user)}
         busy={busy}
         title={`${tab.singular} წაშლა?`}
-        message={
-          deleting && (
-            <>
-              <DeleteMessage col={tab.key} id={deleting.id} name={tab.title(deleting, d)} />
-            </>
-          )
-        }
+        message={deleting && <DeleteMessage col={tab.key} id={deleting.id} name={tab.title(deleting, d)} />}
       />
     </>
   )
@@ -594,19 +578,10 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [saveError, setSaveError] = useState('')
   const [searching, setSearching] = useState('')
   const isNew = !rec.id
-  /** The record as shown and saved: with the values other fields lock. */
-  const view = (x: Rec): Rec => {
-    const out = { ...x }
-    for (const f of tab.fields) {
-      const v = f.lock?.(d, out, isNew)
-      if (v !== undefined) out[f.key] = v
-    }
-    return out
-  }
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
-    const r = view(form)
+    const r = form
     const errs: Record<string, string> = {}
     for (const f of tab.fields) {
       if (f.showIf && !f.showIf(r)) continue
@@ -648,14 +623,9 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     }
   }
 
-  /** Sets a field; fields whose options depend on it are picked again. */
   const setField = (key: string, value: string) => {
-    setR((x) => {
-      const next: Rec = { ...x, [key]: value, ...tab.fields.find((f) => f.key === key)?.fills?.(d, value) }
-      for (const f of tab.fields) if (f.resetOn === key) next[f.key] = f.options!(d, next)[0]?.value ?? ''
-      return next
-    })
-    setErrors((x) => ({ ...x, [key]: '', ...Object.fromEntries(Object.keys(tab.fields.find((f) => f.key === key)?.fills?.(d, value) ?? {}).map((k) => [k, ''])), ...Object.fromEntries(tab.fields.filter((f) => f.resetOn === key).map((f) => [f.key, ''])) }))
+    setR((x) => ({ ...x, [key]: value }))
+    setErrors((x) => ({ ...x, [key]: '' }))
     // A new operator with only one carrier to choose from gets it right away.
     if (key === 'role' && value === 'operator' && !carrierIds.length && liveCarriers.length === 1) setCarrierIds([liveCarriers[0].id])
   }
@@ -676,7 +646,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     }
   }
 
-  const r = view(form)
+  const r = form
   const fields = tab.fields.filter((f) => !f.showIf || f.showIf(r))
   const routeStart = tab.key === 'routes' ? d.carriers.find((c) => c.id === r.carrierId)?.startAddress : undefined
 
@@ -704,16 +674,16 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
           </div>
         )}
         {fields.map((f) => {
-          const opts = f.type === 'select' ? f.options!(d, r) : []
-          const locked = f.lock?.(d, form, isNew) !== undefined
+          const opts = f.type === 'select' ? f.options!(d) : []
+          const rich = opts.some((o) => o.icon)
           return (
             <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]} hint={f.type === 'select' && !opts.length ? f.emptyHint?.(d, r) : undefined}>
+              <Field label={f.label} error={errors[f.key]}>
                 {f.type === 'select' ? (
-                  <Select searchable={f.searchable} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length || locked}>
+                  <Select rich={rich} searchable={rich && opts.length > 5} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
                     {opts.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
+                      <option key={o.value} value={o.value} label={o.label} data-search={o.sub}>
+                        {rich ? <OptionRow icon={o.icon} title={o.label} sub={o.sub} /> : o.label}
                       </option>
                     ))}
                   </Select>
@@ -751,7 +721,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                     inputMode={f.key === 'personalId' ? 'numeric' : undefined}
                     className={f.mono ? 'font-mono' : undefined}
                     invalid={!!errors[f.key]}
-                    disabled={(!!f.fixed && !isNew) || locked}
+                    disabled={!!f.fixed && !isNew}
                     onChange={(e) => setField(f.key, e.target.value)}
                   />
                 )}
@@ -785,12 +755,12 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   )
 }
 
-/** Toggle buttons for picking several records (an operator's carriers, a route's products). */
-function Chips({ label, items, empty, value, onChange, error }: { label: string; items: { id: string; label: string; sub?: string }[]; empty?: string; value: string[]; onChange: (v: string[]) => void; error?: string }) {
+/** Toggle buttons for picking several records (an operator's carriers). */
+function Chips({ label, items, value, onChange, error }: { label: string; items: { id: string; label: string }[]; value: string[]; onChange: (v: string[]) => void; error?: string }) {
   return (
     <div className="sm:col-span-2">
-      <p className="mb-1.5 text-sm font-medium text-slate-700">{label}</p>
-      {items.length ? (
+      <p className="mb-1.5 ml-1 text-[13px] text-slate-500">{label}</p>
+      {items.length > 0 && (
         <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
           {items.map((x) => {
             const on = value.includes(x.id)
@@ -807,15 +777,12 @@ function Chips({ label, items, empty, value, onChange, error }: { label: string;
               >
                 {on && <Check className="size-4" />}
                 {x.label}
-                {x.sub && <span className={cx('font-mono text-xs', on ? 'text-white/75' : 'text-slate-400')}>{x.sub}</span>}
               </button>
             )
           })}
         </div>
-      ) : (
-        empty && <p className="text-xs text-slate-500">{empty}</p>
       )}
-      {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
+      {error && <p className="mt-1 ml-1 text-xs text-rose-600">{error}</p>}
     </div>
   )
 }

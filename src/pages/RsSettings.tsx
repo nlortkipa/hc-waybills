@@ -1,9 +1,8 @@
 import { CheckCircle2, FileStack, Unplug } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, type FormEvent } from 'react'
 import { rsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, RefreshButton, ConfirmModal, Field, Input, PageHeader } from '../components/ui'
+import { Button, Card, ConfirmModal, Field, Input, LinkButton, PageHeader, RefreshButton, Section } from '../components/ui'
 import { useToast } from '../components/toast'
 import type { RsSettings } from '../types'
 
@@ -23,9 +22,9 @@ export function RsSettings() {
         title="RS.ge"
         actions={
           connected && (
-            <Link to="/waybills" className="pressable inline-flex h-8 items-center gap-1.5 rounded-full bg-fill px-3.5 text-[13px] font-semibold text-brand-600">
-              <FileStack className="size-3.5" /> ზედნადებები RS.ge-ზე
-            </Link>
+            <LinkButton to="/waybills" variant="secondaryBrand" size="sm" icon={<FileStack className="size-3.5" />}>
+              ზედნადებები RS.ge-ზე
+            </LinkButton>
           )
         }
       />
@@ -105,11 +104,11 @@ function ConnectionCard() {
       <Card className="p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
-            <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+            <div className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-emerald-500 text-white">
               <CheckCircle2 className="size-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-slate-900">დაკავშირებულია RS.ge-სთან</h3>
+              <h2 className="text-sm font-semibold text-slate-900">დაკავშირებულია RS.ge-სთან</h2>
               {rs.sellerTin ? (
                 <p className="text-sm text-slate-900">
                   {rs.sellerName} <span className="font-mono text-[13px] text-slate-500">({rs.sellerTin})</span>
@@ -158,10 +157,10 @@ function ConnectionCard() {
   return (
     <form onSubmit={connect} noValidate>
       <Section title="დაკავშირება RS.ge-სთან">
-        <Field label="სერვისის მომხმარებლის სახელი" error={errors.suName} >
+        <Field label="სერვისის მომხმარებლის სახელი" error={errors.suName}>
           <Input value={suName} autoComplete="off" className="font-mono" placeholder="NAME" invalid={!!errors.suName} onChange={setUser('suName', setSuName)} />
         </Field>
-        <Field label="საიდენტიფიკაციო კოდი" error={errors.suId} >
+        <Field label="საიდენტიფიკაციო კოდი" error={errors.suId}>
           <Input value={suId} inputMode="numeric" autoComplete="off" className="font-mono" placeholder="206322102" invalid={!!errors.suId} onChange={setUser('suId', setSuId)} />
         </Field>
         <Field label="პაროლი" error={errors.sp} hint={keepsPassword && !sp ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : undefined}>
@@ -189,15 +188,6 @@ function ConnectionCard() {
         </div>
       </Section>
     </form>
-  )
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card className="p-5 sm:p-6">
-      <h3 className="mb-5 text-sm font-semibold text-slate-900">{title}</h3>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
-    </Card>
   )
 }
 

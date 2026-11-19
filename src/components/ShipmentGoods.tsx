@@ -3,8 +3,9 @@
  * filled from the RS.ge product list with the search button, and then still editable; nothing is added
  * to RS.ge's list), plus the price, VAT type, quantity and optional additional quantity.
  */
-import { Plus, Search, X } from 'lucide-react'
+import { Ban, Package, Plus, Search, Stamp, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
+import { OptionRow } from './pickers'
 import { active, cx, uid } from '../lib/util'
 import { akcizUnit, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { Database, ShipmentItem } from '../types'
@@ -184,10 +185,19 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                       <Input value={g.name} placeholder="ღორღი 0–5 მმ" invalid={!!err('name')} className={products.length ? 'pr-11' : undefined} onChange={(e) => set(g.key, { name: e.target.value })} />
                       {products.length > 0 && (
                         <div className="absolute inset-y-0 right-1 flex items-center">
-                          <Select searchable icon={<Search className="size-4" />} title="RS.ge-ს პროდუქტების სიიდან" aria-label="RS.ge-ს პროდუქტების სიიდან" value="" onChange={(e) => fill(g.key, e.target.value)}>
+                          <Select searchable rich icon={<Search className="size-4" />} title="RS.ge-ს პროდუქტების სიიდან" aria-label="RS.ge-ს პროდუქტების სიიდან" value="" onChange={(e) => fill(g.key, e.target.value)}>
                             {products.map((x) => (
-                              <option key={x.id} value={x.id} disabled={taken.has(x.barCode.toLowerCase())}>
-                                {x.name} · {x.barCode}
+                              <option key={x.id} value={x.id} label={x.name} data-search={x.barCode} disabled={taken.has(x.barCode.toLowerCase())}>
+                                <OptionRow
+                                  icon={<Package />}
+                                  title={x.name}
+                                  sub={
+                                    <>
+                                      <span className="shrink-0 tabular-nums">{x.barCode}</span>
+                                      <span className="min-w-0 truncate">{[x.unitTxt, x.price != null && `${x.price.toFixed(2)} ₾`].filter(Boolean).join(' · ')}</span>
+                                    </>
+                                  }
+                                />
                               </option>
                             ))}
                           </Select>
@@ -214,7 +224,7 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                   </Field>
                 </div>
                 <div className="col-span-1">
-                  <Field label="დამატებითი რაოდენობა" error={err('quantityExt')}>
+                  <Field label="დამატ. რაოდენობა" error={err('quantityExt')}>
                     <Input type="text" inputMode="decimal" value={g.quantityExt} placeholder="—" invalid={!!err('quantityExt')} onChange={(e) => set(g.key, { quantityExt: e.target.value })} />
                   </Field>
                 </div>
@@ -255,12 +265,18 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                 {(akciz.length > 0 || g.aId) && (
                   <div className="col-span-2 sm:col-span-3">
                     <Field label="აქციზი (მხოლოდ აქციზური საქონლისთვის)">
-                      <Select searchable value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
-                        <option value="">არ არის აქციზური</option>
-                        {g.aId && !akciz.some((a) => String(a.id) === g.aId) && <option value={g.aId}>{g.aTitle || g.aId}</option>}
+                      <Select searchable rich value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
+                        <option value="" label="არ არის აქციზური">
+                          <OptionRow icon={<Ban />} title="არ არის აქციზური" />
+                        </option>
+                        {g.aId && !akciz.some((a) => String(a.id) === g.aId) && (
+                          <option value={g.aId} label={g.aTitle || g.aId}>
+                            <OptionRow icon={<Stamp />} title={g.aTitle || g.aId} />
+                          </option>
+                        )}
                         {akciz.map((a) => (
-                          <option key={a.id} value={String(a.id)}>
-                            {a.code} · {a.title}
+                          <option key={a.id} value={String(a.id)} label={`${a.code} · ${a.title}`} data-search={a.code}>
+                            <OptionRow icon={<Stamp />} title={a.title} />
                           </option>
                         ))}
                       </Select>

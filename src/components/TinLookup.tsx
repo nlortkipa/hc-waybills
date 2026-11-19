@@ -5,7 +5,6 @@ import { rsSettings } from '../api'
 /** Georgian tax ID: 9 digits (company) or 11 (personal number). */
 export const TIN_RE = /^\d{9}$|^\d{11}$/
 
-
 /** `missing`: a foreign number RS.ge doesn't know — its name is typed by hand. */
 export type Lookup = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; name: string } | { state: 'missing' } | { state: 'error'; message: string }
 

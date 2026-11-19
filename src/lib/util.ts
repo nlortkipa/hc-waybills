@@ -17,7 +17,6 @@ export function shipmentUses(s: Shipment, col: 'carriers' | 'routes' | 'drivers'
   return s[({ carriers: 'carrierId', routes: 'routeId', drivers: 'driverId', trucks: 'truckId', users: 'createdBy' } as const)[col]] === id
 }
 
-
 export const nowIso = () => new Date().toISOString()
 
 /*
@@ -60,14 +59,6 @@ export function formatTime(iso?: string): string {
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
 }
 
-export function timeAgo(iso: string): string {
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  if (s < 60) return 'ახლახან'
-  if (s < 3600) return `${Math.floor(s / 60)} წთ-ის წინ`
-  if (s < 86400) return `${Math.floor(s / 3600)} სთ-ის წინ`
-  return `${Math.floor(s / 86400)} დღის წინ`
-}
-
 /** 23961 → "23 961", 24.55 → "24,55" (Georgian style). */
 export function formatNumber(n: number, maxDecimals = 0): string {
   const f = 10 ** maxDecimals
@@ -77,7 +68,6 @@ export function formatNumber(n: number, maxDecimals = 0): string {
   return (n < 0 ? '-' : '') + grouped + (dec ? ',' + dec : '')
 }
 
-export const formatKg = (kg?: number) => (kg == null ? '—' : `${formatNumber(kg)} კგ`)
 export const formatTonnes = (t: number) => `${formatNumber(t, 2)} ტ`
 
 export function cx(...parts: (string | false | null | undefined)[]): string {

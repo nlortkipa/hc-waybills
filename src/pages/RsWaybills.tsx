@@ -9,7 +9,7 @@ import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { downloadCsv, formatDateTime, formatNumber, tbilisiStamp } from '../lib/util'
 import { useUser } from '../session'
 import type { RsListWaybill } from '../types'
-import { ActivateModal, CloseModal } from './ShipmentDetail'
+import { ActivateModal, CloseModal, InvoiceModal } from './ShipmentDetail'
 
 type Side = 'issued' | 'received'
 type Period = '1' | '3' | '7' | '30'
@@ -172,14 +172,14 @@ export function RsWaybills() {
               <div className="hidden overflow-x-auto md:block">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="hairline-b text-left text-xs text-slate-500">
-                      <th className="px-5 py-2 font-medium">ნომერი</th>
-                      <th className="px-3 py-2 font-medium">თარიღი</th>
-                      <th className="px-3 py-2 font-medium">{side === 'issued' ? 'მყიდველი' : 'გამყიდველი'}</th>
-                      <th className="px-3 py-2 font-medium">მარშრუტი</th>
-                      <th className="px-3 py-2 font-medium">მანქანა</th>
-                      <th className="px-3 py-2 text-right font-medium">თანხა</th>
-                      <th className="px-3 py-2 font-medium">სტატუსი</th>
+                    <tr className="border-b border-separator text-left text-xs text-slate-500">
+                      <th className="px-5 py-3 font-medium">ნომერი</th>
+                      <th className="px-3 py-3 font-medium">თარიღი</th>
+                      <th className="px-3 py-3 font-medium">{side === 'issued' ? 'მყიდველი' : 'გამყიდველი'}</th>
+                      <th className="px-3 py-3 font-medium">მარშრუტი</th>
+                      <th className="px-3 py-3 font-medium">მანქანა</th>
+                      <th className="px-3 py-3 text-right font-medium">თანხა</th>
+                      <th className="px-3 py-3 font-medium">სტატუსი</th>
                       <th />
                     </tr>
                   </thead>
@@ -288,7 +288,6 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
   const admin = user.role === 'admin'
   const mine = side === 'issued'
   const st = w && statusOf(w.status)
-  const started = !w?.beginAt || Date.parse(w.beginAt) <= Date.now()
 
   return (
     <>
@@ -348,11 +347,9 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                   ბეჭდვა
                 </Button>
               )}
-              {admin && mine && w.status === 0 && (
-                <DeleteButton onClick={() => setDialog('delete')} />
-              )}
+              {admin && mine && w.status === 0 && <DeleteButton onClick={() => setDialog('delete')} />}
               {admin && mine && (w.status === 1 || w.status === 2) && !w.invoiceId && (
-                <Button size="sm" variant="ghost" className="text-rose-600" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')}>
+                <Button size="sm" variant="secondaryDanger" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')}>
                   გაუქმება
                 </Button>
               )}
@@ -442,26 +439,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
             confirmLabel="არ ვეთანხმები"
             message={`${w.sellerName} ამას RS.ge-ზე დაინახავს.`}
           />
-          <Modal
-            open={dialog === 'invoice'}
-            onClose={() => setDialog(null)}
-            title="გამოიწეროს ანგარიშ-ფაქტურა?"
-            footer={
-              <>
-                <Button variant="secondary" onClick={() => setDialog(null)}>
-                  გაუქმება
-                </Button>
-                <Button loading={busy} disabled={!started} icon={<ReceiptText className="size-4" />} onClick={() => void act('invoice', undefined, 'ანგარიშ-ფაქტურა გამოიწერა')}>
-                  გამოწერა
-                </Button>
-              </>
-            }
-          >
-            <div className="space-y-2 text-sm text-slate-600">
-              <p>ზედნადებს ვეღარ შეცვლი და ვეღარ გააუქმებ.</p>
-              {!started && <p className="text-rose-600">შესაძლებელია {formatDateTime(w.beginAt)}-დან.</p>}
-            </div>
-          </Modal>
+          <InvoiceModal open={dialog === 'invoice'} busy={busy} begin={w.beginAt} onClose={() => setDialog(null)} onConfirm={() => void act('invoice', undefined, 'ანგარიშ-ფაქტურა გამოიწერა')} />
         </>
       )}
     </>

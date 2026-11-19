@@ -1,8 +1,8 @@
 import { AlertTriangle, CheckCircle2, Unplug } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent } from 'react'
 import { smsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, ConfirmModal, Field, Input, PageHeader } from '../components/ui'
+import { Button, Card, ConfirmModal, Field, Input, PageHeader, Section } from '../components/ui'
 import { useToast } from '../components/toast'
 import { formatDateTime, formatNumber, phoneKey } from '../lib/util'
 import type { SmsSettings as Sms } from '../types'
@@ -20,15 +20,10 @@ export function SmsSettings() {
     <>
       <PageHeader title="SMS" />
       <div className="space-y-4">
-        {connected ? (
-          <div className="flex gap-3 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-900 ring-1 ring-emerald-200">
-            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
-            <p>SMS ჩართულია — მძღოლები შეტყობინებას მიიღებენ გამგზავნით „{sms.sender}“.</p>
-          </div>
-        ) : (
-          <div className="flex gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+        {!connected && (
+          <div className="flex gap-3 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-            <p>SMS არ არის დაყენებული — რეისებზე SMS-ის ნაბიჯი შეცდომით დასრულდება. დაყენების შემდეგ შეგიძლია ხელახლა გაგზავნო.</p>
+            <p>SMS არ არის დაყენებული — მძღოლები ზედნადების ნომერს ვერ მიიღებენ.</p>
           </div>
         )}
         <AccountCard />
@@ -91,11 +86,11 @@ function AccountCard() {
       <Card className="p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
-            <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+            <div className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-emerald-500 text-white">
               <CheckCircle2 className="size-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-slate-900">დაკავშირებულია smsoffice.ge-სთან</h3>
+              <h2 className="text-sm font-semibold text-slate-900">დაკავშირებულია smsoffice.ge-სთან</h2>
               <p className="text-sm text-slate-900">
                 გამგზავნი <span className="font-mono text-[13px]">{sms.sender}</span>
               </p>
@@ -227,14 +222,5 @@ function TestCard() {
         </div>
       </Section>
     </form>
-  )
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card className="p-5 sm:p-6">
-      <h3 className="mb-5 text-sm font-semibold text-slate-900">{title}</h3>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">{children}</div>
-    </Card>
   )
 }

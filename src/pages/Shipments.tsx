@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
-import { Button, Card, EmptyState, Input, PageHeader, Select, shipmentState } from '../components/ui'
+import { Card, EmptyState, Input, LinkButton, PageHeader, Select, shipmentState } from '../components/ui'
 import { cx } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../api/store'
@@ -52,9 +52,11 @@ export function Shipments() {
         subtitle={`სულ ${all.length}${user.role === 'operator' && carriers.length === 1 ? ` · ${carriers[0].name}` : ''}`}
         actions={
           canCreate && (
-            <Link to="/new" className="hidden sm:block">
-              <Button icon={<Plus className="size-4" />}>ახალი რეისი</Button>
-            </Link>
+            <span className="hidden sm:block">
+              <LinkButton to="/new" icon={<Plus className="size-4" />}>
+                ახალი რეისი
+              </LinkButton>
+            </span>
           )
         }
       />
@@ -82,7 +84,7 @@ export function Shipments() {
             key={x.key}
             onClick={() => setF(x.key)}
             className={cx(
-              'pressable h-8 shrink-0 rounded-full px-3.5 text-[15px] transition-colors',
+              'pressable h-8 shrink-0 rounded-full px-3.5 text-[13px] transition-colors',
               f === x.key ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill',
             )}
           >
@@ -100,10 +102,8 @@ export function Shipments() {
       </Card>
 
       {canCreate && (
-        <Link to="/new" className="fixed right-4 bottom-24 z-20 sm:hidden" aria-label="ახალი რეისი">
-          <span className="grid size-14 place-items-center pressable rounded-full bg-brand-600 text-white shadow-lg shadow-black/20">
-            <Plus className="size-6" />
-          </span>
+        <Link to="/new" className="pressable fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] z-20 grid size-14 place-items-center rounded-full bg-brand-600 text-white shadow-lg shadow-black/20 sm:hidden" aria-label="ახალი რეისი">
+          <Plus className="size-6" />
         </Link>
       )}
     </>

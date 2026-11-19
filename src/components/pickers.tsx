@@ -28,8 +28,11 @@ import { inputCls, invalidCls } from './fieldStyles'
 /* --------------------------- Popover plumbing --------------------------- */
 
 /** Fixed-position placement under (or, if cramped, above) the anchor. */
-/** `content`: re-placed when it changes (e.g. a search filtering the list), so the panel stays against the anchor. */
-function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null>, panel: RefObject<HTMLElement | null>, matchWidth: boolean, content?: unknown) {
+/**
+ * `content`: re-placed when it changes (e.g. a search filtering the list), so the panel stays against the anchor.
+ * `fixedWidth`: the panel is exactly this wide (or the anchor's width when wider) instead of as wide as its content.
+ */
+function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null>, panel: RefObject<HTMLElement | null>, matchWidth: boolean, content?: unknown, fixedWidth?: number) {
   const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, visibility: 'hidden' })
 
   useLayoutEffect(() => {
@@ -47,13 +50,14 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       const maxHeight = Math.max(120, up ? above : below)
       const h = Math.min(ph, maxHeight)
       const maxWidth = window.innerWidth - 2 * m
-      const w = Math.min(Math.max(matchWidth ? a.width : 0, p.offsetWidth), maxWidth)
+      const w = Math.min(fixedWidth ? Math.max(matchWidth ? a.width : 0, fixedWidth) : Math.max(matchWidth ? a.width : 0, p.offsetWidth), maxWidth)
       const left = Math.max(m, Math.min(a.left, window.innerWidth - w - m))
       setStyle({
         position: 'fixed',
         top: up ? a.top - gap - h : a.bottom + gap,
         left,
         minWidth: matchWidth ? Math.min(a.width, maxWidth) : undefined,
+        width: fixedWidth ? w : undefined,
         maxWidth,
         maxHeight,
         transformOrigin: up ? 'bottom center' : 'top center',
@@ -66,7 +70,7 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, anchor, panel, matchWidth, content])
+  }, [open, anchor, panel, matchWidth, content, fixedWidth])
 
   return style
 }
@@ -173,7 +177,8 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
   const search = useRef<HTMLInputElement>(null)
   const listId = useId()
   const typed = useRef({ buf: '', t: 0 })
-  const style = useAnchoredPosition(open, btn, panel, !icon, query)
+  // Rich rows wrap their text: the menu is as wide as the field (a small icon button gets a usable width), not as its longest row.
+  const style = useAnchoredPosition(open, btn, panel, !icon, query, rich ? 352 : undefined)
 
   const close = () => {
     setOpen(false)
@@ -292,7 +297,7 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
             style={style}
             // With a search field the panel doesn't scroll: the field stays on top and only the options scroll.
             // A small icon button doesn't set the menu's width: it gets a usable one of its own.
-            className={cx(searchable ? `${panelBase} flex flex-col overflow-hidden` : panelCls, 'p-[5px]', !!icon && 'w-[22rem]')}
+            className={cx(searchable ? `${panelBase} flex flex-col overflow-hidden` : panelCls, 'p-[5px]', !!icon && !rich && 'w-[22rem]')}
             onMouseDown={(e) => (e.target as HTMLElement).tagName !== 'INPUT' && e.preventDefault()}
             onMouseLeave={() => flash == null && setActive(-1)}
           >
@@ -350,6 +355,28 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
           document.body,
         )}
     </>
+  )
+}
+
+/**
+ * The content of a `rich` Select option: a tinted icon tile, a title and a gray subtitle.
+ * Every picker of records (routes, carriers, drivers, trucks, products…) lays its rows out with it.
+ */
+export function OptionRow({ icon, title, sub }: { icon: ReactNode; title: ReactNode; sub?: ReactNode }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white sm:size-8 sm:rounded-[7px] [&>svg]:size-[17px] sm:[&>svg]:size-4">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]">{title || '—'}</span>
+        {sub && (
+          <span className="flex min-w-0 gap-1.5 text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]">
+            {typeof sub === 'string' ? <span className="min-w-0 truncate">{sub}</span> : sub}
+          </span>
+        )}
+      </span>
+    </span>
   )
 }
 

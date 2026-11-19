@@ -117,9 +117,9 @@ export function Reports() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <Stat label="რეისები" value={rows.length} sub={`${uploaded.length} ატვირთული`} icon={<Truck className="size-5" />} />
-        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub={loading ? `RS.ge-დან იკითხება ${loading} ზედნადები…` : 'ატვირთული ზედნადებებით'} icon={<FileText className="size-5" />} accent="bg-emerald-50 text-emerald-600" />
-        <Stat label="SMS" value={smsSent} sub="გაეგზავნა მძღოლს" icon={<MessageSquare className="size-5" />} accent="bg-slate-100 text-slate-600" />
-        <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent="bg-amber-50 text-amber-600" />
+        <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub={loading ? `RS.ge-დან იკითხება ${loading} ზედნადები…` : 'ატვირთული ზედნადებებით'} icon={<FileText className="size-5" />} accent="bg-emerald-500" />
+        <Stat label="SMS" value={smsSent} sub="გაეგზავნა მძღოლს" icon={<MessageSquare className="size-5" />} accent="bg-teal-500" />
+        <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent={failed ? 'bg-rose-500' : 'bg-slate-400'} />
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">

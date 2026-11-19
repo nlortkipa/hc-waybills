@@ -75,7 +75,6 @@ export function ShipmentDetail() {
   const onRs = s.status === 'uploaded' && !!s.rsWaybillId
   const type = s.rsRemote?.type ?? s.rsWaybill?.type ?? s.waybill?.type
   const begin = s.rsRemote?.beginAt ?? s.waybill?.beginAt
-  const started = !begin || Date.parse(begin) <= Date.now()
   const canInvoice = canAct && onRs && s.waybillState !== 'cancelled' && type !== 1 && !s.invoiceId
   // What was sent: kept only until RS.ge has the waybill (then RS.ge's copy is all there is).
   const w = s.rsWaybill
@@ -170,7 +169,7 @@ export function ShipmentDetail() {
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-mono text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{title}</h1>
+            <h1 className={cx('text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl', s.waybillNumber && 'font-mono')}>{title}</h1>
             <ShipmentBadge s={s} />
             {type && <Badge tone="gray">{waybillTypeLabel(type)}</Badge>}
             {s.invoiceId && <Badge tone="blue">ფაქტურა №{s.invoiceId}</Badge>}
@@ -210,6 +209,8 @@ export function ShipmentDetail() {
               variant="secondary"
               size="sm"
               icon={<Copy className="size-3.5" />}
+              title="ნომრის კოპირება"
+              aria-label="ნომრის კოპირება"
               onClick={() => {
                 navigator.clipboard?.writeText(s.waybillNumber!).then(() => toast('success', 'ზედნადების ნომერი დაკოპირდა'), () => {})
               }}
@@ -222,11 +223,9 @@ export function ShipmentDetail() {
               ასლი
             </Button>
           )}
-          {canAct && isDraft && (
-            <DeleteButton onClick={() => setDialog('delete')} />
-          )}
+          {canAct && isDraft && <DeleteButton onClick={() => setDialog('delete')} />}
           {canAct && onRs && s.waybillState !== 'cancelled' && !s.invoiceId && (
-            <Button variant="ghost" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')} className="text-rose-600">
+            <Button variant="secondaryDanger" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')}>
               გაუქმება
             </Button>
           )}
@@ -266,9 +265,7 @@ export function ShipmentDetail() {
                   {rStatus && <Badge tone={rStatus.tone}>{rStatus.label}</Badge>}
                   {r?.confirmed === 1 && <Badge tone="green">მყიდველმა დაადასტურა</Badge>}
                   {r?.confirmed === -1 && <Badge tone="red">მყიდველი არ ეთანხმება</Badge>}
-                  {readable && (
-                    <RefreshButton busy={rsReading} onClick={() => void readRs()} />
-                  )}
+                  {readable && <RefreshButton busy={rsReading} onClick={() => void readRs()} />}
                 </div>
               </div>
               {/* Goods as RS.ge has them (else as sent; nothing while RS.ge's copy is being read). */}
@@ -323,30 +320,30 @@ export function ShipmentDetail() {
                           <>
                             <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
                             <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
+                          </>
+                        )}
+                        {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${r.transportCost.toFixed(2)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
+                        {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
+                        {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
+                        {r.createdAt && <Info k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
+                        {r.activatedAt && r.status !== 0 && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
+                        {r.beginAt && r.status !== 0 && <Info k="ტრანსპორტირების დაწყება" v={formatDateTime(r.beginAt)} />}
+                        {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
+                        {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
+                        {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
+                        {r.comment && <Info k="კომენტარი" v={r.comment} />}
+                      </>
+                    ) : (
+                      w && (
+                        <>
+                          {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
+                          {w.comment && <Info k="კომენტარი" v={w.comment} />}
+                        </>
+                      )
+                    )}
+                    {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+                  </dl>
                 </>
-              )}
-                    {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${r.transportCost.toFixed(2)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
-                    {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
-                    {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
-                    {r.createdAt && <Info k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
-                    {r.activatedAt && r.status !== 0 && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
-                    {r.beginAt && r.status !== 0 && <Info k="ტრანსპორტირების დაწყება" v={formatDateTime(r.beginAt)} />}
-                    {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
-                    {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
-                    {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
-                    {r.comment && <Info k="კომენტარი" v={r.comment} />}
-                  </>
-                ) : (
-                  w && (
-                    <>
-                      {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
-                      {w.comment && <Info k="კომენტარი" v={w.comment} />}
-                    </>
-                  )
-                )}
-                {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
-              </dl>
-              </>
               )}
               {readable && (
                 <p className={cx('mt-3 text-xs', rsError ? 'text-amber-700' : 'text-slate-400')}>
@@ -359,7 +356,6 @@ export function ShipmentDetail() {
               )}
             </Card>
           )}
-
         </div>
 
         <div className="space-y-6">
@@ -427,27 +423,35 @@ export function ShipmentDetail() {
         title="წაიშალოს ზედნადები?"
         confirmLabel="წაშლა"
       />
-      <Modal
-        open={dialog === 'invoice'}
-        onClose={() => setDialog(null)}
-        title="გამოიწეროს ანგარიშ-ფაქტურა?"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setDialog(null)}>
-              გაუქმება
-            </Button>
-            <Button loading={busy} disabled={!started} icon={<ReceiptText className="size-4" />} onClick={() => void run(() => shipments.invoice(s.id), 'ანგარიშ-ფაქტურა გამოიწერა')}>
-              გამოწერა
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-2 text-sm text-slate-600">
-          <p>ზედნადებს ვეღარ შეცვლი და ვეღარ გააუქმებ.</p>
-          {!started && <p className="text-rose-600">შესაძლებელია {formatDateTime(begin)}-დან.</p>}
-        </div>
-      </Modal>
+      <InvoiceModal open={dialog === 'invoice'} busy={busy} begin={begin} onClose={() => setDialog(null)} onConfirm={() => void run(() => shipments.invoice(s.id), 'ანგარიშ-ფაქტურა გამოიწერა')} />
     </>
+  )
+}
+
+/** Issuing the invoice of a waybill: possible once its transport has started. */
+export function InvoiceModal({ open, busy, begin, onClose, onConfirm }: { open: boolean; busy: boolean; begin?: string; onClose: () => void; onConfirm: () => void }) {
+  const started = !begin || Date.parse(begin) <= Date.now()
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="გამოიწეროს ანგარიშ-ფაქტურა?"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            გაუქმება
+          </Button>
+          <Button loading={busy} disabled={!started} icon={<ReceiptText className="size-4" />} onClick={onConfirm}>
+            გამოწერა
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2 text-sm text-slate-600">
+        <p>ზედნადებს ვეღარ შეცვლი და ვეღარ გააუქმებ.</p>
+        {!started && <p className="text-rose-600">შესაძლებელია {formatDateTime(begin)}-დან.</p>}
+      </div>
+    </Modal>
   )
 }
 

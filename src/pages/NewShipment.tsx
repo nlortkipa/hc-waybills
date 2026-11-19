@@ -1,11 +1,13 @@
-import { ArrowLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDot, FileCheck2, Info, Loader2, MapPin, PencilLine, Save, Warehouse } from 'lucide-react'
+import { ArrowLeft, Building2, CalendarClock, CheckCircle2, ChevronDown, CircleDot, FileCheck2, Info, Loader2, MapPin, PencilLine, Save, Truck as TruckIcon, UserRound, Warehouse } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
 import { Button, Card, EmptyState, Field, Input, PageHeader, Segmented, Select } from '../components/ui'
+import { OptionRow } from '../components/pickers'
+import { WAYBILL_TYPE_ICON } from '../components/icons'
 import { LookupLine, TIN_RE, useTinName } from '../components/TinLookup'
 import { blankGood, checkGoods, draftLine, fromDrafts, ShipmentGoodsEditor, toDraft, type GoodDraft } from '../components/ShipmentGoods'
-import { active, cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
+import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { routeAddresses, routeLabel, routeUsable, canUseCarrier } from '../lib/route'
 import { editable, MAX_DEFER_MS, noTransport, RS_TRANS_OTHER, rsMissing, transTypes, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
 import { useToast } from '../components/toast'
@@ -298,10 +300,10 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 error={errors.carrierId}
                 hint={carriers.length ? undefined : user.role === 'operator' ? 'შენ არცერთი კარიერი არ გაქვს მინიჭებული — მიმართე ადმინისტრატორს.' : 'კარიერები ჯერ არ არის — დაამატე ცნობარებში.'}
               >
-                <Select value={carrier?.id ?? ''} onChange={set('carrierId')} placeholder="აირჩიე კარიერი…" invalid={!!errors.carrierId} disabled={!carriers.length}>
+                <Select value={carrier?.id ?? ''} onChange={set('carrierId')} placeholder="აირჩიე კარიერი…" invalid={!!errors.carrierId} disabled={!carriers.length} searchable rich>
                   {carriers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+                    <option key={c.id} value={c.id} label={c.name} data-search={c.startAddress}>
+                      <OptionRow icon={<Building2 />} title={c.name} sub={c.startAddress} />
                     </option>
                   ))}
                 </Select>
@@ -313,7 +315,13 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               error={errors.routeId}
               hint={carrier && !routes.length ? 'ამ კარიერს მარშრუტი ჯერ არ აქვს — სთხოვე ადმინისტრატორს დამატება.' : undefined}
             >
-              <Select value={route?.id ?? ''} onChange={set('routeId')} placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'} invalid={!!errors.routeId} disabled={!routes.length} searchable
+              <Select
+                value={route?.id ?? ''}
+                onChange={set('routeId')}
+                placeholder={carrier ? 'აირჩიე მარშრუტი…' : 'ჯერ აირჩიე კარიერი'}
+                invalid={!!errors.routeId}
+                disabled={!routes.length}
+                searchable
                 rich
                 header={
                   // Every route of a carrier starts at the carrier's address: said once, not on each row.
@@ -328,7 +336,20 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                   const buyer = x.buyerName || x.buyerTin
                   return (
                     <option key={x.id} value={x.id} label={`${routeLabel(d.carriers, x)}${buyer ? ` · ${buyer}` : ''}`} data-search={[x.buyerTin, buyer ? '' : 'შიდა გადაზიდვა'].join(' ')}>
-                      <RouteOption end={routeAddresses(d.carriers, x).end} buyerName={x.buyerName} buyerTin={x.buyerTin} />
+                      <OptionRow
+                        icon={buyer ? <MapPin /> : <Warehouse />}
+                        title={routeAddresses(d.carriers, x).end}
+                        sub={
+                          buyer ? (
+                            <>
+                              {x.buyerName && <span className="min-w-0 truncate">{x.buyerName}</span>}
+                              {x.buyerTin && <span className="shrink-0 tabular-nums">{x.buyerTin}</span>}
+                            </>
+                          ) : (
+                            'შიდა გადაზიდვა'
+                          )
+                        }
+                      />
                     </option>
                   )
                 })}
@@ -342,23 +363,26 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             ) : (
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <Field label="მძღოლი" error={errors.driverId}>
-                  <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId} searchable={active(d.drivers).length > 8}>
+                  <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId} searchable rich>
                     {d.drivers
                       .filter((x) => !x.deletedAt || x.id === editing?.driverId)
-                      .map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.firstName} {x.lastName}
-                        </option>
-                      ))}
+                      .map((x) => {
+                        const name = `${x.firstName} ${x.lastName}`.trim()
+                        return (
+                          <option key={x.id} value={x.id} label={name} data-search={`${x.personalId} ${x.phone}`}>
+                            <OptionRow icon={<UserRound />} title={name} sub={[x.phone, x.personalId].filter(Boolean).join(' · ')} />
+                          </option>
+                        )
+                      })}
                   </Select>
                 </Field>
                 <Field label="მანქანა" error={errors.truckId}>
-                  <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" invalid={!!errors.truckId} searchable={active(d.trucks).length > 8}>
+                  <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" invalid={!!errors.truckId} searchable rich>
                     {d.trucks
                       .filter((x) => !x.deletedAt || x.id === editing?.truckId)
                       .map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.plateNumber} · {x.model}
+                        <option key={x.id} value={x.id} label={[x.plateNumber, x.model].filter(Boolean).join(' · ')} data-search={x.trailerNumber}>
+                          <OptionRow icon={<TruckIcon />} title={x.plateNumber} sub={[x.model, x.trailerNumber && `მისაბმელი ${x.trailerNumber}`].filter(Boolean).join(' · ')} />
                         </option>
                       ))}
                   </Select>
@@ -369,15 +393,13 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
 
           {/* Waybill: type, buyer, start, extras — prefilled from the route and the RS.ge settings. */}
           <Card className="space-y-5 p-5 sm:p-6">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">ზედნადები</h3>
-            </div>
+            <h2 className="text-sm font-semibold text-slate-900">ზედნადები</h2>
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field label="ზედნადების ტიპი">
-                <Select value={String(w.type)} onChange={(e) => setW('type', Number(e.target.value) as WaybillType)} disabled={correcting}>
+                <Select value={String(w.type)} onChange={(e) => setW('type', Number(e.target.value) as WaybillType)} disabled={correcting} rich>
                   {WAYBILL_TYPES.map((t) => (
-                    <option key={t.value} value={String(t.value)}>
-                      {t.label}
+                    <option key={t.value} value={String(t.value)} label={t.label}>
+                      <OptionRow icon={WAYBILL_TYPE_ICON[t.value]} title={t.label} sub={t.hint} />
                     </option>
                   ))}
                 </Select>
@@ -430,7 +452,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               <button type="button" onClick={() => setMore((x) => !x)} className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-600">
                 <ChevronDown className={cx('size-4 transition-transform', more && 'rotate-180')} />
                 დამატებითი ველები
-                {!more && <span className="font-normal text-slate-400"> · {still ? 'მიმწოდებელი, მიმღები, კომენტარი' : 'ტრანსპორტი, ღირებულება, კომენტარი…'}</span>}
+                {!more && <span className="hidden font-normal text-slate-400 sm:inline"> · {still ? 'მიმწოდებელი, მიმღები, კომენტარი' : 'ტრანსპორტი, ღირებულება, კომენტარი…'}</span>}
               </button>
               {more && (
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -488,7 +510,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
           {rsNotReady && <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge არ არის დაკავშირებული — მიმართე ადმინისტრატორს.</div>}
 
           <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
-            <Button type="button" variant="ghost" onClick={() => nav(-1)}>
+            <Button type="button" variant="ghost" size="lg" onClick={() => nav(-1)}>
               გაუქმება
             </Button>
             {!editing && (
@@ -505,7 +527,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         {/* Summary */}
         <div className="space-y-4">
           <Card className="p-5 lg:sticky lg:top-4">
-            <h3 className="text-sm font-semibold text-slate-900">შეჯამება</h3>
+            <h2 className="text-sm font-semibold text-slate-900">შეჯამება</h2>
             <dl className="mt-3 space-y-2.5 text-sm">
               <Row k="ტიპი" v={waybillTypeLabel(w.type)} />
               <Row k="მყიდველი" v={internal ? d.rs.sellerName || 'გამყიდველი' : buyerShown || buyerTin || undefined} />
@@ -551,30 +573,5 @@ function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
       <dt className="shrink-0 text-slate-500">{k}</dt>
       <dd className={`min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
     </div>
-  )
-}
-
-/** A route in the route picker: where it goes, and to whom (or that it's an internal move). */
-function RouteOption({ end, buyerName, buyerTin }: { end: string; buyerName?: string; buyerTin?: string }) {
-  const Icon = buyerName || buyerTin ? MapPin : Warehouse
-  return (
-    <span className="flex items-center gap-2.5">
-      <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white sm:size-8 sm:rounded-[7px]">
-        <Icon className="size-[17px] sm:size-4" strokeWidth={2} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{end || '—'}</span>
-        <span className="flex min-w-0 gap-1.5 text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]">
-          {buyerName || buyerTin ? (
-            <>
-              {buyerName && <span className="min-w-0 truncate">{buyerName}</span>}
-              {buyerTin && <span className="shrink-0 tabular-nums">{buyerTin}</span>}
-            </>
-          ) : (
-            <span>შიდა გადაზიდვა</span>
-          )}
-        </span>
-      </span>
-    </span>
   )
 }

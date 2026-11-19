@@ -22,13 +22,13 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-separator text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+            <tr className="border-b border-separator text-left text-xs text-slate-500 [&>th]:font-medium">
               <th className="px-5 py-3">ზედნადები</th>
               <th className="px-3 py-3">შექმნილია</th>
               {showCarrier && <th className="px-3 py-3">კარიერი</th>}
               <th className="px-3 py-3">მარშრუტი</th>
               <th className="px-3 py-3">მძღოლი / მანქანა</th>
-              <th className="px-3 py-3 text-right">დეკლარ.</th>
+              <th className="px-3 py-3 text-right">დეკლარირებული</th>
               <th className="px-3 py-3">სტატუსი</th>
               <th className="w-8" />
             </tr>
@@ -71,7 +71,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
               <button onClick={() => open(s.id)} className="w-full px-4 py-3.5 text-left active:bg-slate-50">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-mono text-sm font-semibold text-slate-900">{s.waybillNumber ?? 'ზედნადები ჯერ არ არის'}</p>
+                    {s.waybillNumber ? <p className="font-mono text-sm font-semibold text-slate-900">{s.waybillNumber}</p> : <p className="text-sm font-semibold text-slate-500">ნომრის გარეშე</p>}
                     <p className="text-xs text-slate-500">
                       {formatDateTime(s.createdAt)}
                       {showCarrier && ` · ${x.carrier}`}
@@ -91,11 +91,9 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
                     <span className="shrink-0 font-mono text-xs">{x.plate}</span>
                   </p>
                 </div>
-                <div className="mt-2.5 flex gap-4 text-xs">
-                  <span className="text-slate-500">
-                    დეკლარ. <b className="font-medium text-slate-800 tabular-nums">{qty(s)}</b>
-                  </span>
-                </div>
+                <p className="mt-2.5 text-xs text-slate-500">
+                  დეკლარირებული <b className="font-medium text-slate-800 tabular-nums">{qty(s)}</b>
+                </p>
               </button>
             </li>
           )
