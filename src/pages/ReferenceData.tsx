@@ -29,8 +29,6 @@ interface FieldDef {
   mono?: boolean
   /** Value of a new record (default: '' or a select's first option). */
   initial?: (d: Database, r?: Rec) => string
-  /** Can't be changed once saved. */
-  fixed?: boolean
   inputMode?: 'numeric' | 'decimal'
   /** Shown under "დამატებითი ველები", folded until opened. */
   more?: boolean
@@ -206,7 +204,7 @@ const TABS: TabDef[] = [
     icon: Package,
     // The same fields as RS.ge's own შტრიხკოდები list.
     fields: [
-      { key: 'barCode', label: 'საქონლის კოდი', placeholder: 'CRS-05', mono: true, fixed: true },
+      { key: 'barCode', label: 'საქონლის კოდი', placeholder: 'CRS-05', mono: true },
       { key: 'name', label: 'საქონლის დასახელება', placeholder: 'ღორღი 0–5 მმ' },
       {
         key: 'unitId',
@@ -658,7 +656,6 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
               inputMode={f.inputMode}
               className={f.mono ? 'font-mono' : undefined}
               invalid={!!errors[f.key]}
-              disabled={!!f.fixed && !isNew}
               onChange={(e) => setField(f.key, e.target.value)}
             />
           )}

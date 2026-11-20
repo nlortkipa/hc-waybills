@@ -448,7 +448,7 @@ async function saveProduct(input: Product, prev: Product | undefined): Promise<P
   const price = str(input.price) === '' ? NaN : Number(input.price)
   const vatType = ([0, 1, 2] as const).find((v) => v === Number(input.vatType))
   const p: Product = {
-    id: prev?.id ?? barCode,
+    id: barCode,
     name: str(input.name),
     barCode,
     unitId,
@@ -460,15 +460,16 @@ async function saveProduct(input: Product, prev: Product | undefined): Promise<P
   }
   if (!p.barCode) fail('შეიყვანე საქონლის კოდი')
   if (!p.name) fail('შეიყვანე საქონლის დასახელება')
-  // RS.ge knows a product only by its bar code: a new code would be a different product there.
-  if (prev && prev.barCode !== p.barCode) fail('საქონლის კოდის შეცვლა შეუძლებელია — წაშალე ეს პროდუქტი და დაამატე ახალი')
+  // RS.ge knows a product only by its bar code: a new code is added there and the old one deleted.
+  const renamed = !!prev && prev.barCode !== p.barCode
+  if (renamed && prev!.barCode.toLowerCase() === p.barCode.toLowerCase()) fail('კოდში მხოლოდ ასოების ზომის შეცვლა შეუძლებელია')
   if (!(unitId > 0) || !p.unitTxt) fail(unitId === RS_UNIT_OTHER ? '„სხვა“ ერთეულისთვის შეიყვანე ერთეულის დასახელება' : 'აირჩიე ზომის ერთეული')
   if (!(price >= 0)) fail('შეიყვანე ერთეულის თანხა (0 ან მეტი)')
   if (vatType == null) fail('აირჩიე დაბეგვრა')
   const key = p.barCode.toLowerCase()
-  if (!prev && rsCache.products().some((x) => x.barCode.toLowerCase() === key)) fail('ამ კოდით პროდუქტი უკვე არსებობს')
+  if ((!prev || renamed) && rsCache.products().some((x) => x !== prev && x.barCode.toLowerCase() === key)) fail('ამ კოდით პროდუქტი უკვე არსებობს')
   // Price and VAT type are stored here only: RS.ge is written to when what it keeps changed.
-  if (!prev || prev.name !== p.name || prev.unitId !== p.unitId || prev.unitTxt !== p.unitTxt) {
+  if (!prev || renamed || prev.name !== p.name || prev.unitId !== p.unitId || prev.unitTxt !== p.unitTxt) {
     // A code already on RS.ge (added on the portal since the list was read) is overwritten there, as on the portal.
     await rsge.saveBarCode({ ...p, aId: p.aId ?? 0 }).catch((e: Error) => fail(e.message, 502))
     // RS.ge answers "saved" even when it drops the code, so only what it reads back counts.
@@ -478,6 +479,16 @@ async function saveProduct(input: Product, prev: Product | undefined): Promise<P
     if (got!.name !== p.name || got!.unitId !== p.unitId) fail('RS.ge-მ ცვლილება არ შეინახა — სცადე თავიდან ან შეცვალე RS.ge-ს პორტალზე.', 502)
   }
   db.productPrices.set(p.barCode, p.price!, p.vatType!)
+  if (renamed) {
+    // Waybills and routes keep their own copy of the goods, so the old code can go.
+    db.productPrices.remove([prev!.barCode])
+    const dropped = await rsge.deleteBarCode(prev!.barCode).then(
+      () => true,
+      () => false,
+    )
+    await rsCache.loadProducts().catch(() => {})
+    if (!dropped) fail(`ახალი კოდი „${p.barCode}“ RS.ge-ზე დაემატა, მაგრამ ძველი „${prev!.barCode}“ ვერ წაიშალა — წაშალე ის სიიდან.`, 502)
+  }
   return p
 }
 
