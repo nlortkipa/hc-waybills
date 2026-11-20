@@ -563,16 +563,30 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   // field (while that is empty or still holds an earlier fill), and a number it doesn't know can't be saved.
   const isDriver = tab.key === 'drivers'
   const pid = (form.personalId ?? '').trim()
-  const lookup = useRsName(isDriver && form.citizenship !== 'foreign' ? pid : '')
+  const canSearch = isDriver && form.citizenship !== 'foreign'
+  const { lookup, search } = useRsName(canSearch ? pid : '')
   const autoName = useRef('')
+  // Set by the search button: the name found replaces whatever was typed.
+  const searched = useRef(false)
   useEffect(() => {
+    if (lookup?.state === 'loading') return
+    const forced = searched.current
+    searched.current = false
+    // A number RS.ge doesn't know takes away the name an earlier number filled in.
+    if (lookup?.state === 'missing') setR((x) => (autoName.current && x.fullName === autoName.current ? { ...x, fullName: '' } : x))
     if (lookup?.state !== 'found') return
     const name = lookup.name!
-    setR((x) => (!x.fullName?.trim() || x.fullName === autoName.current ? { ...x, fullName: name } : x))
+    setR((x) => (forced || !x.fullName?.trim() || x.fullName === autoName.current ? { ...x, fullName: name } : x))
     setErrors((x) => ({ ...x, fullName: '' }))
     autoName.current = name
   }, [lookup])
   const pidMissing = lookup?.state === 'missing' ? 'RS.ge-ს რეესტრში ვერ მოიძებნა' : ''
+  const searchPid = () => {
+    const msg = vPid(pid, form)
+    if (msg) return setErrors((x) => ({ ...x, personalId: pid ? msg : 'შეიყვანე პირადი ნომერი' }))
+    searched.current = true
+    search()
+  }
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
@@ -652,6 +666,34 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
                 </option>
               ))}
             </Select>
+          ) : canSearch && f.key === 'personalId' ? (
+            <div className="flex gap-2">
+              <Input
+                value={r.personalId ?? ''}
+                placeholder={f.placeholder}
+                inputMode="numeric"
+                maxLength={11}
+                className="font-mono"
+                invalid={!!errors.personalId || !!pidMissing}
+                onChange={(e) => setField('personalId', e.target.value.replace(/\D/g, ''))}
+                // Enter looks the number up instead of saving the form.
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  e.preventDefault()
+                  searchPid()
+                }}
+              />
+              <button
+                type="button"
+                onClick={searchPid}
+                disabled={lookup?.state === 'loading'}
+                title="სახელის მოძებნა და ნომრის შემოწმება RS.ge-ზე"
+                className="pressable flex h-11 shrink-0 items-center gap-1.5 rounded-[10px] bg-fill px-3.5 text-[15px] font-semibold text-brand-600 transition-colors hover:bg-brand-500/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-default sm:h-9 sm:rounded-[8px] sm:px-3 sm:text-[14px]"
+              >
+                {lookup?.state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                ძებნა
+              </button>
+            </div>
           ) : (
             <Input
               type={f.type ?? 'text'}
@@ -736,30 +778,40 @@ type NameLookup = { state: 'loading' | 'found' | 'missing' | 'error'; name?: str
 /** Answers already read, so retyping a number doesn't ask RS.ge again. */
 const rsNames = new Map<string, string>()
 
-/** What RS.ge's register says about an 11-digit personal number; null for anything else. */
-function useRsName(pid: string): NameLookup | null {
+/**
+ * What RS.ge's register says about an 11-digit personal number; null for anything else.
+ * Asked on its own as the number is typed; `search` asks again right away, past the remembered answer.
+ */
+function useRsName(pid: string): { lookup: NameLookup | null; search: () => void } {
   const [res, setRes] = useState<NameLookup | null>(null)
-  useEffect(() => {
-    if (!/^\d{11}$/.test(pid)) return setRes(null)
-    const known = rsNames.get(pid)
+  // Each question gets a number; an answer to an older one (an earlier number) is dropped.
+  const seq = useRef(0)
+  const ask = (fresh: boolean) => {
+    const n = ++seq.current
+    const known = fresh ? undefined : rsNames.get(pid)
     if (known !== undefined) return setRes({ state: known ? 'found' : 'missing', name: known })
-    let live = true
     setRes({ state: 'loading' })
-    const t = setTimeout(() => {
-      rsSettings.nameOf(pid).then(
-        (r) => {
-          rsNames.set(pid, r.name)
-          if (live) setRes({ state: r.name ? 'found' : 'missing', name: r.name })
-        },
-        (e: Error) => live && setRes({ state: 'error', error: e.message }),
-      )
-    }, 250)
+    rsSettings.nameOf(pid).then(
+      (r) => {
+        rsNames.set(pid, r.name)
+        if (seq.current === n) setRes({ state: r.name ? 'found' : 'missing', name: r.name })
+      },
+      (e: Error) => seq.current === n && setRes({ state: 'error', error: e.message }),
+    )
+  }
+  useEffect(() => {
+    seq.current++
+    if (!/^\d{11}$/.test(pid)) return setRes(null)
+    if (rsNames.has(pid)) return ask(false)
+    setRes({ state: 'loading' })
+    const t = setTimeout(() => ask(false), 250)
     return () => {
-      live = false
       clearTimeout(t)
+      seq.current++
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pid])
-  return res
+  return { lookup: res, search: () => ask(true) }
 }
 
 /** Below a driver's personal number: the lookup in progress, the name RS.ge has (with a button to use it), or why it failed. */
