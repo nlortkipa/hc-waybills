@@ -20,6 +20,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { RS_LIVE_FIELDS, type IntegrationLog, type RsSettings, type SmsSettings, type StoredDatabase as Database } from '../src/types.ts'
 import { decrypt, encrypt, isEncrypted } from './secret.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
+import { defaultRsSettings } from '../src/lib/rs.ts'
 import { createSeed, migrate, storedShipment } from './seed.ts'
 
 const DATA = join(import.meta.dirname, 'data')
@@ -150,7 +151,7 @@ function readAll(): Database | null {
     ...(version < 19 && { cargo: getMeta('cargo') }),
     // Before v24 products were stored; migrate() reads them to point route lines at their bar codes.
     ...(version < 24 && { products: tableExists('products') ? parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()) : [] }),
-    rs: openSecret('rs', getMeta<RsSettings>('rs')!),
+    rs: openSecret('rs', getMeta<RsSettings>('rs') ?? defaultRsSettings()),
     // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
     sms: openSecret('sms', getMeta<SmsSettings>('sms') ?? defaultSmsSettings()),
   }
