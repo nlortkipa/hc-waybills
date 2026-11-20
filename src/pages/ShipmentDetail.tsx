@@ -375,7 +375,7 @@ export function ShipmentDetail() {
                   key={k}
                   k={i.name || 'პროდუქტი'}
                   sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
-                  v={`${qtyText(i.quantity, i.unitTxt)} × ${formatMoney(i.price)} ₾ = ${formatMoney(itemAmount(i))} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
+                  v={`${qtyText(i.quantity, i.unitTxt)} × ${formatMoney(i.price)} ₾ = ${formatMoney(itemAmount(i))} ₾${i.amount != null ? ' (ხელით)' : ''}${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
                 />
               ))}
               {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}
