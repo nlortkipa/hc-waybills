@@ -1442,7 +1442,7 @@ function smsText(s: Shipment, d: StoredDatabase, w: RsRemoteWaybill | undefined)
   const units = new Set(w?.goods.map((g) => g.unitTxt))
   const line = (label: string, value: string | false | undefined) => value && `${label}: ${value}`
   const blocks: (string | false | undefined)[][] = [
-    [`ზედნადები №${s.waybillNumber} ატვირთულია.`],
+    [`ზედნადები №${s.waybillNumber} გააქტიურებულია.`],
     [w?.startAddress || route.start, `→ ${w?.endAddress || route.end}`, line('დაწყება', begin && smsDate(begin))],
     [
       line('მძღოლი', w ? smsParty(w.driverName, w.driverTin) : driver && smsParty(`${driver.firstName} ${driver.lastName}`, driver.personalId)),
