@@ -30,7 +30,7 @@ import type {
 import { IntegrationError } from './integrations.ts'
 import { rsCache } from './rscache.ts'
 import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
-import { configProblems, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
+import { AUTO_CLOSE_MS, configProblems, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
 import { newReference, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
@@ -776,8 +776,6 @@ export interface NewShipmentInput {
   routeId: string
   driverId: string
   truckId: string
-  /** Save on RS.ge without activating. */
-  draft?: boolean
 }
 
 /**
@@ -895,7 +893,7 @@ function parseDelivered(v: unknown): Date | undefined {
 }
 
 export const shipments = {
-  /** Creates the record and starts the upload pipeline in the background. */
+  /** Creates the record and starts the upload pipeline in the background: the waybill is saved and activated at once. */
   async create(body: Partial<NewShipmentInput>, user: User): Promise<string> {
     if (user.role === 'report') fail('რეპორტ მომხმარებელს არ შეუძლია რეისის შექმნა', 403)
     const notReady = await rsNotReady()
@@ -903,18 +901,16 @@ export const shipments = {
     const x = await parseShipment(body, user)
     x.truckId = truckRecord(x.truckId)
     const sid = uid('s')
-    const draft = !!body.draft
     const s: Shipment = {
       id: sid,
       createdAt: nowIso(),
       createdBy: user.id,
       ...x,
-      ...(draft && { draft }),
       rsWaybill: buildWaybill(db.get(), { ...x, id: sid }),
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
-      events: [{ at: nowIso(), level: 'info', message: draft ? 'მოთხოვნილია ზედნადების შენახვა RS.ge-ზე (გააქტიურების გარეშე)' : 'მოთხოვნილია ზედნადების ატვირთვა' }],
+      events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
     }
     db.put('shipments', s)
     void shipments.run(s.id)
@@ -1034,11 +1030,12 @@ export const shipments = {
    * Completes (close_waybill, or close_waybill_vd with the delivery date), cancels (ref_waybill) or,
    * for a draft, deletes (del_waybill) the waybill on RS.ge. RS.ge also cancels a completed waybill, so
    * cancel is allowed after close. The waybill is read back after the call: the page shows the result
-   * at once, and a refusal because it was already done on the rs.ge portal counts as done.
+   * at once, and a refusal because it was already done on the rs.ge portal counts as done. Only an
+   * admin does this by hand; without `user` it is the automatic completion (autoClose).
    */
-  async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User, body?: { deliveredAt?: string }) {
+  async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User | undefined, body?: { deliveredAt?: string }) {
     const s = await current(id, user)
-    noReport(user)
+    if (user) requireAdmin(user)
     if (action === 'delete') {
       if (s.status !== 'saved' || s.waybillState) fail('წაიშლება მხოლოდ შენახული (გაუაქტიურებელი) ზედნადები')
     } else if (s.status !== 'uploaded') fail('ზედნადები ჯერ არ არის გააქტიურებული')
@@ -1075,7 +1072,7 @@ export const shipments = {
         level: 'success',
         message:
           action === 'close'
-            ? `ზედნადები №${s.waybillNumber} დასრულდა RS.ge-ზე`
+            ? `ზედნადები №${s.waybillNumber} ${user ? '' : 'ავტომატურად '}დასრულდა RS.ge-ზე`
             : action === 'cancel'
               ? `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`
               : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
@@ -1154,12 +1151,57 @@ export const shipments = {
     await checkDelivery(id).catch((e: Error) => fail(e.message, 502))
   },
 
-  /** On server start: finish pipelines interrupted by a restart. */
+  /** On server start: finish pipelines interrupted by a restart, and start completing waybills on time. */
   resumeAll() {
     db.get()
       .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
       .forEach((s) => void shipments.run(s.id))
+    if (AUTO_CLOSE_MS) {
+      void autoClose()
+      setInterval(() => void autoClose(), AUTO_CLOSE_CHECK_MS).unref()
+    }
   },
+}
+
+/* ------------------------- Automatic completion ------------------------- */
+
+/** How often active waybills are checked for being due (WAYBILL_AUTO_CLOSE). */
+const AUTO_CLOSE_CHECK_MS = 60_000
+/** A completion RS.ge refused is not tried again sooner than this. */
+const AUTO_CLOSE_RETRY_MS = 30 * 60_000
+const autoCloseFailed = new Map<string, number>()
+let autoClosing = false
+
+/** When transport started (or is planned to): RS.ge's start, the one asked for, else when the waybill was activated. */
+const transportStart = (s: Shipment) => Date.parse(s.rsRemote?.beginAt ?? s.waybill?.beginAt ?? s.rs.at ?? '')
+
+/**
+ * Completes on RS.ge every active waybill whose transport started WAYBILL_AUTO_CLOSE ago or more. Each
+ * is read from RS.ge first: one completed or cancelled on the rs.ge portal meanwhile is left alone.
+ */
+async function autoClose() {
+  if (autoClosing || !storedCreds()) return
+  autoClosing = true
+  try {
+    const now = Date.now()
+    const due = db
+      .get()
+      .shipments.map((s) => withRs(s))
+      .filter((s) => s.status === 'uploaded' && !s.waybillState && s.rsWaybillId && !running.has(s.id) && transportStart(s) + AUTO_CLOSE_MS <= now)
+      .filter((s) => now - (autoCloseFailed.get(s.id) ?? 0) >= AUTO_CLOSE_RETRY_MS)
+    for (const s of due) {
+      const w = await rsCache.read(s.rsWaybillId!, s.id).catch(() => null)
+      if (!w || w.status !== 1) continue
+      // A planned start RS.ge has moved later: due later.
+      if (Date.parse(w.beginAt ?? '') + AUTO_CLOSE_MS > Date.now()) continue
+      await shipments.finish(s.id, 'close', undefined).then(
+        () => autoCloseFailed.delete(s.id),
+        () => autoCloseFailed.set(s.id, Date.now()),
+      )
+    }
+  } finally {
+    autoClosing = false
+  }
 }
 
 /* ------------------------- RS.ge read-back ------------------------- */

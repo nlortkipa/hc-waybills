@@ -170,8 +170,6 @@ export interface NewShipmentInput {
   routeId: string
   driverId: string
   truckId: string
-  /** Save on RS.ge without activating. */
-  draft?: boolean
 }
 
 export const shipments = {

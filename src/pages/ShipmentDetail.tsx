@@ -69,6 +69,8 @@ export function ShipmentDetail() {
   const truck = L.truck(s.truckId)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
+  // Completing, cancelling and deleting a waybill by hand is for admins (WAYBILL_AUTO_CLOSE completes it on time).
+  const admin = user.role === 'admin'
   const live = !s.waybillState
   const isDraft = s.status === 'saved' && live && !!s.rsWaybillId
   const isActive = s.status === 'uploaded' && live && !!s.rsWaybillId
@@ -184,7 +186,7 @@ export function ShipmentDetail() {
               გააქტიურება
             </Button>
           )}
-          {canAct && isActive && (
+          {admin && isActive && (
             <Button size="sm" icon={<CheckCheck className="size-3.5" />} onClick={() => setDialog('close')}>
               დასრულება
             </Button>
@@ -223,8 +225,8 @@ export function ShipmentDetail() {
               ასლი
             </Button>
           )}
-          {canAct && isDraft && <DeleteButton onClick={() => setDialog('delete')} />}
-          {canAct && onRs && s.waybillState !== 'cancelled' && !s.invoiceId && (
+          {admin && isDraft && <DeleteButton onClick={() => setDialog('delete')} />}
+          {admin && onRs && s.waybillState !== 'cancelled' && !s.invoiceId && (
             <Button variant="secondaryDanger" size="sm" icon={<Ban className="size-3.5" />} onClick={() => setDialog('cancel')}>
               გაუქმება
             </Button>

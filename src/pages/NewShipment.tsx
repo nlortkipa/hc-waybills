@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine, Save, Truck as TruckIcon, UserRound } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine, Truck as TruckIcon, UserRound } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
@@ -76,7 +76,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   const carriers = usableCarriers(d, user)
   const [form, setForm] = useState<Seed>(seed ?? { routeId: '', driverId: '', truckId: '' })
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [busy, setBusy] = useState<'' | 'draft' | 'send'>('')
+  const [busy, setBusy] = useState(false)
   // Active on RS.ge: a correction.
   const correcting = editing?.status === 'uploaded'
 
@@ -107,16 +107,16 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   // Operators don't see the service user, so only check what they can see; the server checks the rest.
   const rsNotReady = rsMissing(d.rs, { hasCreds: true }).length > 0
 
-  const submit = async (e: FormEvent | null, draft: boolean) => {
-    e?.preventDefault()
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
     const err: Record<string, string> = {}
     if (!route) err.routeId = 'აირჩიე მარშრუტი'
     if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
     if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
     setErrors(err)
     if (Object.keys(err).length || !route) return
-    const input: NewShipmentInput = { routeId: route.id, driverId: form.driverId, truckId: form.truckId, ...(draft && { draft }) }
-    setBusy(draft ? 'draft' : 'send')
+    const input: NewShipmentInput = { routeId: route.id, driverId: form.driverId, truckId: form.truckId }
+    setBusy(true)
     try {
       if (editing) {
         await shipments.edit(editing.id, input)
@@ -124,12 +124,12 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         nav(`/shipments/${editing.id}`)
       } else {
         const id = await shipments.create(input, user)
-        toast('info', draft ? 'ზედნადები ინახება RS.ge-ზე…' : 'ზედნადები იტვირთება RS.ge-ზე…')
+        toast('info', 'ზედნადები იტვირთება RS.ge-ზე…')
         nav(`/shipments/${id}`)
       }
     } catch (e) {
       toast('error', (e as Error).message)
-      setBusy('')
+      setBusy(false)
     }
   }
 
@@ -153,7 +153,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
       )}
       <PageHeader title={title} subtitle={subtitle} />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <form onSubmit={(e) => void submit(e, false)} className="space-y-4" noValidate>
+        <form onSubmit={(e) => void submit(e)} className="space-y-4" noValidate>
           <Card className="@container space-y-5 p-5 sm:p-6">
             <Field
               label="მარშრუტი"
@@ -241,12 +241,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             <Button type="button" variant="ghost" size="lg" onClick={() => nav(-1)}>
               გაუქმება
             </Button>
-            {!editing && (
-              <Button type="button" variant="secondary" size="lg" loading={busy === 'draft'} disabled={!!busy} icon={<Save className="size-5" />} onClick={() => void submit(null, true)}>
-                მხოლოდ შენახვა
-              </Button>
-            )}
-            <Button type="submit" size="lg" loading={busy === 'send'} disabled={!!busy} icon={editing ? <CheckCircle2 className="size-5" /> : <FileCheck2 className="size-5" />}>
+            <Button type="submit" size="lg" loading={busy} disabled={busy} icon={editing ? <CheckCircle2 className="size-5" /> : <FileCheck2 className="size-5" />}>
               {editing ? (correcting ? 'კორექტირება RS.ge-ზე' : 'შენახვა') : 'ზედნადების ატვირთვა'}
             </Button>
           </div>
@@ -269,15 +264,10 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
           {!editing && (
             <div className="flex gap-3 rounded-2xl bg-brand-50 p-4 text-sm text-brand-900 ring-1 ring-brand-100">
               <Info className="mt-0.5 size-4 shrink-0 text-brand-500" />
-              <div className="space-y-1 text-brand-800">
-                <p>
-                  <b className="font-medium text-brand-900">ატვირთვა</b> —{' '}
-                  RS.ge-ზე შეინახება, გააქტიურდება და მძღოლს SMS-ით გაეგზავნება ნომერი.
-                </p>
-                <p>
-                  <b className="font-medium text-brand-900">მხოლოდ შენახვა</b> — RS.ge-ზე დარჩება შენახულ მდგომარეობაში; მოგვიანებით შეცვლი ან გააქტიურებ.
-                </p>
-              </div>
+              <p className="text-brand-800">
+                <b className="font-medium text-brand-900">ატვირთვა</b> —{' '}
+                RS.ge-ზე შეინახება, გააქტიურდება და მძღოლს SMS-ით გაეგზავნება ნომერი.
+              </p>
             </div>
           )}
         </div>
