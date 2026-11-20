@@ -102,6 +102,10 @@ export const trucks = {
   sync(force = false) {
     return call('POST', '/api/trucks/sync', { force })
   },
+  /** Deletes every truck, here and on RS.ge. `failed`: plates RS.ge still lists afterwards. */
+  clear() {
+    return call<{ deleted: number; failed: number }>('POST', '/api/trucks/clear')
+  },
   /** Puts the plates of trucks stored here but missing from RS.ge's list onto it. */
   pushPlates() {
     return call<{ added: number }>('POST', '/api/trucks/push')

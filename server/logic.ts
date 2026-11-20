@@ -584,6 +584,25 @@ async function removeTruck(id: string) {
 }
 
 /**
+ * Deletes every truck: every plate on RS.ge's car-number list is deleted there (one by one), and the
+ * stored trucks go (or are retired when shipments use them). Stored trucks whose plate RS.ge still
+ * lists afterwards stay, and those plates are counted as not deleted.
+ */
+export function clearTrucks(user: User) {
+  requireAdmin(user)
+  truckCreds()
+  return productLock(async () => {
+    const list = await readPlates()
+    for (const p of list) await rsge.deleteCarNumber(plateKey(p)).catch(() => {})
+    const left = new Set((await readPlates()).map(plateKey))
+    const stored = active(db.get().trucks)
+    for (const t of stored) if (!left.has(plateKey(t.plateNumber))) removeOrRetire('trucks', t)
+    const gone = new Set([...list.map(plateKey), ...stored.map((t) => plateKey(t.plateNumber))].filter((k) => k && !left.has(k)))
+    return { deleted: gone.size, failed: left.size }
+  })
+}
+
+/**
  * Puts the plates of stored trucks that RS.ge's car-number list doesn't have (trucks added before
  * plates lived on RS.ge, or plates deleted on the portal) onto it, so they can be picked again.
  * Asked for by the admin: a plate deleted on the portal is not put back on its own.

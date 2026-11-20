@@ -469,9 +469,10 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
   const clear = async () => {
     setBusy(true)
     try {
-      const r = await products.clear()
-      if (r.failed) toast('error', `წაიშალა ${r.deleted} პროდუქტი, RS.ge-მ ${r.failed} არ წაშალა`)
-      else toast('success', `წაიშალა ${r.deleted} პროდუქტი`)
+      const r = await (isProducts ? products : trucks).clear()
+      const noun = isProducts ? 'პროდუქტი' : 'მანქანა'
+      if (r.failed) toast('error', `წაიშალა ${r.deleted} ${noun}, RS.ge-მ ${r.failed} არ წაშალა`)
+      else toast('success', `წაიშალა ${r.deleted} ${noun}`)
       setClearing(false)
     } catch (e) {
       toast('error', (e as Error).message)
@@ -479,7 +480,8 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
       setBusy(false)
     }
   }
-  const count = isProducts ? active(d.products).length : 0
+  // Trucks off RS.ge's list (deletedAt 'rs') are stored here and go too.
+  const count = isProducts ? active(d.products).length : d.trucks.filter((t) => !t.deletedAt || t.deletedAt === 'rs').length
   const push = async () => {
     setBusy(true)
     try {
@@ -516,9 +518,9 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
         onClose={() => setClearing(false)}
         onConfirm={() => void clear()}
         busy={busy}
-        title={`წაიშალოს ${count} პროდუქტი?`}
+        title={`წაიშალოს ${count} ${isProducts ? 'პროდუქტი' : 'მანქანა'}?`}
         confirmLabel="წაშლა"
-        message="RS.ge-დანაც წაიშლება."
+        message={isProducts ? 'RS.ge-დანაც წაიშლება.' : 'ნომრები RS.ge-ს სიიდანაც წაიშლება. უკვე ატვირთული ზედნადებები არ შეიცვლება.'}
       />
     </>
   )
