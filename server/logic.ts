@@ -3,8 +3,8 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
-import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
-import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
+import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing, rsUnits, shipmentWaybill, waybillDefaults, waybillTypeLabel } from '../src/lib/rs.ts'
+import { active, nowIso, phoneKey, shipmentUses, tbilisiStamp, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
   Carrier,
@@ -1408,15 +1408,90 @@ export const rsWaybills = {
 
 const smsUndelivered = (s: Shipment) => s.sms.delivery === 'Undelivered' || s.sms.delivery === 'Expired'
 
+/** RS.ge's transport types by TRANS_ID; this app writes only საავტომობილო, others show by RS.ge's own text. */
+const TRANS_NAMES: Record<number, string> = { [RS_TRANS_CAR]: 'საავტომობილო' }
+
+/** `DD.MM.YYYY HH:MM` in Georgian time. */
+function smsDate(iso: string) {
+  const [day, time] = tbilisiStamp(iso).split(' ')
+  return `${day.split('-').reverse().join('.')} ${time}`
+}
+
+const smsMoney = (n: number) => `${n.toFixed(2)} ₾`
+const smsQty = (n: number) => String(Math.round(n * 1000) / 1000)
+const smsParty = (name?: string, tin?: string) => [name, tin && `(${tin})`].filter(Boolean).join(' ')
+
+/**
+ * The driver's SMS: the whole waybill, one item per line, as RS.ge has it (w). Lines with nothing in
+ * them are left out. Without RS.ge's copy (it couldn't be read) the head is written from the shipment
+ * and the goods, which only RS.ge holds once the waybill is there, are left out.
+ */
+function smsText(s: Shipment, d: StoredDatabase, w: RsRemoteWaybill | undefined): string {
+  const route = resolveRoute(d, s.routeId)
+  const driver = d.drivers.find((x) => x.id === s.driverId)
+  const truck = d.trucks.find((x) => x.id === s.truckId)
+  const rs = rsView()
+  const type = w?.type ?? s.waybill?.type ?? 1
+  const sellerName = w?.sellerName || rs.sellerName
+  const sellerTin = w?.sellerTin || rs.sellerTin
+  // შიდა გადაზიდვა: the buyer is the seller.
+  const buyer = w ? smsParty(w.buyerName, w.buyerTin) : type === 1 ? smsParty(sellerName, sellerTin) : smsParty(s.waybill?.buyerName, s.waybill?.buyerTin)
+  const begin = w?.beginAt ?? s.waybill?.beginAt ?? w?.activatedAt
+  // RS.ge keeps plates without dashes: the truck's own spelling when it is the same plate.
+  const car = w ? (truck && plateKey(truck.plateNumber) === plateKey(w.carNumber) ? truck.plateNumber : w.carNumber) : truck?.plateNumber
+  const transId = w?.transId ?? RS_TRANS_CAR
+  const cost = w?.transportCost ?? s.waybill?.transportCost ?? 0
+  const transport = [
+    TRANS_NAMES[transId] ?? (w?.transTxt || `ტიპი ${transId}`),
+    cost > 0 && `ხარჯი ${smsMoney(cost)}`,
+    cost > 0 && `იხდის ${w?.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`,
+  ]
+  const akciz = rsge.account()?.akciz
+  const goods = (w?.goods ?? []).map((g, i) => {
+    const vat = RS_VAT_TYPES.find((v) => v.value === g.vatType)?.label
+    const a = g.aId ? akciz?.find((x) => x.id === g.aId) : undefined
+    const extras = [
+      vat && `დღგ ${vat}`,
+      g.quantityExt && `დამატებითი რაოდენობა ${smsQty(g.quantityExt)}`,
+      g.aId && `აქციზი ${a ? `${a.code} ${a.title}` : g.aId}`,
+    ]
+    const head = `${i + 1}. ${g.name}${g.barCode ? ` (კოდი ${g.barCode})` : ''} ${smsQty(g.quantity)} ${g.unitTxt} × ${g.price.toFixed(2)} = ${smsMoney(g.amount)}`
+    return [head, ...extras].filter(Boolean).join(', ')
+  })
+  const units = new Set(w?.goods.map((g) => g.unitTxt))
+  const comment = w ? typedComment(w.comment, s.id) : s.waybill?.comment
+  const line = (label: string, value: string | false | undefined) => value && `${label}: ${value}`
+  return [
+    `ზედნადები №${s.waybillNumber}`,
+    line('ტიპი', waybillTypeLabel(type)),
+    line('გამყიდველი', smsParty(sellerName, sellerTin)),
+    line('მყიდველი', buyer),
+    line('საწყისი მისამართი', w?.startAddress || route.start),
+    line('საბოლოო მისამართი', w?.endAddress || route.end),
+    line('ტრანსპორტირების დაწყება', begin && smsDate(begin)),
+    line('მძღოლი', w ? smsParty(w.driverName, w.driverTin) : driver && smsParty(`${driver.firstName} ${driver.lastName}`, driver.personalId)),
+    line('მანქანა', car),
+    line('მისაბმელი', truck?.trailerNumber),
+    line('ტრანსპორტი', transport.filter(Boolean).join(', ')),
+    line('გადამზიდავი', w?.transporterTin),
+    ...(goods.length ? ['საქონელი:', ...goods] : []),
+    w && goods.length > 0 && `სულ: ${smsQty(w.quantity)}${units.size === 1 ? ` ${[...units][0]}` : ''}, ${smsMoney(w.fullAmount)}`,
+    line('ჩაბარების ინფო', w?.receptionInfo ?? s.waybill?.receptionInfo),
+    line('მიმღების ინფო', w?.receiverInfo ?? s.waybill?.receiverInfo),
+    line('კომენტარი', comment),
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
 async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
-  const route = resolveRoute(d, s.routeId)
   const driver = d.drivers.find((x) => x.id === s.driverId)
   if (!driver) return void patch(id, () => ({ sms: { status: 'skipped' } }))
-  const truck = d.trucks.find((x) => x.id === s.truckId)
-  const start = s.waybill?.beginAt && Date.parse(s.waybill.beginAt) > Date.now() ? ` დაწყება: ${rsDate(new Date(s.waybill.beginAt)).slice(11, 16)}.` : ''
-  const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}.${truck ? ` მანქანა: ${truck.plateNumber}.` : ''}${start}`
+  // RS.ge's copy is normally held since activation; after a restart it is read now.
+  const w = s.rsRemote ?? (s.rsWaybillId && storedCreds() ? await rsCache.read(s.rsWaybillId, id).catch(() => undefined) : undefined)
+  const text = smsText(s, d, w)
   const failed = (msg: string) => patch(id, (x) => ({ sms: { ...x.sms, status: 'failed', error: msg, at: nowIso(), to: driver.phone, text } }), { level: 'error', message: msg })
 
   // A send interrupted by a restart: if smsoffice.ge knows the message, it went out. Don't send it twice.

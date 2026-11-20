@@ -399,7 +399,7 @@ export function ShipmentDetail() {
                 <h2 className="text-sm font-semibold text-slate-900">SMS მძღოლს</h2>
                 <Badge tone={smsBadge.tone}>{smsBadge.label}</Badge>
               </div>
-              <div className="rounded-2xl rounded-tl-sm bg-slate-100 px-4 py-3 text-sm text-slate-800">{s.sms.text}</div>
+              <div className="rounded-2xl rounded-tl-sm bg-slate-100 px-4 py-3 text-sm whitespace-pre-line text-slate-800">{s.sms.text}</div>
               <p className="mt-2 text-xs text-slate-400">მიმღები: {s.sms.to}</p>
             </Card>
           )}
