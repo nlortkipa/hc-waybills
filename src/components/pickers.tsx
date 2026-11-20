@@ -429,7 +429,7 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                     className={cx(
                       'group flex cursor-default items-center rounded-[5px] text-[15px] leading-snug select-none',
                       rich
-                        ? 'min-h-14 gap-2.5 rounded-[7px] py-2 pr-2.5 pl-2 sm:min-h-11 sm:py-1.5 sm:text-[13px]'
+                        ? 'min-h-14 gap-2.5 rounded-[7px] py-2 pr-2.5 pl-2 sm:min-h-11 sm:py-2 sm:text-[13px]'
                         : 'min-h-9 gap-1 py-1.5 pr-3 pl-1 sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
                       o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
                       flash === o.value && 'animate-menu-blink',

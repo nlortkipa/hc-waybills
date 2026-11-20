@@ -6,7 +6,7 @@ import { Button, Card, EmptyState, Field, PageHeader, Select } from '../componen
 import { OptionRow } from '../components/pickers'
 import { formatDateTime, formatNumber } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
-import { editable, itemAmount, rsMissing, RS_TRANS_OTHER, transHasCost, transHasTransporter, transTypes } from '../lib/rs'
+import { editable, itemAmount, rsMissing, RS_TRANS_OTHER, transHasCost, transTypes } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -181,7 +181,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                   const { carrier } = routeAddresses(d.carriers, x)
                   const label = routePickLabel(d, x)
                   return (
-                    <option key={x.id} value={x.id} label={label} data-search={[carrier?.name, carrier?.startAddress, x.scaleId, x.comment, x.transporterTin, goodsText(x.goods)].join(' ')}>
+                    <option key={x.id} value={x.id} label={label} data-search={[carrier?.name, carrier?.startAddress, x.comment, goodsText(x.goods)].join(' ')}>
                       <RouteOption d={d} route={x} />
                     </option>
                   )
@@ -290,9 +290,7 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
   const trans = transId === RS_TRANS_OTHER && r.transTxt ? r.transTxt : (transTypes(d.rs).find((t) => t.id === transId)?.name ?? `ტიპი ${transId}`)
   const tags = [
     trans,
-    transHasTransporter(transId) && r.transporterTin && `გადამზიდავი ${r.transporterTin}`,
     transHasCost(transId) && r.transportCost ? `ტრანსპორტი ${r.transportCost.toFixed(2)} ₾` : '',
-    r.scaleId && `სასწორი ${r.scaleId}`,
   ].filter((t): t is string => !!t)
   const goods = r.goods ?? []
   const muted = 'text-slate-500 group-data-hi:text-white/75'
@@ -310,8 +308,10 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
       {goods.length > 0 && (
         <span className="mt-1.5 block space-y-1 rounded-[7px] bg-fill px-2.5 py-1.5 text-[13px] group-data-hi:bg-white/15 sm:mt-1 sm:space-y-0.5 sm:px-2 sm:py-1 sm:text-[12px]">
           {goods.map((g, i) => (
-            <span key={i} className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-              <span className="min-w-0 flex-1 basis-32 [overflow-wrap:anywhere]">{g.name}</span>
+            <span key={i} className="flex min-w-0 items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate" title={g.name}>
+                {g.name}
+              </span>
               <span className="ml-auto shrink-0 tabular-nums">
                 <span className={muted}>
                   {formatNumber(g.quantity, 3)}
@@ -325,18 +325,17 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
         </span>
       )}
 
-      {/* Transport details and the scale. */}
-      {tags.length > 0 && (
-        <span className="mt-1.5 flex flex-wrap gap-1 sm:mt-1">
+      {/* Transport details, then the comment. */}
+      {(tags.length > 0 || r.comment) && (
+        <span className="mt-1.5 flex flex-wrap items-center gap-1 sm:mt-1">
           {tags.map((t) => (
             <span key={t} className={`rounded-[5px] px-1.5 py-px text-[12px] ring-1 ring-separator ring-inset group-data-hi:ring-white/35 sm:text-[11px] ${muted}`}>
               {t}
             </span>
           ))}
+          {r.comment && <span className={`ml-0.5 min-w-0 truncate text-[12px] italic sm:text-[11px] ${muted}`}>„{r.comment}“</span>}
         </span>
       )}
-
-      {r.comment && <span className={`mt-1 block text-[13px] italic [overflow-wrap:anywhere] sm:text-[11.5px] ${muted}`}>„{r.comment}“</span>}
     </span>
   )
 }
