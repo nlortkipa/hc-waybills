@@ -753,6 +753,9 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
   const driver = d.drivers.find((x) => x.id === s.driverId)
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const moving = !noTransport(w.type)
+  // With a transport company (გადამზიდავი) the company fills in the driver and vehicle on RS.ge;
+  // sent by the seller, RS.ge refuses the waybill (-1053).
+  const ownVehicle = moving && !transHasTransporter(w.transId)
   const goods = s.items.map((g) => ({
     name: g.name,
     barCode: g.barCode,
@@ -772,11 +775,11 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     startAddress: route.start,
     // Without transport RS.ge wants the end to be the start (-1036).
     endAddress: moving ? route.end : route.start,
-    driverTin: moving && driver ? driver.personalId.trim() : '',
-    driverForeign: moving && driver?.citizenship === 'foreign',
-    driverName: moving && driver ? `${driver.firstName} ${driver.lastName}` : '',
+    driverTin: ownVehicle && driver ? driver.personalId.trim() : '',
+    driverForeign: ownVehicle && driver?.citizenship === 'foreign',
+    driverName: ownVehicle && driver ? `${driver.firstName} ${driver.lastName}` : '',
     // RS.ge stores plates without dashes: AA-123-BB → AA123BB.
-    carNumber: moving && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
+    carNumber: ownVehicle && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
     transId: w.transId,
     transTxt: w.transId === RS_TRANS_OTHER ? w.transTxt : '',
     // On a შიდა გადაზიდვა only what RS.ge's form asks for with this transport type.
@@ -786,7 +789,7 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     receptionInfo: w.receptionInfo,
     receiverInfo: w.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
-    comment: [moving && truck?.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, w.comment, refTag(s.id)].filter(Boolean).join('; '),
+    comment: [ownVehicle && truck?.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, w.comment, refTag(s.id)].filter(Boolean).join('; '),
     goods,
   }
 }
@@ -1329,8 +1332,14 @@ async function runPipeline(id: string) {
       await rsCache.read(wid, id).catch(() => rsCache.stale(wid))
       patch(
         id,
-        () => ({ status: 'uploaded', draft: undefined, waybillNumber: number, rs: { status: 'ok', at: nowIso() } }),
-        { level: 'success', message: `RS.ge-მ დააბრუნა ზედნადები №${number}${state ? ` (RS.ge-ზე უკვე ${RS_STATUS_TEXT[status]})` : ''}` },
+        () => ({ status: 'uploaded', draft: undefined, waybillNumber: number || undefined, rs: { status: 'ok', at: nowIso() } }),
+        {
+          level: 'success',
+          message:
+            status === 8
+              ? `ზედნადები${number ? ` №${number}` : ''} გადაეგზავნა გადამზიდავს — მძღოლს და მანქანას ის მიუთითებს და გაააქტიურებს`
+              : `RS.ge-მ დააბრუნა ზედნადები №${number}${state ? ` (RS.ge-ზე უკვე ${RS_STATUS_TEXT[status]})` : ''}`,
+        },
       )
     } catch (e) {
       const msg = (e as Error).message
@@ -1387,10 +1396,16 @@ type Activated = { number: string; status: number }
 async function activate(id: string, waybillId: number): Promise<Activated | null> {
   try {
     // The stored start: the one asked for with this activation (or typed for the shipment).
-    return { number: await rsge.sendWaybill(waybillId, id, plannedBegin(stored(id))), status: 1 }
+    // With a transport company the waybill goes to it (status 8); the company activates it.
+    const s = stored(id)
+    const toTransporter = transHasTransporter(shipmentWaybill(s, resolveRoute(db.get(), s.routeId).route).transId)
+    return toTransporter
+      ? { number: await rsge.sendToTransporter(waybillId, id, plannedBegin(s)), status: 8 }
+      : { number: await rsge.sendWaybill(waybillId, id, plannedBegin(s)), status: 1 }
   } catch (e) {
     const w = await rsCache.read(waybillId, id).catch(() => null)
-    if (w && w.status !== 0 && w.number) return { number: w.number, status: w.status }
+    // Sent to a transport company (8), the waybill may have no number until the company activates it.
+    if (w && w.status !== 0 && (w.number || w.status === 8)) return { number: w.number, status: w.status }
     if (w?.status === -1) return null
     throw e
   }
@@ -1452,13 +1467,15 @@ export const rsWaybills = {
       else if (action === 'invoice') await shipments.invoice(sid, user)
     }
     if (!sid || !['close', 'cancel', 'delete', 'activate', 'invoice'].includes(action)) {
-      const call = (p: Promise<unknown>) => p.catch((e: Error) => fail(e.message, 502))
+      const call = <T,>(p: Promise<T>) => p.catch((e: Error) => fail(e.message, 502))
       if (action === 'close') await call(rsge.closeWaybill(waybillId, undefined, parseDelivered(body?.deliveredAt)))
       else if (action === 'cancel') await call(rsge.cancelWaybill(waybillId, undefined))
       else if (action === 'delete') await call(rsge.deleteWaybill(waybillId, undefined))
       else if (action === 'activate') {
         const begin = parseBegin(body?.beginAt)
-        await call(rsge.sendWaybill(waybillId, undefined, begin ? new Date(begin) : undefined))
+        const w = await call(rsCache.read(waybillId, undefined))
+        const send = w.transporterTin ? rsge.sendToTransporter : rsge.sendWaybill
+        await call(send(waybillId, undefined, begin ? new Date(begin) : undefined))
       } else if (action === 'invoice') await call(rsge.saveInvoice(waybillId, undefined))
       else if (action === 'confirm' || action === 'reject') await call(rsge.answer(waybillId, action === 'confirm'))
       else fail('უცნობი მოქმედება', 404)

@@ -452,6 +452,21 @@ const live = {
   },
 
   /**
+   * Sends a saved waybill with a transport company (TRANS_ID 7, TRANSPORTER_TIN) to that company
+   * (send_waybill_transporter → status 8): the company fills in the driver and vehicle and activates
+   * it. Returns the number when RS.ge gives one already ('' otherwise: it is read back later).
+   */
+  async sendToTransporter(c: RsCreds, waybillId: number, shipmentId: string | undefined, begin?: Date): Promise<string> {
+    const op = 'send_waybill_transporter'
+    // A planned start still ahead is kept; one already passed becomes now.
+    const start = begin && begin.getTime() > Date.now() ? begin : new Date()
+    const xml = await soap(op, [...creds(c), ['waybill_id', waybillId], ['begin_date', rsDate(start)]], shipmentId, (x) => Number(tag(x, `${op}Result`)) > 0)
+    const result = Number(tag(xml, `${op}Result`))
+    if (!(result > 0)) throw rsError(await describe(result || -1, c))
+    return tag(xml, 'waybill_number')
+  },
+
+  /**
    * Waybills of this taxpayer last changed between `from` and `to` (get_waybills_v1; at most 3 days;
    * saved drafts are listed too). Returns the one whose comment carries `ref`, or null when there is none.
    * No buyer filter: the buyer in the settings may have changed since the earlier attempt.
@@ -703,6 +718,7 @@ export const rsge = {
 
   /** Activates a saved waybill and returns its number. `begin`: a planned start of transport (up to 3 days ahead). */
   sendWaybill: (waybillId: number, shipmentId: string | undefined, begin?: Date) => live.sendWaybill(activeCreds(), waybillId, shipmentId, begin),
+  sendToTransporter: (waybillId: number, shipmentId: string | undefined, begin?: Date) => live.sendToTransporter(activeCreds(), waybillId, shipmentId, begin),
 
   /** Completes the waybill (goods delivered), now or on the date given. */
   closeWaybill: (waybillId: number, shipmentId: string | undefined, delivered?: Date) =>
