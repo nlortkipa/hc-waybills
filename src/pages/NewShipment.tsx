@@ -6,7 +6,7 @@ import { Button, Card, EmptyState, Field, PageHeader, Select } from '../componen
 import { OptionRow } from '../components/pickers'
 import { formatDateTime, formatNumber } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
-import { editable, itemAmount, rsMissing, RS_TRANS_OTHER, transHasCost, transTypes } from '../lib/rs'
+import { editable, itemAmount, rsMissing, RS_TRANS_OTHER, transHasCost, transHasTransporter, transTypes } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -96,10 +96,14 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
     setErrors((x) => ({ ...x, [k]: '', ...(k === 'driverId' ? { truckId: '' } : k === 'truckId' ? { driverId: '' } : {}) }))
   }
 
-  const driver = d.drivers.find((r) => r.id === form.driverId)
-  const truck = d.trucks.find((r) => r.id === form.truckId)
-  // A waybill on RS.ge keeps its goods while the route stays the same; otherwise they are the route's.
-  const goods = editing?.rsWaybillId && route?.id === editing.routeId && editing.items.length ? editing.items : (route?.goods ?? [])
+  // A waybill on RS.ge keeps its goods and transport details while the route stays the same; otherwise they are the route's.
+  const kept = !!editing?.rsWaybillId && route?.id === editing.routeId && editing.items.length > 0
+  const goods = kept ? editing!.items : (route?.goods ?? [])
+  // With a transport company (გადამზიდავი) the company names the driver and vehicle on RS.ge: not picked here.
+  const viaTransporter = !!route && transHasTransporter((kept ? editing!.waybill?.transId : undefined) ?? route.transId ?? 1)
+  const transporterTin = (kept ? editing!.waybill?.transporterTin : undefined) ?? route?.transporterTin ?? ''
+  const driver = viaTransporter ? undefined : d.drivers.find((r) => r.id === form.driverId)
+  const truck = viaTransporter ? undefined : d.trucks.find((r) => r.id === form.truckId)
   const total = goods.reduce((a, g) => a + g.quantity, 0)
   const amount = goods.reduce((a, g) => a + itemAmount(g), 0)
 
@@ -110,11 +114,11 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
     e?.preventDefault()
     const err: Record<string, string> = {}
     if (!route) err.routeId = 'აირჩიე მარშრუტი'
-    if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
-    if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
+    if (!viaTransporter && !form.driverId) err.driverId = 'აირჩიე მძღოლი'
+    if (!viaTransporter && !form.truckId) err.truckId = 'აირჩიე მანქანა'
     setErrors(err)
     if (Object.keys(err).length || !route) return
-    const input: NewShipmentInput = { routeId: route.id, driverId: form.driverId, truckId: form.truckId, ...(draft && { draft }) }
+    const input: NewShipmentInput = { routeId: route.id, driverId: viaTransporter ? '' : form.driverId, truckId: viaTransporter ? '' : form.truckId, ...(draft && { draft }) }
     setBusy(draft ? 'draft' : 'send')
     try {
       if (editing) {
@@ -141,7 +145,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         : 'ცვლილების შემდეგ დააჭირე „ხელახლა ცდას“.'
     : copiedFrom
       ? `ასლი რეისიდან ${copiedFrom.waybillNumber ? `№${copiedFrom.waybillNumber}` : formatDateTime(copiedFrom.createdAt)} — შეამოწმე და ატვირთე.`
-      : 'აირჩიე მარშრუტი, მძღოლი და მანქანა, შემდეგ ატვირთე ზედნადები RS.ge-ზე.'
+      : viaTransporter
+        ? 'მარშრუტი გადამზიდავით არის — მძღოლს და მანქანას გადამზიდავი მიუთითებს. ატვირთე ზედნადები RS.ge-ზე.'
+        : 'აირჩიე მარშრუტი, მძღოლი და მანქანა, შემდეგ ატვირთე ზედნადები RS.ge-ზე.'
 
   return (
     <>
@@ -190,8 +196,17 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             </Field>
 
             <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
-              <Field label="მძღოლი" error={errors.driverId}>
-                <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" sheetTitle="მძღოლი" invalid={!!errors.driverId} searchable rich>
+              <Field label="მძღოლი" error={viaTransporter ? undefined : errors.driverId}>
+                <Select
+                  value={viaTransporter ? '' : form.driverId}
+                  onChange={set('driverId')}
+                  placeholder={viaTransporter ? 'მიუთითებს გადამზიდავი' : 'აირჩიე მძღოლი…'}
+                  sheetTitle="მძღოლი"
+                  invalid={!viaTransporter && !!errors.driverId}
+                  disabled={viaTransporter}
+                  searchable
+                  rich
+                >
                   {d.drivers
                     .filter((x) => !x.deletedAt || x.id === editing?.driverId)
                     .map((x) => {
@@ -204,8 +219,17 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                     })}
                 </Select>
               </Field>
-              <Field label="მანქანა" error={errors.truckId}>
-                <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" sheetTitle="მანქანა" invalid={!!errors.truckId} searchable rich>
+              <Field label="მანქანა" error={viaTransporter ? undefined : errors.truckId}>
+                <Select
+                  value={viaTransporter ? '' : form.truckId}
+                  onChange={set('truckId')}
+                  placeholder={viaTransporter ? 'მიუთითებს გადამზიდავი' : 'აირჩიე მანქანა…'}
+                  sheetTitle="მანქანა"
+                  invalid={!viaTransporter && !!errors.truckId}
+                  disabled={viaTransporter}
+                  searchable
+                  rich
+                >
                   {d.trucks
                     .filter((x) => !x.deletedAt || x.id === editing?.truckId)
                     .map((x) => (
@@ -215,6 +239,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                     ))}
                 </Select>
               </Field>
+              {viaTransporter && <p className="-mt-3 ml-1 text-xs text-slate-500 @md:col-span-2">{BY_TRANSPORTER}</p>}
             </div>
           </Card>
 
@@ -242,8 +267,17 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             <dl className="mt-3 space-y-2.5 text-sm">
               <Row k="ტიპი" v="შიდა გადაზიდვა" />
               <Row k="მარშრუტი" v={route ? routePickLabel(d, route) : undefined} />
-              <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
-              <Row k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
+              {viaTransporter ? (
+                <>
+                  <Row k="გადამზიდავის ს/ნ" v={transporterTin || undefined} mono />
+                  <Row k="მძღოლი და მანქანა" v="მიუთითებს გადამზიდავი" />
+                </>
+              ) : (
+                <>
+                  <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
+                  <Row k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
+                </>
+              )}
               {goods.length ? goods.map((g) => <Row key={g.barCode} k={g.name} v={`${formatNumber(g.quantity, 3)}${g.unitTxt ? ` ${g.unitTxt}` : ''}`} />) : <Row k="პროდუქტი" />}
               {goods.length > 1 && <Row k="სულ" v={formatNumber(total, 3)} />}
               <Row k="თანხა" v={goods.length ? `${amount.toFixed(2)} ₾` : undefined} />
@@ -254,7 +288,8 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               <Info className="mt-0.5 size-4 shrink-0 text-brand-500" />
               <div className="space-y-1 text-brand-800">
                 <p>
-                  <b className="font-medium text-brand-900">ატვირთვა</b> — RS.ge-ზე შეინახება, გააქტიურდება და მძღოლს SMS-ით გაეგზავნება ნომერი.
+                  <b className="font-medium text-brand-900">ატვირთვა</b> —{' '}
+                  {viaTransporter ? 'RS.ge-ზე შეინახება და გადაეგზავნება გადამზიდავს, რომელიც მძღოლს და მანქანას მიუთითებს და გაააქტიურებს.' : 'RS.ge-ზე შეინახება, გააქტიურდება და მძღოლს SMS-ით გაეგზავნება ნომერი.'}
                 </p>
                 <p>
                   <b className="font-medium text-brand-900">მხოლოდ შენახვა</b> — RS.ge-ზე დარჩება შენახულ მდგომარეობაში; მოგვიანებით შეცვლი ან გააქტიურებ.
@@ -267,6 +302,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
     </>
   )
 }
+
+/** Why the driver and truck can't be picked on a route with a transport company. */
+const BY_TRANSPORTER = 'გადამზიდავით ტრანსპორტირებისას მძღოლს და მანქანას RS.ge-ზე თავად გადამზიდავი მიუთითებს.'
 
 function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
   return (

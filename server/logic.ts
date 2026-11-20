@@ -859,14 +859,17 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
   const input = { carrierId: route.carrierId, routeId: route.id, driverId: str(body.driverId), truckId: str(body.truckId) }
   const same = !!prev?.rsWaybillId && prev.routeId === route.id && prev.items.length > 0
   if (!same && !route.goods?.length) fail('ამ მარშრუტზე პროდუქტები ჯერ არ არის მითითებული — მიმართე ადმინისტრატორს')
+  // Always შიდა გადაზიდვა.
+  const kept = same && prev!.waybill ? { ...prev!.waybill, type: 1 as const, buyerTin: '', buyerName: '', buyerForeign: false } : undefined
+  const content = routeContent(route, prev, kept && { items: prev!.items, waybill: kept })
+  // With a transport company the company names the driver and vehicle on RS.ge: none is kept here.
+  if (transHasTransporter(content.waybill.transId)) return { ...input, driverId: '', truckId: '', ...content }
   // A driver or truck kept from before may have been deleted since; a new pick must be live.
   const usable = <T extends { id: string; deletedAt?: string }>(xs: T[], id: string, was?: string) => xs.some((x) => x.id === id && (!x.deletedAt || id === was))
   if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('აირჩიე მძღოლი')
   // Trucks are RS.ge's car numbers (with the model and trailer stored here).
   if (!usable(trucksView(d.trucks), input.truckId, prev?.truckId)) fail('აირჩიე მანქანა')
-  // Always შიდა გადაზიდვა.
-  const kept = same && prev!.waybill ? { ...prev!.waybill, type: 1 as const, buyerTin: '', buyerName: '', buyerForeign: false } : undefined
-  return { ...input, ...routeContent(route, prev, kept && { items: prev!.items, waybill: kept }) }
+  return { ...input, ...content }
 }
 
 /**
@@ -1489,9 +1492,10 @@ const smsUndelivered = (s: Shipment) => s.sms.delivery === 'Undelivered' || s.sm
 async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
-  const driver = d.drivers.find((x) => x.id === s.driverId)
-  if (!driver) return void patch(id, () => ({ sms: { status: 'skipped' } }))
   const route = resolveRoute(d, s.routeId)
+  // With a transport company the driver on the waybill is the company's, not one of ours.
+  const driver = transHasTransporter(shipmentWaybill(s, route.route).transId) ? undefined : d.drivers.find((x) => x.id === s.driverId)
+  if (!driver) return void patch(id, () => ({ sms: { status: 'skipped' } }))
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const start = s.waybill?.beginAt && Date.parse(s.waybill.beginAt) > Date.now() ? ` დაწყება: ${rsDate(new Date(s.waybill.beginAt)).slice(11, 16)}.` : ''
   const text = `ზედნადები №${s.waybillNumber} ატვირთულია. მარშრუტი: ${route.start} → ${route.end}.${truck ? ` მანქანა: ${truck.plateNumber}.` : ''}${start}`
