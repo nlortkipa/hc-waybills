@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { rsWaybills, type RsWaybillAction, type RsWaybillDetail } from '../api'
 import { useDb } from '../api/store'
-import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, PageHeader, Segmented } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, FilterChips, Input, Modal, PageHeader, RefreshButton, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { downloadCsv, formatDateTime, formatNumber, tbilisiStamp } from '../lib/util'
@@ -146,8 +146,8 @@ export function RsWaybills() {
               <Segmented value={period} onChange={setPeriod} options={PERIODS} />
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Segmented value={status} onChange={setStatus} options={STATUSES} className="max-w-full overflow-x-auto" />
-              <div className="relative min-w-48 flex-1">
+              <FilterChips value={status} onChange={setStatus} options={STATUSES} />
+              <div className="relative w-full min-w-48 sm:w-auto sm:flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ნომერი, კომპანია, მანქანა, მისამართი…" className="pl-9" />
               </div>
@@ -169,12 +169,11 @@ export function RsWaybills() {
             <EmptyState icon={<FileText />} title="ზედნადები ვერ მოიძებნა" text="სცადე სხვა პერიოდი ან ფილტრი." />
           ) : (
             <>
-              <div className="hidden overflow-x-auto md:block">
+              <div className="hidden overflow-x-auto xl:block">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-separator text-left text-xs text-slate-500">
                       <th className="px-5 py-3 font-medium">ნომერი</th>
-                      <th className="px-3 py-3 font-medium">თარიღი</th>
                       <th className="px-3 py-3 font-medium">{side === 'issued' ? 'მყიდველი' : 'გამყიდველი'}</th>
                       <th className="px-3 py-3 font-medium">მარშრუტი</th>
                       <th className="px-3 py-3 font-medium">მანქანა</th>
@@ -188,9 +187,9 @@ export function RsWaybills() {
                       <tr key={r.id} onClick={() => setOpen(r.id)} className="cursor-pointer hover:bg-slate-50/80">
                         <td className="px-5 py-2.5">
                           <p className="font-mono text-[13px] font-medium text-slate-900">{r.number || '—'}</p>
+                          <p className="text-xs whitespace-nowrap text-slate-500">{formatDateTime(r.activatedAt ?? r.createdAt)}</p>
                           <p className="text-xs text-slate-500">{waybillTypeLabel(r.type)}</p>
                         </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-slate-600">{formatDateTime(r.activatedAt ?? r.createdAt)}</td>
                         <td className="px-3 py-2.5">
                           <p className="text-slate-800">{party(r).name || '—'}</p>
                           <p className="font-mono text-xs text-slate-400">{party(r).tin}</p>
@@ -219,7 +218,7 @@ export function RsWaybills() {
                   </tbody>
                 </table>
               </div>
-              <ul className="divide-y divide-separator md:hidden">
+              <ul className="divide-y divide-separator xl:hidden">
                 {page.map((r) => (
                   <li key={r.id}>
                     <button onClick={() => setOpen(r.id)} className="w-full px-4 py-3 text-left active:bg-slate-50">
@@ -376,7 +375,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                   <tr className="text-left text-xs text-slate-500">
                     <th className="px-3 py-2 font-medium">საქონელი</th>
                     <th className="px-3 py-2 text-right font-medium">რაოდ.</th>
-                    <th className="px-3 py-2 text-right font-medium">ფასი</th>
+                    <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">ფასი</th>
                     <th className="px-3 py-2 text-right font-medium">თანხა</th>
                   </tr>
                 </thead>
@@ -386,11 +385,12 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                       <td className="px-3 py-2">
                         <p className="text-slate-900">{g.name}</p>
                         <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
+                        <p className="text-xs text-slate-500 sm:hidden">{g.price.toFixed(2)} ₾ / {g.unitTxt}</p>
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums">
                         {formatNumber(g.quantity, 3)} {g.unitTxt}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{g.price.toFixed(2)}</td>
+                      <td className="hidden px-3 py-2 text-right tabular-nums sm:table-cell">{g.price.toFixed(2)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{g.amount.toFixed(2)}</td>
                     </tr>
                   ))}
@@ -399,7 +399,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                   <tr className="border-t border-separator font-medium">
                     <td className="px-3 py-2">სულ</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(w.quantity, 3)}</td>
-                    <td />
+                    <td className="hidden sm:table-cell" />
                     <td className="px-3 py-2 text-right tabular-nums">{w.fullAmount.toFixed(2)} ₾</td>
                   </tr>
                 </tfoot>
@@ -448,9 +448,9 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
 
 function Item({ k, v }: { k: string; v?: string }) {
   return (
-    <div className="flex justify-between gap-4 border-b border-separator py-2">
-      <dt className="shrink-0 text-slate-500">{k}</dt>
-      <dd className="min-w-0 text-right [overflow-wrap:anywhere] text-slate-900">{v || '—'}</dd>
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 border-b border-separator py-2">
+      <dt className="min-w-0 text-slate-500">{k}</dt>
+      <dd className="ml-auto min-w-0 text-right [overflow-wrap:anywhere] text-slate-900">{v || '—'}</dd>
     </div>
   )
 }

@@ -19,13 +19,11 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
   return (
     <>
       {/* Desktop table */}
-      <div className="hidden overflow-x-auto md:block">
+      <div className="hidden overflow-x-auto xl:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-separator text-left text-xs text-slate-500 [&>th]:font-medium">
               <th className="px-5 py-3">ზედნადები</th>
-              <th className="px-3 py-3">შექმნილია</th>
-              {showCarrier && <th className="px-3 py-3">კარიერი</th>}
               <th className="px-3 py-3">მარშრუტი</th>
               <th className="px-3 py-3">მძღოლი / მანქანა</th>
               <th className="px-3 py-3 text-right">დეკლარირებული</th>
@@ -38,13 +36,15 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
               const x = L.describe(s)
               return (
                 <tr key={s.id} onClick={() => open(s.id)} className="cursor-pointer transition-colors hover:bg-slate-50/80">
-                  <td className="px-5 py-3 font-mono text-[13px] font-medium text-slate-900">{s.waybillNumber ?? <span className="font-sans text-slate-400">—</span>}</td>
-                  <td className="px-3 py-3 whitespace-nowrap text-slate-600">{formatDateTime(s.createdAt)}</td>
-                  {showCarrier && <td className="px-3 py-3 text-slate-700">{x.carrier}</td>}
-                  <td className="px-3 py-3">
-                    <p className="text-slate-800">{x.route}</p>
+                  <td className="px-5 py-3 whitespace-nowrap">
+                    <p className="font-mono text-[13px] font-medium text-slate-900">{s.waybillNumber ?? <span className="font-sans text-slate-400">—</span>}</p>
+                    <p className="text-xs text-slate-500">{formatDateTime(s.createdAt)}</p>
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="min-w-40 px-3 py-3">
+                    <p className="text-slate-800">{x.route}</p>
+                    {showCarrier && <p className="text-xs text-slate-500">{x.carrier}</p>}
+                  </td>
+                  <td className="min-w-40 px-3 py-3">
                     <p className="text-slate-800">{x.driver}</p>
                     <p className="font-mono text-xs text-slate-400">{x.plate}</p>
                   </td>
@@ -63,7 +63,7 @@ export function ShipmentList({ rows, showCarrier }: { rows: Shipment[]; showCarr
       </div>
 
       {/* Mobile cards */}
-      <ul className="divide-y divide-separator md:hidden">
+      <ul className="divide-y divide-separator xl:hidden">
         {rows.map((s) => {
           const x = L.describe(s)
           return (

@@ -2,7 +2,7 @@ import { AlertTriangle, Building2, Check, Loader2, Package, Pencil, Plus, Route,
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { TIN_RE } from '../components/TinLookup'
-import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Field, Input, Modal, PageHeader, Select } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
@@ -135,9 +135,16 @@ const TABS: TabDef[] = [
     subtitle: (r, d) => [carrierName(d, r.carrierId), r.buyerName || r.buyerTin].filter(Boolean).join(' · '),
     columns: [
       { label: 'კარიერი', render: (r, d) => <span className="font-medium text-slate-900">{carrierName(d, r.carrierId)}</span> },
-      { label: 'დაწყების მისამართი', render: (r, d) => routeOf(d, r).start || '—' },
-      { label: 'დასრულების მისამართი', render: (r, d) => routeOf(d, r).end || '—' },
-      { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px]">{r.scaleId || '—'}</span> },
+      {
+        label: 'მარშრუტი',
+        render: (r, d) => (
+          <span className="block min-w-40">
+            {routeOf(d, r).start || '—'}
+            <span className="block text-slate-500">→ {routeOf(d, r).end || '—'}</span>
+          </span>
+        ),
+      },
+      { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px] whitespace-nowrap">{r.scaleId || '—'}</span> },
       {
         label: 'ზედნადები',
         render: (r, d) => {
@@ -326,25 +333,15 @@ export function ReferenceData() {
         }
       />
 
-      <div className="-mx-4 mb-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:inline-flex sm:max-w-full sm:rounded-[9px] sm:bg-fill sm:p-[2px]">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => {
-              setTabKey(t.key)
-              setQ('')
-            }}
-            className={cx(
-              'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] transition-all duration-200 sm:h-7 sm:rounded-[7px]',
-              tabKey === t.key ? 'bg-brand-600 font-semibold text-white sm:bg-white sm:text-slate-900 sm:shadow-[0_3px_8px_rgba(0,0,0,0.12),0_3px_1px_rgba(0,0,0,0.04)] sm:dark:bg-slate-400' : 'bg-surface font-medium text-slate-600 sm:bg-transparent',
-            )}
-          >
-            <t.icon className="size-4" />
-            {t.label}
-            <span className={cx('rounded-md px-1.5 text-[11px] tabular-nums', tabKey === t.key ? 'bg-white/25 text-white sm:bg-slate-500/15 sm:text-slate-600' : 'bg-slate-500/15 text-slate-600')}>{active(d[t.key] as { deletedAt?: string }[]).length}</span>
-          </button>
-        ))}
-      </div>
+      <FilterChips
+        className="mb-4"
+        value={tabKey}
+        onChange={(k) => {
+          setTabKey(k)
+          setQ('')
+        }}
+        options={TABS.map((t) => ({ value: t.key, label: t.label, icon: <t.icon />, count: active(d[t.key] as { deletedAt?: string }[]).length }))}
+      />
 
       <div className="mb-4 flex gap-2">
         <div className="relative flex-1">

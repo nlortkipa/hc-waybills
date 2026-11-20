@@ -286,9 +286,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         </Link>
       )}
       <PageHeader title={title} subtitle={subtitle} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <form onSubmit={(e) => void submit(e, false)} className="space-y-4" noValidate>
-          <Card className="space-y-5 p-5 sm:p-6">
+          <Card className="@container space-y-5 p-5 sm:p-6">
             {carriers.length === 1 || editing ? (
               <div className="rounded-[10px] bg-fill px-4 py-3 text-sm">
                 <span className="text-slate-500">კარიერი: </span>
@@ -361,7 +361,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             {still ? (
               <div className="rounded-[10px] bg-fill px-4 py-3 text-sm text-slate-600">ტრანსპორტირების გარეშე: მძღოლი და მანქანა არ მიეთითება, ტვირთი ბარდება {start.start || 'დაწყების მისამართზე'}.</div>
             ) : (
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
                 <Field label="მძღოლი" error={errors.driverId}>
                   <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId} searchable rich>
                     {d.drivers
@@ -392,9 +392,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
           </Card>
 
           {/* Waybill: type, buyer, start, extras — prefilled from the route and the RS.ge settings. */}
-          <Card className="space-y-5 p-5 sm:p-6">
+          <Card className="@container space-y-5 p-5 sm:p-6">
             <h2 className="text-sm font-semibold text-slate-900">ზედნადები</h2>
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
               <Field label="ზედნადების ტიპი">
                 <Select value={String(w.type)} onChange={(e) => setW('type', Number(e.target.value) as WaybillType)} disabled={correcting} rich>
                   {WAYBILL_TYPES.map((t) => (
@@ -426,7 +426,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             {!correcting && (
               <div>
                 <p className="mb-1.5 ml-1 text-[13px] text-slate-500">ტრანსპორტირების დაწყება</p>
-                <div className="flex flex-wrap items-start gap-3">
+                <div className="flex flex-col items-start gap-3 @md:flex-row">
                   <Segmented
                     value={w.begin}
                     onChange={(v) => {
@@ -439,7 +439,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                     ]}
                   />
                   {w.begin === 'later' && (
-                    <div className="min-w-0 flex-1 sm:max-w-64">
+                    <div className="w-full @md:w-auto @md:max-w-64 @md:min-w-52 @md:flex-1">
                       <Input type="datetime-local" value={w.beginAt} min={nowInput} max={maxInput} invalid={!!errors.beginAt} onChange={(e) => setW('beginAt', e.target.value)} />
                       <p className={cx('mt-1 ml-1 text-xs', errors.beginAt ? 'text-rose-600' : 'text-slate-500')}>{errors.beginAt || 'საქართველოს დროით · მაქსიმუმ 3 დღით ადრე'}</p>
                     </div>
@@ -455,7 +455,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 {!more && <span className="hidden font-normal text-slate-400 sm:inline"> · {still ? 'მიმწოდებელი, მიმღები, კომენტარი' : 'ტრანსპორტი, ღირებულება, კომენტარი…'}</span>}
               </button>
               {more && (
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2">
                   {!still && (
                     <>
                       <Field label="ტრანსპორტის ტიპი">
@@ -472,9 +472,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                           <Input value={w.transTxt} maxLength={250} invalid={!!errors.transTxt} onChange={(e) => setW('transTxt', e.target.value)} />
                         </Field>
                       ) : (
-                        <div className="hidden sm:block" />
+                        <div className="hidden @md:block" />
                       )}
-                      <div className="sm:col-span-2">
+                      <div className="@md:col-span-2">
                         <Field label="გადამზიდავი კომპანიის ს/ნ (არასავალდებულო)" error={errors.transporterTin}>
                           <Input value={w.transporterTin} inputMode="numeric" className="font-mono" invalid={!!errors.transporterTin} onChange={(e) => setW('transporterTin', e.target.value)} />
                         </Field>
@@ -497,7 +497,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                   <Field label="მიმღების ინფორმაცია">
                     <Input value={w.receiverInfo} maxLength={250} onChange={(e) => setW('receiverInfo', e.target.value)} />
                   </Field>
-                  <div className="sm:col-span-2">
+                  <div className="@md:col-span-2">
                     <Field label="კომენტარი">
                       <Input value={w.comment} maxLength={250} onChange={(e) => setW('comment', e.target.value)} />
                     </Field>
@@ -526,7 +526,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
 
         {/* Summary */}
         <div className="space-y-4">
-          <Card className="p-5 lg:sticky lg:top-4">
+          <Card className="p-5 xl:sticky xl:top-4">
             <h2 className="text-sm font-semibold text-slate-900">შეჯამება</h2>
             <dl className="mt-3 space-y-2.5 text-sm">
               <Row k="ტიპი" v={waybillTypeLabel(w.type)} />
@@ -569,9 +569,9 @@ function Fixed({ children }: { children: ReactNode }) {
 
 function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
   return (
-    <div className="flex justify-between gap-4">
-      <dt className="shrink-0 text-slate-500">{k}</dt>
-      <dd className={`min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
+    <div className="flex flex-wrap justify-between gap-x-4">
+      <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">{k}</dt>
+      <dd className={`ml-auto min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
     </div>
   )
 }

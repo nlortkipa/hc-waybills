@@ -264,11 +264,9 @@ export function EmptyState({ icon, title, text, action }: { icon: ReactNode; tit
 export function Stat({ label, value, sub, icon, accent = 'bg-brand-500' }: { label: string; value: ReactNode; sub?: ReactNode; icon: ReactNode; accent?: string }) {
   return (
     <Card className="p-4">
-      <div className="flex items-center gap-2">
-        <span className={cx('grid size-7 shrink-0 place-items-center rounded-[7px] text-white [&>svg]:size-4', accent)}>{icon}</span>
-        <p className="min-w-0 text-[13px] leading-tight font-semibold text-slate-500 [overflow-wrap:anywhere]">{label}</p>
-      </div>
-      <p className="mt-3 text-[28px] leading-none font-bold whitespace-nowrap tabular-nums tracking-tight text-slate-900">{value}</p>
+      <span className={cx('grid size-7 place-items-center rounded-[7px] text-white [&>svg]:size-4', accent)}>{icon}</span>
+      <p className="mt-2 text-[13px] leading-tight font-semibold text-slate-500 [overflow-wrap:anywhere]">{label}</p>
+      <p className="mt-2 text-[28px] leading-none font-bold whitespace-nowrap tabular-nums tracking-tight text-slate-900">{value}</p>
       {sub && <p className="mt-1.5 text-[13px] leading-snug text-slate-500">{sub}</p>}
     </Card>
   )
@@ -282,6 +280,31 @@ export function JsonBlock({ value }: { value: unknown }) {
 export function Avatar({ text, className }: { text: string; className?: string }) {
   return (
     <span className={cx('grid size-9 shrink-0 place-items-center rounded-full bg-gradient-to-b from-[#a5abb8] to-[#858994] text-sm font-semibold uppercase text-white', className)}>{text}</span>
+  )
+}
+
+/** Filter pills that wrap onto the next line when they don't fit (never scroll sideways). */
+export function FilterChips<T extends string>({ value, onChange, options, className }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; icon?: ReactNode; count?: number }[]; className?: string }) {
+  return (
+    <div className={cx('flex flex-wrap gap-2', className)} role="tablist">
+      {options.map((o) => {
+        const on = value === o.value
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(o.value)}
+            className={cx('pressable flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[13px] whitespace-nowrap transition-colors [&>svg]:size-4', on ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill')}
+          >
+            {o.icon}
+            {o.label}
+            {o.count != null && <span className={cx('rounded-md px-1.5 text-[11px] font-medium tabular-nums', on ? 'bg-white/25 text-white' : 'bg-slate-500/15 text-slate-600')}>{o.count}</span>}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

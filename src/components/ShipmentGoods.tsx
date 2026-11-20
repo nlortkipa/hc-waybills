@@ -171,15 +171,15 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
           // A product whose bar code is already on another line can't be picked again.
           const taken = new Set(goods.filter((x) => x.key !== g.key).map((x) => x.barCode.trim().toLowerCase()))
           return (
-            <div key={g.key} className="rounded-[10px] p-3 ring-1 ring-slate-200">
+            <div key={g.key} className="@container rounded-[10px] p-3 ring-1 ring-slate-200">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-slate-500">{i + 1}.</span>
                 <button type="button" onClick={() => onChange(goods.filter((x) => x.key !== g.key))} className="-my-1 rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label="პროდუქტის მოხსნა">
                   <X className="size-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div className="col-span-2">
+              <div className="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3">
+                <div className="@md:col-span-2">
                   <Field label="დასახელება" error={err('name')}>
                     <div className="relative">
                       <Input value={g.name} placeholder="ღორღი 0–5 მმ" invalid={!!err('name')} className={products.length ? 'pr-11' : undefined} onChange={(e) => set(g.key, { name: e.target.value })} />
@@ -206,7 +206,7 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                     </div>
                   </Field>
                 </div>
-                <div className="col-span-2 sm:col-span-1">
+                <div>
                   <Field label={locked ? 'შტრიხკოდი (აქციზის კოდი)' : 'შტრიხკოდი'} error={err('barCode')}>
                     <Input
                       value={locked ?? g.barCode}
@@ -218,17 +218,17 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                     />
                   </Field>
                 </div>
-                <div className="col-span-1">
+                <div>
                   <Field label="რაოდენობა" error={err('quantity')}>
                     <Input type="text" inputMode="decimal" value={g.quantity} invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value })} />
                   </Field>
                 </div>
-                <div className="col-span-1">
-                  <Field label="დამატ. რაოდენობა" error={err('quantityExt')}>
+                <div>
+                  <Field label="დამატებითი რაოდენობა" error={err('quantityExt')}>
                     <Input type="text" inputMode="decimal" value={g.quantityExt} placeholder="—" invalid={!!err('quantityExt')} onChange={(e) => set(g.key, { quantityExt: e.target.value })} />
                   </Field>
                 </div>
-                <div className="col-span-1">
+                <div>
                   <Field label="საზომი ერთეული">
                     <Select searchable={units.length > 8} value={unitId} disabled={!!lockedUnit} title={lockedUnit ? 'აქციზური საქონლის ერთეული — იცვლება აქციზის არჩევით' : undefined} onChange={(e) => set(g.key, { unitId: e.target.value })}>
                       {units.map((u) => (
@@ -240,18 +240,18 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                   </Field>
                 </div>
                 {other && (
-                  <div className="col-span-1">
+                  <div>
                     <Field label="ერთეულის სახელი" error={err('unitTxt')}>
                       <Input value={lockedUnit?.unitTxt ?? g.unitTxt} readOnly={!!lockedUnit} className={cx(lockedUnit && 'bg-slate-50 text-slate-500')} placeholder="ტონა" invalid={!!err('unitTxt')} onChange={(e) => set(g.key, { unitTxt: e.target.value })} />
                     </Field>
                   </div>
                 )}
-                <div className="col-span-1">
+                <div>
                   <Field label="ერთეულის ფასი (₾)" error={err('price')}>
                     <Input type="text" inputMode="decimal" value={g.price} placeholder="0.00" invalid={!!err('price')} onChange={(e) => set(g.key, { price: e.target.value })} />
                   </Field>
                 </div>
-                <div className="col-span-1">
+                <div>
                   <Field label="დაბეგვრის ტიპი">
                     <Select value={g.vatType} onChange={(e) => set(g.key, { vatType: e.target.value })}>
                       {RS_VAT_TYPES.map((v) => (
@@ -263,7 +263,7 @@ export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }
                   </Field>
                 </div>
                 {(akciz.length > 0 || g.aId) && (
-                  <div className="col-span-2 sm:col-span-3">
+                  <div className="col-span-full">
                     <Field label="აქციზი (მხოლოდ აქციზური საქონლისთვის)">
                       <Select searchable rich value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
                         <option value="" label="არ არის აქციზური">

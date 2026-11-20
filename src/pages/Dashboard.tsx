@@ -34,7 +34,7 @@ export function Dashboard() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+      <div className="grid grid-cols-1 gap-3 min-[370px]:grid-cols-2 lg:grid-cols-4 lg:gap-4">
         <Stat label="დღეს" value={todays.length} sub="შექმნილი რეისი" icon={<Truck className="size-5" />} />
         <Stat label="მიმდინარე" value={waiting.length} sub="მუშავდება" icon={<Clock className="size-5" />} accent="bg-amber-500" />
         <Stat label="დღეს ატვირთული" value={uploadedToday.length} sub="ზედნადები" icon={<FileCheck2 className="size-5" />} accent="bg-emerald-500" />

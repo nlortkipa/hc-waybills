@@ -232,7 +232,7 @@ export function ShipmentDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-6">
           {/* Progress */}
           <Card className="p-5 sm:p-6">
@@ -277,7 +277,7 @@ export function ShipmentDetail() {
                         <tr className="text-left text-xs text-slate-500">
                           <th className="px-1 py-1.5 font-medium">საქონელი</th>
                           <th className="px-1 py-1.5 text-right font-medium">რაოდ.</th>
-                          <th className="px-1 py-1.5 text-right font-medium">ფასი</th>
+                          <th className="hidden px-1 py-1.5 text-right font-medium sm:table-cell">ფასი</th>
                           <th className="px-1 py-1.5 text-right font-medium">თანხა</th>
                         </tr>
                       </thead>
@@ -287,9 +287,10 @@ export function ShipmentDetail() {
                             <td className="px-1 py-2">
                               <p className="text-slate-900">{g.name}</p>
                               <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
+                              <p className="text-xs text-slate-500 sm:hidden">{g.price.toFixed(2)} ₾ / {g.unitTxt}</p>
                             </td>
                             <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{qtyText(g.quantity, g.unitTxt)}</td>
-                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.price.toFixed(2)}</td>
+                            <td className="hidden px-1 py-2 text-right whitespace-nowrap tabular-nums sm:table-cell">{g.price.toFixed(2)}</td>
                             <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.amount.toFixed(2)} ₾</td>
                           </tr>
                         ))}
@@ -301,7 +302,7 @@ export function ShipmentDetail() {
                             {qtyText(r?.quantity ?? s.quantity, rUnit)}
                             {r && r.quantity !== s.quantity && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
                           </td>
-                          <td />
+                          <td className="hidden sm:table-cell" />
                           <td className="px-1 py-2 text-right tabular-nums">
                             {(r?.fullAmount ?? sentAmount).toFixed(2)} ₾
                             {r && w && Math.abs(r.fullAmount - sentAmount) >= 0.005 && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
@@ -552,12 +553,12 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
 /** `changed`: the value differs from what this app sent (the waybill was corrected on RS.ge). */
 function Info({ k, v, mono, changed, sub }: { k: string; v?: string; mono?: boolean; changed?: boolean; sub?: string }) {
   return (
-    <div className="flex justify-between gap-4 py-2.5">
-      <dt className={cx('text-slate-500', sub ? 'min-w-0 [overflow-wrap:anywhere]' : 'shrink-0')}>
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 py-2.5">
+      <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">
         {k}
         {sub && <span className="block font-mono text-xs text-slate-400">{sub}</span>}
       </dt>
-      <dd className="min-w-0 text-right">
+      <dd className="ml-auto min-w-0 text-right">
         <span className={cx('text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</span>
         {changed && <span className="block text-xs text-amber-700">შეცვლილია RS.ge-ზე</span>}
       </dd>

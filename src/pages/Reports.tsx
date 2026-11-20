@@ -92,14 +92,14 @@ export function Reports() {
       />
 
       <Card className="mb-6 p-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field label="დან">
             <DatePicker value={from} max={to} onChange={setFrom} />
           </Field>
           <Field label="მდე">
             <DatePicker value={to} min={from} onChange={setTo} />
           </Field>
-          <div className="col-span-2 sm:col-span-1">
+          <div>
             <Field label="კარიერი">
               <Select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
                 <option value="">ყველა კარიერი</option>
@@ -115,7 +115,7 @@ export function Reports() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+      <div className="grid grid-cols-1 gap-3 min-[370px]:grid-cols-2 lg:grid-cols-4 lg:gap-4">
         <Stat label="რეისები" value={rows.length} sub={`${uploaded.length} ატვირთული`} icon={<Truck className="size-5" />} />
         <Stat label="დეკლარირებული" value={formatTonnes(declaredT)} sub={loading ? `RS.ge-დან იკითხება ${loading} ზედნადები…` : 'ატვირთული ზედნადებებით'} icon={<FileText className="size-5" />} accent="bg-emerald-500" />
         <Stat label="SMS" value={smsSent} sub="გაეგზავნა მძღოლს" icon={<MessageSquare className="size-5" />} accent="bg-teal-500" />

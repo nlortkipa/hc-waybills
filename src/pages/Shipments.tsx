@@ -3,8 +3,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
-import { Card, EmptyState, Input, LinkButton, PageHeader, Select, shipmentState } from '../components/ui'
-import { cx } from '../lib/util'
+import { Card, EmptyState, FilterChips, Input, LinkButton, PageHeader, Select, shipmentState } from '../components/ui'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -78,20 +77,7 @@ export function Shipments() {
           </Select>
         )}
       </div>
-      <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-        {filters.map((x) => (
-          <button
-            key={x.key}
-            onClick={() => setF(x.key)}
-            className={cx(
-              'pressable h-8 shrink-0 rounded-full px-3.5 text-[13px] transition-colors',
-              f === x.key ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill',
-            )}
-          >
-            {x.label}
-          </button>
-        ))}
-      </div>
+      <FilterChips className="mb-4" value={f} onChange={setF} options={filters.map((x) => ({ value: x.key, label: x.label }))} />
 
       <Card className="overflow-hidden">
         {rows.length ? (
