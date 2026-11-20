@@ -288,10 +288,12 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
   const { carrier, start, end } = routeAddresses(d.carriers, r)
   const transId = r.transId ?? 1
   const trans = transId === RS_TRANS_OTHER && r.transTxt ? r.transTxt : (transTypes(d.rs).find((t) => t.id === transId)?.name ?? `ტიპი ${transId}`)
-  const tags = [
-    trans,
-    transHasCost(transId) && r.transportCost ? `ტრანსპორტი ${r.transportCost.toFixed(2)} ₾` : '',
-  ].filter((t): t is string => !!t)
+  // Everything else the waybill carries, as label: value lines.
+  const details: [string, string][] = [
+    ['ტრანსპორტირების ტიპი', trans],
+    ...(transHasCost(transId) && r.transportCost ? [['ტრანსპორტირების ღირებულება', `${r.transportCost.toFixed(2)} ₾`] as [string, string]] : []),
+    ...(r.comment ? [['კომენტარი', r.comment] as [string, string]] : []),
+  ]
   const goods = r.goods ?? []
   const muted = 'text-slate-500 group-data-hi:text-white/75'
   return (
@@ -325,17 +327,15 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
         </span>
       )}
 
-      {/* Transport details, then the comment. */}
-      {(tags.length > 0 || r.comment) && (
-        <span className="mt-1.5 flex flex-wrap items-center gap-1 sm:mt-1">
-          {tags.map((t) => (
-            <span key={t} className={`rounded-[5px] px-1.5 py-px text-[12px] ring-1 ring-separator ring-inset group-data-hi:ring-white/35 sm:text-[11px] ${muted}`}>
-              {t}
-            </span>
-          ))}
-          {r.comment && <span className={`ml-0.5 min-w-0 truncate text-[12px] italic sm:text-[11px] ${muted}`}>„{r.comment}“</span>}
-        </span>
-      )}
+      {/* Transport details and the comment. */}
+      <span className="mt-1.5 block space-y-0.5 text-[13px] sm:mt-1 sm:space-y-0 sm:text-[12px]">
+        {details.map(([k, v]) => (
+          <span key={k} className="block truncate">
+            <span className={muted}>{k}: </span>
+            {v}
+          </span>
+        ))}
+      </span>
     </span>
   )
 }
