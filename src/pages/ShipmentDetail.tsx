@@ -92,7 +92,7 @@ export function ShipmentDetail() {
     s.sms.status === 'failed'
       ? { label: 'ვერ გაიგზავნა', tone: 'red' as const }
       : s.sms.status === 'ok'
-        ? s.sms.delivery
+        ? s.sms.delivery && s.sms.delivery !== 'Unknown'
           ? SMS_DELIVERY[s.sms.delivery]
           : { label: 'გაგზავნილია', tone: 'green' as const }
         : { label: 'იგზავნება', tone: 'blue' as const }
@@ -142,7 +142,7 @@ export function ShipmentDetail() {
       status: s.sms.status,
       detail:
         s.sms.status === 'ok'
-          ? `გაეგზავნა ${s.sms.to}${s.sms.delivery && s.sms.delivery !== 'Pending' ? ` · ${SMS_DELIVERY[s.sms.delivery].label.toLowerCase()}` : ''}`
+          ? `გაეგზავნა ${s.sms.to}${s.sms.delivery && s.sms.delivery !== 'Pending' && s.sms.delivery !== 'Unknown' ? ` · ${SMS_DELIVERY[s.sms.delivery].label.toLowerCase()}` : ''}`
           : (s.sms.error ??
             (s.sms.status === 'running'
               ? 'იგზავნება…'

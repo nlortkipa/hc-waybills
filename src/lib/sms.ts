@@ -12,5 +12,5 @@ export const SMS_DELIVERY: Record<SmsDelivery, { label: string; tone: 'green' | 
   Pending: { label: 'იგზავნება', tone: 'blue' },
   Undelivered: { label: 'ვერ მიწოდდა', tone: 'red' },
   Expired: { label: 'ვადა გაუვიდა', tone: 'red' },
-  Unknown: { label: 'სტატუსი უცნობია', tone: 'gray' },
+  Unknown: { label: 'გაგზავნილია', tone: 'green' },
 }
