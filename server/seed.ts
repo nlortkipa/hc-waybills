@@ -2,7 +2,7 @@ import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, ShipmentWaybill, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 29
+export const DB_VERSION = 30
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -273,6 +273,20 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     const routes = d.routes.map(drop)
     const shipments = d.shipments.map((s) => (s.waybill ? { ...s, waybill: drop(s.waybill) } : s))
     d = { ...d, version: 29, routes, shipments }
+  }
+  // v29 → v30: the admin (u1) logs in with 575 78 03 23. A database still on the old default number
+  // moves to it; another account that held that number is removed (phone numbers are unique).
+  if (d.version === 29) {
+    const ADMIN_PHONE = '575 78 03 23'
+    const key = (p: string) => p.replace(/\D/g, '').replace(/^(00)?995(?=\d{9}$)/, '')
+    const admin = d.users.find((u) => u.id === 'u1' && !u.deletedAt)
+    const users =
+      admin && key(admin.phone) === '555555555'
+        ? d.users.map((u) =>
+            u.id === 'u1' ? { ...u, phone: ADMIN_PHONE } : !u.deletedAt && key(u.phone) === key(ADMIN_PHONE) ? { ...u, deletedAt: new Date().toISOString() } : u,
+          )
+        : d.users
+    d = { ...d, version: 30, users }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d
