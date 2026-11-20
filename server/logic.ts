@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
-import { akcizUnit, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
+import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
@@ -134,6 +134,8 @@ function itemsFrom(w: RsRemoteWaybill, akciz: RsSettings['akciz']): ShipmentItem
       unitId: g.unitId ?? RS_UNIT_OTHER,
       unitTxt: g.unitTxt,
       price: g.price,
+      // A total RS.ge has that isn't quantity × price was typed in there: keep it.
+      ...(g.amount !== itemAmount({ quantity: g.quantity, price: g.price }) && { amount: g.amount }),
       vatType: ([0, 1, 2] as const).find((v) => v === g.vatType) ?? 0,
       ...(g.aId ? { aId: g.aId, aTitle: a ? `${a.code} · ${a.title}` : String(g.aId) } : {}),
       quantity: g.quantity,
@@ -265,6 +267,9 @@ function parseItems(raw: unknown, prev: ShipmentItem[] = []): ShipmentItem[] {
     if (!(quantity > 0)) fail(`„${label}“: რაოდენობა უნდა იყოს 0-ზე მეტი`)
     const quantityExt = Math.round(num(x?.quantityExt) * 1000) / 1000
     if (quantityExt < 0) fail(`„${label}“: დამატებითი რაოდენობა არ შეიძლება იყოს უარყოფითი`)
+    // საქონლის ფასი: missing = quantity × price; one typed in is kept (as RS.ge's form allows).
+    const amount = x?.amount === '' || x?.amount == null ? undefined : Math.round(Number(x.amount) * 100) / 100
+    if (amount != null && !(amount >= 0)) fail(`„${label}“: საქონლის ფასი უნდა იყოს 0 ან მეტი`)
     // Excise goods: a code RS.ge lists (or the one the line already had, if RS.ge's list isn't loaded).
     const aId = Math.max(0, Math.trunc(num(x?.aId)))
     const akciz = aId ? rs.akciz?.find((a) => a.id === aId) : undefined
@@ -275,7 +280,7 @@ function parseItems(raw: unknown, prev: ShipmentItem[] = []): ShipmentItem[] {
     const fixed = akciz && akcizUnit(rs, akciz)
     if (fixed && (fixed.unitId !== unitId || (unitId === RS_UNIT_OTHER && fixed.unitTxt !== unitTxt))) fail(`„${label}“: აქციზური საქონლის ერთეული მისი აქციზის ერთეულია (${fixed.unitTxt})`)
     const excise = aId ? { aId, aTitle: akciz ? `${akciz.code} · ${akciz.title}` : (kept!.aTitle ?? String(aId)) } : {}
-    return { name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, vatType: vatType!, ...excise, quantity, ...(quantityExt > 0 && { quantityExt }) }
+    return { name, barCode, unitId, unitTxt, price: Math.round(price * 10000) / 10000, ...(amount != null && { amount }), vatType: vatType!, ...excise, quantity, ...(quantityExt > 0 && { quantityExt }) }
   })
 }
 
@@ -747,7 +752,7 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     unitTxt: g.unitTxt,
     quantity: g.quantity,
     price: g.price,
-    amount: Math.round(g.quantity * g.price * 100) / 100,
+    amount: itemAmount(g),
     vatType: g.vatType,
     aId: g.aId ?? 0,
     ...(g.quantityExt && { quantityExt: g.quantityExt }),

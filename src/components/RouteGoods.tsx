@@ -1,14 +1,15 @@
 /*
  * The goods lines of a route, as the admin writes them: bar code, name and unit typed in (or filled
  * from the RS.ge product list with the search button, and then still editable; nothing is added to
- * RS.ge's list), plus the price, VAT type, quantity and optional additional quantity. Every shipment
+ * RS.ge's list), plus the price, line total (quantity × price unless typed in), VAT type, quantity and
+ * optional additional quantity. Every shipment
  * on the route carries them as they are.
  */
-import { Ban, Package, Plus, Search, Stamp, X } from 'lucide-react'
+import { Ban, Package, Plus, RotateCcw, Search, Stamp, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
 import { OptionRow } from './pickers'
 import { active, cx, uid } from '../lib/util'
-import { akcizUnit, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
+import { akcizUnit, itemAmount, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { Database, ShipmentItem } from '../types'
 import type { NewRouteGood } from '../api'
 
@@ -21,6 +22,8 @@ export interface GoodDraft {
   unitId: string
   unitTxt: string
   price: string
+  /** საქონლის ფასი typed in by hand; '' = quantity × price. */
+  amount: string
   vatType: string
   /** Excise code id; '' = not excise goods. aTitle shows a stored code RS.ge's list doesn't have (yet). */
   aId: string
@@ -37,6 +40,7 @@ export const blankGood = (d: Database): GoodDraft => ({
   unitId: String(tonneUnit(d.rs)),
   unitTxt: 'ტონა',
   price: '',
+  amount: '',
   vatType: '0',
   aId: '',
   aTitle: '',
@@ -51,6 +55,7 @@ export const toDraft = (g: ShipmentItem): GoodDraft => ({
   unitId: String(g.unitId),
   unitTxt: g.unitTxt,
   price: String(g.price),
+  amount: g.amount != null ? String(g.amount) : '',
   vatType: String(g.vatType),
   aId: g.aId ? String(g.aId) : '',
   aTitle: g.aTitle ?? '',
@@ -81,6 +86,8 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
     if (Number(g.unitId) === RS_UNIT_OTHER && !g.unitTxt.trim()) e[at('unitTxt')] = 'სავალდებულო ველი'
     const price = numOf(g.price)
     if (price == null || !(price >= 0)) e[at('price')] = 'შეიყვანე 0 ან მეტი'
+    const amount = numOf(g.amount)
+    if (amount != null && !(amount >= 0)) e[at('amount')] = '0 ან მეტი, ან ცარიელი'
     const q = numOf(g.quantity)
     if (q == null || !(q > 0)) e[at('quantity')] = 'შეიყვანე 0-ზე მეტი'
     const ext = numOf(g.quantityExt)
@@ -97,12 +104,14 @@ export function fromDrafts(d: Database, goods: GoodDraft[]): NewRouteGood[] {
     const a = akcizOf(d, g)
     const unitId = a ? akcizUnit(d.rs, a).unitId : Number(g.unitId)
     const ext = numOf(g.quantityExt)
+    const amount = numOf(g.amount)
     return {
       name: g.name.trim(),
       barCode: (a?.code ?? g.barCode).trim(),
       unitId,
       unitTxt: a ? akcizUnit(d.rs, a).unitTxt : unitId === RS_UNIT_OTHER ? g.unitTxt.trim() : (units.find((u) => u.id === unitId)?.name ?? g.unitTxt.trim()),
       price: numOf(g.price) ?? 0,
+      ...(amount != null && { amount: Math.round(amount * 100) / 100 }),
       vatType: Number(g.vatType) as 0 | 1 | 2,
       ...(g.aId && { aId: Number(g.aId) }),
       quantity: Math.round((numOf(g.quantity) ?? 0) * 1000) / 1000,
@@ -144,7 +153,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
       aId: p.aId ? String(p.aId) : '',
       aTitle: p.aId ? (a ? `${a.code} · ${a.title}` : String(p.aId)) : '',
       // The product's price and VAT type, when it has them; otherwise what is typed on the line stays.
-      ...(p.price != null && { price: String(p.price) }),
+      ...(p.price != null && { price: String(p.price), amount: '' }),
       ...(p.vatType != null && { vatType: String(p.vatType) }),
     })
   }
@@ -162,6 +171,10 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
           const unitId = lockedUnit ? String(lockedUnit.unitId) : g.unitId
           const other = Number(unitId) === RS_UNIT_OTHER
           // A product whose bar code is already on another line can't be picked again.
+          // საქონლის ფასი as RS.ge's form fills it: quantity × price, until one is typed in (a new quantity or price recalculates it).
+          const q = numOf(g.quantity)
+          const pr = numOf(g.price)
+          const auto = q != null && pr != null && q >= 0 && pr >= 0 ? itemAmount({ quantity: q, price: pr }).toFixed(2) : ''
           const taken = new Set(goods.filter((x) => x.key !== g.key).map((x) => x.barCode.trim().toLowerCase()))
           return (
             <div key={g.key} className="@container rounded-[10px] p-3 ring-1 ring-slate-200">
@@ -213,7 +226,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                 </div>
                 <div>
                   <Field label="რაოდენობა" error={err('quantity')}>
-                    <Input type="text" inputMode="decimal" value={g.quantity} invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value })} />
+                    <Input type="text" inputMode="decimal" value={g.quantity} invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value, amount: '' })} />
                   </Field>
                 </div>
                 <div>
@@ -241,7 +254,28 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                 )}
                 <div>
                   <Field label="ერთეულის ფასი (₾)" error={err('price')}>
-                    <Input type="text" inputMode="decimal" value={g.price} placeholder="0.00" invalid={!!err('price')} onChange={(e) => set(g.key, { price: e.target.value })} />
+                    <Input type="text" inputMode="decimal" value={g.price} placeholder="0.00" invalid={!!err('price')} onChange={(e) => set(g.key, { price: e.target.value, amount: '' })} />
+                  </Field>
+                </div>
+                <div>
+                  <Field label="საქონლის ფასი (₾)" error={err('amount')} hint={g.amount.trim() ? (auto ? `ხელით · რაოდ. × ფასი = ${auto}` : 'ხელით') : undefined}>
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        inputMode="decimal"
+                        value={g.amount || auto}
+                        placeholder="0.00"
+                        title="რაოდენობა × ერთეულის ფასი — შეგიძლია ხელით შეცვალო"
+                        invalid={!!err('amount')}
+                        className={g.amount.trim() ? 'pr-9' : undefined}
+                        onChange={(e) => set(g.key, { amount: e.target.value })}
+                      />
+                      {g.amount.trim() !== '' && (
+                        <button type="button" onClick={() => set(g.key, { amount: '' })} className="absolute inset-y-0 right-1 my-auto flex size-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="დაბრუნება: რაოდ. × ფასი" aria-label="საქონლის ფასის გადათვლა">
+                          <RotateCcw className="size-4" />
+                        </button>
+                      )}
+                    </div>
                   </Field>
                 </div>
                 <div>

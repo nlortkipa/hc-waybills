@@ -7,7 +7,7 @@ import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { editable, MAX_DEFER_MS, plateKey, RS_STATUS, waybillTypeLabel } from '../lib/rs'
+import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -386,7 +386,7 @@ export function ShipmentDetail() {
                   key={k}
                   k={i.name || 'პროდუქტი'}
                   sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
-                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
+                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾ = ${itemAmount(i).toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
                 />
               ))}
               {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}

@@ -6,7 +6,7 @@ import { Button, Card, EmptyState, Field, PageHeader, Select } from '../componen
 import { OptionRow } from '../components/pickers'
 import { formatDateTime, formatNumber } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
-import { editable, rsMissing } from '../lib/rs'
+import { editable, itemAmount, rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -103,7 +103,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   // A waybill on RS.ge keeps its goods while the route stays the same; otherwise they are the route's.
   const goods = editing?.rsWaybillId && route?.id === editing.routeId && editing.items.length ? editing.items : (route?.goods ?? [])
   const total = goods.reduce((a, g) => a + g.quantity, 0)
-  const amount = goods.reduce((a, g) => a + Math.round(g.quantity * g.price * 100) / 100, 0)
+  const amount = goods.reduce((a, g) => a + itemAmount(g), 0)
 
   // Operators don't see the service user, so only check what they can see; the server checks the rest.
   const rsNotReady = rsMissing(d.rs, { hasCreds: true }).length > 0

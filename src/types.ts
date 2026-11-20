@@ -91,8 +91,10 @@ export interface ShipmentItem {
   /** UNIT_ID; 99 = "other", then unitTxt is the unit name. */
   unitId: number
   unitTxt: string
-  /** PRICE: per unit, GEL. AMOUNT = quantity × price. */
+  /** PRICE: per unit, GEL. */
   price: number
+  /** AMOUNT (საქონლის ფასი): the line total typed in by hand; missing = quantity × price (see itemAmount). */
+  amount?: number
   /** VAT_TYPE: 0 ordinary, 1 zero-rated, 2 exempt. */
   vatType: 0 | 1 | 2
   /** A_ID: the excise code (RsAkciz.id) of excise goods; 0 or missing = not excise goods. */

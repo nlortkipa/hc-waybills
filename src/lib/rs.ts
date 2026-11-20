@@ -3,6 +3,9 @@ import type { CarrierRoute, RouteWaybill, RsSettings, Shipment, ShipmentWaybill 
 /** Plate number compared the way RS.ge stores it: AA-123-BB = AA123BB. */
 export const plateKey = (v: string) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
 
+/** A goods line's total (AMOUNT): the one typed in, else quantity × price, to the tetri — as RS.ge's form fills it. */
+export const itemAmount = (g: { quantity: number; price: number; amount?: number }) => g.amount ?? Math.round(g.quantity * g.price * 100) / 100
+
 /** The shipment's quantity as RS.ge has it (once the waybill is there), else as typed; 0 while RS.ge's copy isn't read. */
 export const shipmentQuantity = (s: Shipment) => s.rsRemote?.quantity ?? s.quantity ?? 0
 
