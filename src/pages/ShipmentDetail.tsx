@@ -5,7 +5,7 @@ import { shipments } from '../api'
 import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
-import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
+import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput, formatMoney } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
@@ -247,9 +247,9 @@ export function ShipmentDetail() {
 
           {(w || r || readable) && (
             <Card className="p-5 sm:p-6">
-              <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-900">ზედნადები RS.ge-ზე</h2>
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
                   {rStatus && <Badge tone={rStatus.tone}>{rStatus.label}</Badge>}
                   {r?.confirmed === 1 && <Badge tone="green">მყიდველმა დაადასტურა</Badge>}
                   {r?.confirmed === -1 && <Badge tone="red">მყიდველი არ ეთანხმება</Badge>}
@@ -275,11 +275,11 @@ export function ShipmentDetail() {
                             <td className="px-1 py-2">
                               <p className="text-slate-900">{g.name}</p>
                               <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
-                              <p className="text-xs text-slate-500 sm:hidden">{g.price.toFixed(2)} ₾ / {g.unitTxt}</p>
+                              <p className="text-xs text-slate-500 sm:hidden">{formatMoney(g.price)} ₾ / {g.unitTxt}</p>
                             </td>
                             <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{qtyText(g.quantity, g.unitTxt)}</td>
-                            <td className="hidden px-1 py-2 text-right whitespace-nowrap tabular-nums sm:table-cell">{g.price.toFixed(2)}</td>
-                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{g.amount.toFixed(2)} ₾</td>
+                            <td className="hidden px-1 py-2 text-right whitespace-nowrap tabular-nums sm:table-cell">{formatMoney(g.price)}</td>
+                            <td className="px-1 py-2 text-right whitespace-nowrap tabular-nums">{formatMoney(g.amount)} ₾</td>
                           </tr>
                         ))}
                       </tbody>
@@ -292,7 +292,7 @@ export function ShipmentDetail() {
                           </td>
                           <td className="hidden sm:table-cell" />
                           <td className="px-1 py-2 text-right tabular-nums">
-                            {(r?.fullAmount ?? sentAmount).toFixed(2)} ₾
+                            {formatMoney((r?.fullAmount ?? sentAmount))} ₾
                             {r && w && Math.abs(r.fullAmount - sentAmount) >= 0.005 && <span className="block text-xs font-normal text-amber-700">შეცვლილია RS.ge-ზე</span>}
                           </td>
                         </tr>
@@ -311,7 +311,7 @@ export function ShipmentDetail() {
                             <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
                           </>
                         )}
-                        {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${r.transportCost.toFixed(2)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
+                        {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${formatMoney(r.transportCost)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
                         {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
                         {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
                         {r.createdAt && <Info k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
@@ -374,7 +374,7 @@ export function ShipmentDetail() {
                   key={k}
                   k={i.name || 'პროდუქტი'}
                   sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
-                  v={`${qtyText(i.quantity, i.unitTxt)} × ${i.price.toFixed(2)} ₾ = ${itemAmount(i).toFixed(2)} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
+                  v={`${qtyText(i.quantity, i.unitTxt)} × ${formatMoney(i.price)} ₾ = ${formatMoney(itemAmount(i))} ₾${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
                 />
               ))}
               {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}

@@ -2,8 +2,10 @@ import { AlertTriangle, Download, FileText, MessageSquare, Truck } from 'lucide-
 import { useMemo, useState } from 'react'
 import { rsPending, useRsLoad, visibleShipments } from '../api'
 import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
-import { cx, downloadCsv, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
+import { cx, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
 import { useLookup } from '../lib/lookup'
+import { downloadXlsx } from '../lib/xlsx'
+import { useToast } from '../components/toast'
 import { shipmentQuantity } from '../lib/rs'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -70,14 +72,16 @@ export function Reports() {
     return [...m.entries()].sort((a, b) => b[1].t - a[1].t)
   }, [rows])
 
-  const exportCsv = () => {
-    downloadCsv(`hc-report-${from}_${to}.csv`, [
+  const toast = useToast()
+  const exportXlsx = async () => {
+    const err = await downloadXlsx(`hc-report-${from}_${to}.xlsx`, [
       ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
       ...rows.map((s) => {
         const x = L.describe(s)
         return [s.waybillNumber ?? '', tbilisiStamp(s.createdAt), x.carrier, x.route, x.driver, x.plate, x.item, shipmentQuantity(s), s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
       }),
-    ])
+    ], 'რეისები')
+    if (err) toast('error', err)
   }
 
   return (
@@ -85,21 +89,21 @@ export function Reports() {
       <PageHeader
         title="რეპორტები"
         actions={
-          <Button variant="secondary" icon={<Download className="size-4" />} onClick={exportCsv} disabled={!rows.length}>
-            CSV<span className="hidden sm:inline"> ექსპორტი</span>
+          <Button variant="secondary" icon={<Download className="size-4" />} onClick={exportXlsx} disabled={!rows.length}>
+            Excel<span className="hidden sm:inline"> ექსპორტი</span>
           </Button>
         }
       />
 
       <Card className="mb-6 p-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Field label="დან">
             <DatePicker value={from} max={to} onChange={setFrom} />
           </Field>
           <Field label="მდე">
             <DatePicker value={to} min={from} onChange={setTo} />
           </Field>
-          <div>
+          <div className="col-span-2 sm:col-span-1">
             <Field label="კარიერი">
               <Select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
                 <option value="">ყველა კარიერი</option>
@@ -122,7 +126,7 @@ export function Reports() {
         <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent={failed ? 'bg-rose-500' : 'bg-slate-400'} />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="mt-6 grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <Card className="p-5">
           <h2 className="text-sm font-semibold text-slate-900">დეკლარირებული ტონაჟი დღეების მიხედვით</h2>
           <p className="text-xs text-slate-500">ტონა, რეისის შექმნის თარიღით</p>
@@ -165,13 +169,13 @@ export function Reports() {
               {byCarrier.map(([id, e]) => (
                 <tr key={id}>
                   <td className="px-5 py-2.5">
-                    <p className="font-medium text-slate-900">{L.carrier(id)?.name}</p>
+                    <p className="font-medium text-slate-900">{L.carrier(id)?.name ?? '—'}</p>
                     {e.failed > 0 && <p className="text-xs text-rose-600">{e.failed} შეცდომით</p>}
                   </td>
                   <td className="px-2 py-2.5 text-right tabular-nums text-slate-600">
                     {e.uploaded}/{e.n}
                   </td>
-                  <td className="px-5 py-2.5 text-right font-medium tabular-nums text-slate-900">{formatTonnes(e.t)}</td>
+                  <td className="px-5 py-2.5 text-right font-medium whitespace-nowrap tabular-nums text-slate-900">{formatTonnes(e.t)}</td>
                 </tr>
               ))}
               {!byCarrier.length && (

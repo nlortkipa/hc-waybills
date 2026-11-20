@@ -68,6 +68,12 @@ export function formatNumber(n: number, maxDecimals = 0): string {
   return (n < 0 ? '-' : '') + grouped + (dec ? ',' + dec : '')
 }
 
+/** An amount of money, always with two decimals: 2832 → "2 832,00". */
+export const formatMoney = (n: number) => {
+  const [int, dec] = Math.abs(n).toFixed(2).split('.')
+  return (n < 0 ? '-' : '') + int.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0') + ',' + dec
+}
+
 export const formatTonnes = (t: number) => `${formatNumber(t, 2)} ტ`
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -76,19 +82,6 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 
 export function initials(first: string, last: string) {
   return (first[0] ?? '') + (last[0] ?? '')
-}
-
-export function downloadCsv(filename: string, rows: (string | number)[][]) {
-  const csv = rows
-    .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
-    .join('\n')
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 /** An instant as a `datetime-local` value (`YYYY-MM-DDTHH:MM`) in Georgian time. */

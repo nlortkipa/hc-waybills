@@ -10,7 +10,7 @@ import { Ban, ChevronDown, ChevronRight, ChevronUp, Pencil, Plus, Search, Stamp,
 import { Button, Field, Input, Select } from './ui'
 import { bareCls, compoundCls, invalidCls } from './fieldStyles'
 import { OptionRow } from './pickers'
-import { active, cx, uid } from '../lib/util'
+import { active, cx, uid, formatMoney } from '../lib/util'
 import { akcizUnit, itemAmount, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { Database, ShipmentItem } from '../types'
 import type { NewRouteGood } from '../api'
@@ -125,7 +125,7 @@ export function fromDrafts(d: Database, goods: GoodDraft[]): NewRouteGood[] {
 /** A line's number, as on the waybill. */
 const LineNo = ({ n }: { n: number }) => <span className="grid size-6 shrink-0 place-items-center rounded-full bg-slate-500/15 text-[12px] font-semibold text-slate-600 tabular-nums">{n}</span>
 
-const money = (v: number | null) => (v != null && v >= 0 ? `${v.toFixed(2)} ₾` : '—')
+const money = (v: number | null) => (v != null && v >= 0 ? `${formatMoney(v)} ₾` : '—')
 
 export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
   const products = active(d.products)
@@ -292,7 +292,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                                   sub={
                                     <>
                                       <span className="shrink-0 tabular-nums">{x.barCode}</span>
-                                      <span className="min-w-0 truncate">{[x.unitTxt, x.price != null && `${x.price.toFixed(2)} ₾`].filter(Boolean).join(' · ')}</span>
+                                      <span className="min-w-0 truncate">{[x.unitTxt, x.price != null && `${formatMoney(x.price)} ₾`].filter(Boolean).join(' · ')}</span>
                                     </>
                                   }
                                 />

@@ -120,7 +120,14 @@ export function Layout({ children }: { children: ReactNode }) {
   }, [])
   useEffect(() => {
     window.scrollTo(0, 0)
+    setMenuOpen(false)
   }, [loc.pathname])
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuOpen])
 
   return (
     <div className="min-h-full lg:pl-[260px]">

@@ -9,7 +9,7 @@
 
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Noto Sans Georgian Variable', 'Noto Sans Georgian', 'Helvetica Neue', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, 'JetBrains Mono', monospace;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, 'Cascadia Mono', Consolas, 'Roboto Mono', 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono', monospace;
 
   /* Surfaces */
   --color-canvas: var(--ios-canvas); /* systemGroupedBackground */
@@ -286,6 +286,14 @@ input[type='number']::-webkit-outer-spin-button {
 }
 
 /* Safe areas for Android/iOS edge-to-edge */
+/* Horizontal scrollers (chip rows on phones): no scroll bar. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .pt-safe {
   padding-top: env(safe-area-inset-top);
 }

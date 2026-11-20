@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom'
 import { rsWaybills, type RsWaybillDetail } from '../api'
 import { Button } from '../components/ui'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
-import { formatDateTime, formatNumber } from '../lib/util'
+import { formatDateTime, formatNumber, formatMoney } from '../lib/util'
 
 /**
  * A waybill as RS.ge has it now, laid out for paper (A4): what the driver carries and the receiver
@@ -102,7 +102,7 @@ export function PrintWaybill() {
               <td className={cell}>
                 <p className="font-semibold">ტრანსპორტირების ღირებულება</p>
                 <p>
-                  {w.transportCost.toFixed(2)} ₾{w.transportCost > 0 && ` · იხდის ${w.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`}
+                  {formatMoney(w.transportCost)} ₾{w.transportCost > 0 && ` · იხდის ${w.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`}
                 </p>
               </td>
             </tr>
@@ -129,8 +129,8 @@ export function PrintWaybill() {
                 <td className={`${cell} font-mono`}>{g.barCode}</td>
                 <td className={cell}>{g.unitTxt}</td>
                 <td className={`${cell} text-right tabular-nums`}>{formatNumber(g.quantity, 3)}</td>
-                <td className={`${cell} text-right tabular-nums`}>{g.price.toFixed(2)}</td>
-                <td className={`${cell} text-right tabular-nums`}>{g.amount.toFixed(2)}</td>
+                <td className={`${cell} text-right tabular-nums`}>{formatMoney(g.price)}</td>
+                <td className={`${cell} text-right tabular-nums`}>{formatMoney(g.amount)}</td>
               </tr>
             ))}
             <tr className="font-semibold">
@@ -139,7 +139,7 @@ export function PrintWaybill() {
               </td>
               <td className={`${cell} text-right tabular-nums`}>{formatNumber(w.quantity, 3)}</td>
               <td className={cell} />
-              <td className={`${cell} text-right tabular-nums`}>{w.fullAmount.toFixed(2)} ₾</td>
+              <td className={`${cell} text-right tabular-nums`}>{formatMoney(w.fullAmount)} ₾</td>
             </tr>
           </tbody>
         </table>

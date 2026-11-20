@@ -295,7 +295,7 @@ export function Avatar({ text, className }: { text: string; className?: string }
 /** Filter pills that wrap onto the next line when they don't fit (never scroll sideways). */
 export function FilterChips<T extends string>({ value, onChange, options, className }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; icon?: ReactNode; count?: number }[]; className?: string }) {
   return (
-    <div className={cx('flex flex-wrap gap-2', className)} role="tablist">
+    <div className={cx('no-scrollbar -my-1 flex gap-2 overflow-x-auto py-1 sm:flex-wrap sm:overflow-visible', className)} role="tablist">
       {options.map((o) => {
         const on = value === o.value
         return (
@@ -305,7 +305,7 @@ export function FilterChips<T extends string>({ value, onChange, options, classN
             role="tab"
             aria-selected={on}
             onClick={() => onChange(o.value)}
-            className={cx('pressable flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[13px] whitespace-nowrap transition-colors [&>svg]:size-4', on ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill')}
+            className={cx('pressable flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] whitespace-nowrap transition-colors [&>svg]:size-4', on ? 'bg-brand-600 font-semibold text-white' : 'bg-surface text-slate-900 hover:bg-fill')}
           >
             {o.icon}
             {o.label}

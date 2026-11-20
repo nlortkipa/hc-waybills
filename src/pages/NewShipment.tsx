@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
 import { Button, Card, EmptyState, Field, PageHeader, Select } from '../components/ui'
 import { OptionRow } from '../components/pickers'
-import { formatDateTime, formatNumber } from '../lib/util'
+import { formatDateTime, formatNumber, formatMoney } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
 import { editable, itemAmount, rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
@@ -243,7 +243,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
               {goods.length ? goods.map((g) => <Row key={g.barCode} k={g.name} v={`${formatNumber(g.quantity, 3)}${g.unitTxt ? ` ${g.unitTxt}` : ''}`} />) : <Row k="პროდუქტი" />}
               {goods.length > 1 && <Row k="სულ" v={formatNumber(total, 3)} />}
-              <Row k="თანხა" v={goods.length ? `${amount.toFixed(2)} ₾` : undefined} />
+              <Row k="თანხა" v={goods.length ? `${formatMoney(amount)} ₾` : undefined} />
             </dl>
           </Card>
           {!editing && (
@@ -281,7 +281,7 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
   const { carrier, start, end } = routeAddresses(d.carriers, r)
   // Everything else the waybill carries, as label: value lines (the transport type is always საავტომობილო).
   const details: [string, string][] = [
-    ...(r.transportCost ? [['ტრანსპორტირების ღირებულება', `${r.transportCost.toFixed(2)} ₾`] as [string, string]] : []),
+    ...(r.transportCost ? [['ტრანსპორტირების ღირებულება', `${formatMoney(r.transportCost)} ₾`] as [string, string]] : []),
     ...(r.comment ? [['კომენტარი', r.comment] as [string, string]] : []),
   ]
   const goods = r.goods ?? []
@@ -308,9 +308,9 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
                 <span className={muted}>
                   {formatNumber(g.quantity, 3)}
                   {g.unitTxt ? ` ${g.unitTxt}` : ''}
-                  {g.price ? ` × ${g.price.toFixed(2)}` : ''}
+                  {g.price ? ` × ${formatMoney(g.price)}` : ''}
                 </span>
-                {g.price ? <span className="ml-1.5 font-semibold">{itemAmount(g).toFixed(2)} ₾</span> : null}
+                {g.price ? <span className="ml-1.5 font-semibold">{formatMoney(itemAmount(g))} ₾</span> : null}
               </span>
             </span>
           ))}

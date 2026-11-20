@@ -77,7 +77,7 @@ export function Shipments() {
           </Select>
         )}
       </div>
-      <FilterChips className="mb-4" value={f} onChange={setF} options={filters.map((x) => ({ value: x.key, label: x.label }))} />
+      <FilterChips className="-mx-4 mb-4 px-4 sm:mx-0 sm:px-0" value={f} onChange={setF} options={filters.map((x) => ({ value: x.key, label: x.label }))} />
 
       <Card className="overflow-hidden">
         {rows.length ? (

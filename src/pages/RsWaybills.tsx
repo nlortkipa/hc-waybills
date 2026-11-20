@@ -6,7 +6,8 @@ import { useDb } from '../api/store'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, FilterChips, Input, Modal, PageHeader, RefreshButton, Segmented } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
-import { downloadCsv, formatDateTime, formatNumber, tbilisiStamp } from '../lib/util'
+import { formatDateTime, formatNumber, tbilisiStamp, formatMoney } from '../lib/util'
+import { downloadXlsx } from '../lib/xlsx'
 import { useUser } from '../session'
 import type { RsListWaybill } from '../types'
 import { ActivateModal, CloseModal, InvoiceModal } from './ShipmentDetail'
@@ -42,6 +43,7 @@ const statusOf = (n: number) => RS_STATUS[n] ?? { label: String(n), tone: 'gray'
 export function RsWaybills() {
   const user = useUser()
   const d = useDb()
+  const toast = useToast()
   const [side, setSide] = useState<Side>('issued')
   const [period, setPeriod] = useState<Period>('3')
   const [status, setStatus] = useState<StatusFilter>('all')
@@ -91,8 +93,8 @@ export function RsWaybills() {
   const total = shown.reduce((a, r) => a + (r.status >= 0 ? r.fullAmount : 0), 0)
   const party = (r: RsListWaybill) => (side === 'issued' ? { name: r.buyerName, tin: r.buyerTin } : { name: r.sellerName, tin: r.sellerTin })
 
-  const exportCsv = () =>
-    downloadCsv(`rs-${side}-${tbilisiStamp(new Date().toISOString()).slice(0, 10)}.csv`, [
+  const exportXlsx = async () => {
+    const err = await downloadXlsx(`rs-${side === 'issued' ? 'gacemuli' : 'migebuli'}-${tbilisiStamp(new Date().toISOString()).slice(0, 10)}.xlsx`, [
       ['ნომერი', 'ტიპი', 'სტატუსი', 'შექმნა', 'გააქტიურება', side === 'issued' ? 'მყიდველი' : 'გამყიდველი', 'ს/ნ', 'საიდან', 'სად', 'მძღოლი', 'მანქანა', 'თანხა', 'კომენტარი'],
       ...shown.map((r) => [
         r.number,
@@ -109,7 +111,9 @@ export function RsWaybills() {
         r.fullAmount,
         r.comment,
       ]),
-    ])
+    ], side === 'issued' ? 'გაცემული' : 'მიღებული')
+    if (err) toast('error', err)
+  }
 
   return (
     <>
@@ -117,8 +121,8 @@ export function RsWaybills() {
         title="RS.ge ზედნადებები"
         actions={
           <>
-            <Button variant="secondary" size="sm" icon={<Download className="size-3.5" />} onClick={exportCsv} disabled={!shown.length}>
-              ექსპორტი
+            <Button variant="secondary" size="sm" icon={<Download className="size-3.5" />} onClick={() => void exportXlsx()} disabled={!shown.length}>
+              Excel
             </Button>
             <RefreshButton busy={loading} onClick={() => void load()} disabled={!connected} />
           </>
@@ -146,7 +150,7 @@ export function RsWaybills() {
               <Segmented value={period} onChange={setPeriod} options={PERIODS} />
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <FilterChips value={status} onChange={setStatus} options={STATUSES} />
+              <FilterChips className="-mx-4 w-[calc(100%+2rem)] px-4 sm:mx-0 sm:w-auto sm:px-0" value={status} onChange={setStatus} options={STATUSES} />
               <div className="relative w-full min-w-48 sm:w-auto sm:flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ნომერი, კომპანია, მანქანა, მისამართი…" className="pl-9" />
@@ -154,7 +158,7 @@ export function RsWaybills() {
             </div>
             {rows && (
               <p className="text-xs text-slate-500">
-                {shown.length} ზედნადები{shown.length !== rows.length && ` (სულ ${rows.length})`} · {formatNumber(total, 2)} ₾
+                {shown.length} ზედნადები{shown.length !== rows.length && ` (სულ ${rows.length})`} · {formatMoney(total)} ₾
               </p>
             )}
           </div>
@@ -199,7 +203,7 @@ export function RsWaybills() {
                           <p className="truncate text-slate-500">→ {r.endAddress || '—'}</p>
                         </td>
                         <td className="px-3 py-2.5 font-mono text-[13px] text-slate-700">{r.carNumber || '—'}</td>
-                        <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums text-slate-800">{r.fullAmount.toFixed(2)} ₾</td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums text-slate-800">{formatMoney(r.fullAmount)} ₾</td>
                         <td className="px-3 py-2.5">
                           <div className="flex flex-wrap gap-1">
                             <Badge tone={statusOf(r.status).tone} dot>
@@ -235,7 +239,7 @@ export function RsWaybills() {
                       </div>
                       <p className="mt-1.5 truncate text-[13px] text-slate-700">{party(r).name || party(r).tin || '—'}</p>
                       <p className="truncate text-[13px] text-slate-500">
-                        {r.endAddress || r.startAddress || '—'} · {r.carNumber || '—'} · {r.fullAmount.toFixed(2)} ₾
+                        {r.endAddress || r.startAddress || '—'} · {r.carNumber || '—'} · {formatMoney(r.fullAmount)} ₾
                       </p>
                     </button>
                   </li>
@@ -365,7 +369,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
               <Item k="ტრანსპორტირების დაწყება" v={w.beginAt && formatDateTime(w.beginAt)} />
               {w.deliveredAt && <Item k="მიწოდება" v={formatDateTime(w.deliveredAt)} />}
               {w.closedAt && <Item k={w.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(w.closedAt)} />}
-              {w.transportCost > 0 && <Item k="ტრანსპორტირება" v={`${w.transportCost.toFixed(2)} ₾`} />}
+              {w.transportCost > 0 && <Item k="ტრანსპორტირება" v={`${formatMoney(w.transportCost)} ₾`} />}
               {w.comment && <Item k="კომენტარი" v={w.comment} />}
             </dl>
 
@@ -385,13 +389,13 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                       <td className="px-3 py-2">
                         <p className="text-slate-900">{g.name}</p>
                         <p className="font-mono text-xs text-slate-400">{g.barCode}</p>
-                        <p className="text-xs text-slate-500 sm:hidden">{g.price.toFixed(2)} ₾ / {g.unitTxt}</p>
+                        <p className="text-xs text-slate-500 sm:hidden">{formatMoney(g.price)} ₾ / {g.unitTxt}</p>
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums">
                         {formatNumber(g.quantity, 3)} {g.unitTxt}
                       </td>
-                      <td className="hidden px-3 py-2 text-right tabular-nums sm:table-cell">{g.price.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{g.amount.toFixed(2)}</td>
+                      <td className="hidden px-3 py-2 text-right tabular-nums sm:table-cell">{formatMoney(g.price)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatMoney(g.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -400,7 +404,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                     <td className="px-3 py-2">სულ</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(w.quantity, 3)}</td>
                     <td className="hidden sm:table-cell" />
-                    <td className="px-3 py-2 text-right tabular-nums">{w.fullAmount.toFixed(2)} ₾</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatMoney(w.fullAmount)} ₾</td>
                   </tr>
                 </tfoot>
               </table>

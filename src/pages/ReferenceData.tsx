@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx, phoneKey } from '../lib/util'
+import { active, cx, phoneKey, formatMoney } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { goodsText, routeAddresses, routeLabel } from '../lib/route'
@@ -60,8 +60,8 @@ const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
 const vPrice = (v: string) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი')
-/** A product's unit price as RS.ge shows it: 10 → '10.00'. */
-const fmtPrice = (v?: string) => (Number(v) || 0).toFixed(2)
+/** A product's unit price as RS.ge shows it: 10 → '10,00'. */
+const fmtPrice = (v?: string) => formatMoney(Number(v) || 0)
 const vatLabel = (v?: string) => RS_VAT_TYPES.find((x) => String(x.value) === (v || '0'))?.label ?? '—'
 
 /** User records carry the operator's carrier ids. */
@@ -309,7 +309,7 @@ export function ReferenceData() {
       />
 
       <FilterChips
-        className="mb-4"
+        className="-mx-4 mb-4 px-4 sm:mx-0 sm:px-0"
         value={tabKey}
         onChange={(k) => {
           setTabKey(k)
