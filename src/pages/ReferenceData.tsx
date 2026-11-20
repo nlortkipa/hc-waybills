@@ -1,6 +1,6 @@
-import { AlertTriangle, Building2, Check, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { products, refs, trucks, type RefCollection } from '../api'
+import { AlertTriangle, Building2, Check, CircleCheck, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
@@ -159,9 +159,8 @@ const TABS: TabDef[] = [
     singular: 'მძღოლის',
     icon: UserRound,
     fields: [
-      { key: 'fullName', label: 'სახელი და გვარი', validate: vAnyName },
+      // The number comes first: a Georgian one fills in the name from RS.ge's register.
       { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true, inputMode: 'numeric' },
-      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       {
         key: 'citizenship',
         label: 'მოქალაქეობა',
@@ -171,6 +170,8 @@ const TABS: TabDef[] = [
           { value: 'foreign', label: 'უცხოელი' },
         ],
       },
+      { key: 'fullName', label: 'სახელი და გვარი', validate: vAnyName },
+      { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
     ],
     title: (r) => `${r.firstName} ${r.lastName}`,
     subtitle: (r) => `${fmtPhone(r.phone!)} · ${r.personalId}${r.citizenship === 'foreign' ? ' · უცხოელი' : ''}`,
@@ -574,6 +575,21 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const [saveError, setSaveError] = useState('')
   const isNew = !rec.id
 
+  // A Georgian driver's number is looked up on RS.ge as it is typed: the name it has fills the name
+  // field (while that is empty or still holds an earlier fill), and a number it doesn't know can't be saved.
+  const isDriver = tab.key === 'drivers'
+  const pid = (form.personalId ?? '').trim()
+  const lookup = useRsName(isDriver && form.citizenship !== 'foreign' ? pid : '')
+  const autoName = useRef('')
+  useEffect(() => {
+    if (lookup?.state !== 'found') return
+    const name = lookup.name!
+    setR((x) => (!x.fullName?.trim() || x.fullName === autoName.current ? { ...x, fullName: name } : x))
+    setErrors((x) => ({ ...x, fullName: '' }))
+    autoName.current = name
+  }, [lookup])
+  const pidMissing = lookup?.state === 'missing' ? 'RS.ge-ს რეესტრში ვერ მოიძებნა' : ''
+
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
     const r = form
@@ -590,6 +606,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     }
     if (pickCarriers && !carrierIds.length) errs.carrierIds = liveCarriers.length ? 'მონიშნე მინიმუმ ერთი კარიერი' : 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
     if (isRoute) Object.assign(errs, checkGoods(goods))
+    if (pidMissing && !errs.personalId) errs.personalId = pidMissing
     setErrors(errs)
     setSaveError('')
     if (Object.keys(errs).length) return
@@ -638,7 +655,11 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     const rich = opts.some((o) => o.icon)
     return (
       <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-        <Field label={f.label} error={errors[f.key]}>
+        <Field
+          label={f.label}
+          error={errors[f.key] || (f.key === 'personalId' && isDriver ? pidMissing : '')}
+          hint={isDriver && f.key === 'fullName' && autoName.current && r.fullName === autoName.current ? 'შეივსო RS.ge-დან — შეგიძლია შეცვალო' : undefined}
+        >
           {f.type === 'select' ? (
             <Select rich={rich} searchable={rich && opts.length > 5} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
               {opts.map((o) => (
@@ -651,14 +672,17 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
             <Input
               type={f.type ?? 'text'}
               value={r[f.key] ?? ''}
-              placeholder={f.placeholder}
+              placeholder={isDriver && f.key === 'fullName' && r.citizenship !== 'foreign' ? 'შეივსება პირადი ნომრით' : f.placeholder}
               inputMode={f.inputMode}
               className={f.mono ? 'font-mono' : undefined}
-              invalid={!!errors[f.key]}
+              invalid={!!errors[f.key] || (f.key === 'personalId' && isDriver && !!pidMissing)}
               onChange={(e) => setField(f.key, e.target.value)}
             />
           )}
         </Field>
+        {isDriver && f.key === 'personalId' && !errors.personalId && lookup && lookup.state !== 'missing' && (
+          <RsNameLine lookup={lookup} current={r.fullName ?? ''} onUse={(name) => setField('fullName', name)} />
+        )}
         {f.key === 'carrierId' && routeStart !== undefined && (
           <p className="mt-1.5 px-1 text-sm">
             <span className="text-slate-500">დაწყების მისამართი: </span>
@@ -719,6 +743,62 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         <button type="submit" className="hidden" />
       </form>
     </Modal>
+  )
+}
+
+type NameLookup = { state: 'loading' | 'found' | 'missing' | 'error'; name?: string; error?: string }
+
+/** Answers already read, so retyping a number doesn't ask RS.ge again. */
+const rsNames = new Map<string, string>()
+
+/** What RS.ge's register says about an 11-digit personal number; null for anything else. */
+function useRsName(pid: string): NameLookup | null {
+  const [res, setRes] = useState<NameLookup | null>(null)
+  useEffect(() => {
+    if (!/^\d{11}$/.test(pid)) return setRes(null)
+    const known = rsNames.get(pid)
+    if (known !== undefined) return setRes({ state: known ? 'found' : 'missing', name: known })
+    let live = true
+    setRes({ state: 'loading' })
+    const t = setTimeout(() => {
+      rsSettings.nameOf(pid).then(
+        (r) => {
+          rsNames.set(pid, r.name)
+          if (live) setRes({ state: r.name ? 'found' : 'missing', name: r.name })
+        },
+        (e: Error) => live && setRes({ state: 'error', error: e.message }),
+      )
+    }, 250)
+    return () => {
+      live = false
+      clearTimeout(t)
+    }
+  }, [pid])
+  return res
+}
+
+/** Below a driver's personal number: the lookup in progress, the name RS.ge has (with a button to use it), or why it failed. */
+function RsNameLine({ lookup, current, onUse }: { lookup: NameLookup; current: string; onUse: (name: string) => void }) {
+  if (lookup.state === 'loading')
+    return (
+      <p className="mt-1 ml-1 flex items-center gap-1.5 text-xs text-slate-500">
+        <Loader2 className="size-3.5 animate-spin" /> RS.ge-ზე მოწმდება…
+      </p>
+    )
+  if (lookup.state === 'error') return <p className="mt-1 ml-1 text-xs text-amber-700">RS.ge-ზე ვერ შემოწმდა: {lookup.error}</p>
+  const name = lookup.name!
+  return (
+    <p className="mt-1 ml-1 flex flex-wrap items-center gap-x-1.5 text-xs text-emerald-700">
+      <CircleCheck className="size-3.5 shrink-0" />
+      <span>
+        RS.ge: <b className="font-medium">{name}</b>
+      </span>
+      {current.trim() !== name && (
+        <button type="button" onClick={() => onUse(name)} className="font-medium text-brand-600 hover:underline">
+          სახელად ჩასმა
+        </button>
+      )}
+    </p>
   )
 }
 

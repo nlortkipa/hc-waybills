@@ -147,6 +147,10 @@ export const rsSettings = {
   disconnect() {
     return call('DELETE', '/api/rs/connection')
   },
+  /** The name RS.ge's register has for a personal number or tax code; '' when it has none. */
+  nameOf(tin: string) {
+    return api<{ tin: string; name: string }>('GET', `/api/rs/name/${tin}`)
+  },
   /** Reads the changes made on RS.ge now instead of waiting for the background sync. */
   syncNow() {
     return call('POST', '/api/rs/sync')

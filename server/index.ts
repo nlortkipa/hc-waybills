@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, clearProducts, clearTrucks, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, clearProducts, clearTrucks, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -63,6 +63,7 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
   ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
   ['POST', /^\/api\/rs\/sync$/, ({ user }) => syncRsNow(user)],
+  ['GET', /^\/api\/rs\/name\/(\d+)$/, ({ params, user }) => rsTinName(params[0], user)],
   ['PUT', /^\/api\/sms$/, ({ body, user }) => connectSms(body, user)],
   ['DELETE', /^\/api\/sms$/, ({ user }) => disconnectSms(user)],
   ['POST', /^\/api\/sms\/test$/, ({ body, user }) => testSms(body, user)],

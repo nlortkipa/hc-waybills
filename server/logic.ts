@@ -328,12 +328,14 @@ export const refs = {
       const was = prev as Driver | undefined
       // RS.ge checks the driver on every waybill: a Georgian number must be in its register
       // (code -1014) and a registered number may not be sent as foreign (code -1065). Check it now,
-      // not at the first upload. Skipped while RS.ge isn't connected.
-      if (storedCreds() && (!was || was.personalId.trim() !== x.personalId || (was.citizenship ?? 'GE') !== x.citizenship)) {
-        const name = await rsName(x.personalId)
-        if (x.citizenship === 'GE' && !name) fail('ეს პირადი ნომერი RS.ge-ს რეესტრში ვერ მოიძებნა')
-        if (x.citizenship === 'foreign' && name) fail('ეს პირადი ნომერი საქართველოს რეესტრშია — აირჩიე „საქართველოს მოქალაქე“')
+      // not at the first upload. A Georgian number can't be saved unchecked, so it needs RS.ge
+      // connected; a foreign one is checked only while it is.
+      const changed = !was || was.personalId.trim() !== x.personalId || (was.citizenship ?? 'GE') !== x.citizenship
+      if (changed && x.citizenship === 'GE') {
+        if (!storedCreds()) fail('ქართველი მძღოლის პირადი ნომერი RS.ge-ზე მოწმდება — ჯერ დაუკავშირდი RS.ge-ს')
+        if (!(await rsName(x.personalId))) fail('ეს პირადი ნომერი RS.ge-ს რეესტრში ვერ მოიძებნა')
       }
+      if (changed && x.citizenship === 'foreign' && storedCreds() && (await rsName(x.personalId))) fail('ეს პირადი ნომერი საქართველოს რეესტრშია — აირჩიე „საქართველოს მოქალაქე“')
     }
     if (col === 'carriers') {
       const c = rec as Carrier
@@ -646,6 +648,13 @@ const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFi
 async function rsName(tin: string) {
   const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
   return rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
+}
+
+/** Name RS.ge's register has for a personal number or tax code ('' when none), for filling in forms. */
+export async function rsTinName(tin: string, user: User) {
+  requireAdmin(user)
+  if (!/^\d{9}$|^\d{11}$/.test(tin)) fail('ნომერი უნდა იყოს 9 ან 11 ციფრი')
+  return { tin, name: (await rsName(tin)).trim() }
 }
 
 /**
