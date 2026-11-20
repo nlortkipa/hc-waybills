@@ -5,7 +5,7 @@
 import { useEffect } from 'react'
 import { canUseCarrier } from '../lib/route'
 import { active, shipmentUses } from '../lib/util'
-import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, Shipment, ShipmentItem, ShipmentWaybill, User } from '../types'
+import type { Carrier, Database, RsListWaybill, RsRemoteWaybill, Shipment, ShipmentItem, User } from '../types'
 import { api, getToken, setToken } from './client'
 import { db, refresh } from './store'
 
@@ -147,10 +147,6 @@ export const rsSettings = {
   syncNow() {
     return call('POST', '/api/rs/sync')
   },
-  /** Taxpayer name for a tax ID / personal number, from RS.ge (stored service user). '' for a foreign number RS.ge doesn't know. */
-  nameFromTin(tin: string, foreign = false) {
-    return api<{ name: string }>('POST', '/api/rs/name', { tin, foreign })
-  },
 }
 
 /* ------------------------------ SMS ------------------------------ */
@@ -187,20 +183,14 @@ export function visibleShipments(d: Database, user: User): Shipment[] {
   return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-/** A goods line as the operator wrote it. */
-export type NewShipmentItem = Omit<ShipmentItem, 'aTitle'>
+/** A goods line of a route, as the admin wrote it. */
+export type NewRouteGood = Omit<ShipmentItem, 'aTitle'>
 
-/** Waybill options sent with a shipment; `beginAt` '' or missing = start when activated. */
-export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string }
-
+/** What an operator picks for a shipment: the goods and the waybill's options come from the route. */
 export interface NewShipmentInput {
-  carrierId: string
   routeId: string
-  /** '' for a waybill without transport (type 3). */
   driverId: string
   truckId: string
-  items: NewShipmentItem[]
-  waybill?: WaybillInput
   /** Save on RS.ge without activating. */
   draft?: boolean
 }

@@ -1,7 +1,8 @@
 /*
- * The goods lines of a shipment, as the operator writes them: bar code, name and unit typed in (or
- * filled from the RS.ge product list with the search button, and then still editable; nothing is added
- * to RS.ge's list), plus the price, VAT type, quantity and optional additional quantity.
+ * The goods lines of a route, as the admin writes them: bar code, name and unit typed in (or filled
+ * from the RS.ge product list with the search button, and then still editable; nothing is added to
+ * RS.ge's list), plus the price, VAT type, quantity and optional additional quantity. Every shipment
+ * on the route carries them as they are.
  */
 import { Ban, Package, Plus, Search, Stamp, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
@@ -9,7 +10,7 @@ import { OptionRow } from './pickers'
 import { active, cx, uid } from '../lib/util'
 import { akcizUnit, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { Database, ShipmentItem } from '../types'
-import type { NewShipmentItem } from '../api'
+import type { NewRouteGood } from '../api'
 
 /** A goods line in the form: every value as typed. */
 export interface GoodDraft {
@@ -74,7 +75,7 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
     const code = g.barCode.trim().toLowerCase()
     // RS.ge requires a bar code, a name and a unit on every goods line.
     if (!code) e[at('barCode')] = 'სავალდებულო ველი'
-    else if (seen.has(code)) e[at('barCode')] = 'ეს შტრიხკოდი ზედნადებზე უკვე არის'
+    else if (seen.has(code)) e[at('barCode')] = 'ეს შტრიხკოდი მარშრუტზე უკვე არის'
     seen.add(code)
     if (!g.name.trim()) e[at('name')] = 'სავალდებულო ველი'
     if (Number(g.unitId) === RS_UNIT_OTHER && !g.unitTxt.trim()) e[at('unitTxt')] = 'სავალდებულო ველი'
@@ -90,7 +91,7 @@ export function checkGoods(goods: GoodDraft[]): Record<string, string> {
 }
 
 /** The lines as the server takes them. Call after checkGoods passed. */
-export function fromDrafts(d: Database, goods: GoodDraft[]): NewShipmentItem[] {
+export function fromDrafts(d: Database, goods: GoodDraft[]): NewRouteGood[] {
   const units = rsUnits(d.rs)
   return goods.map((g) => {
     const a = akcizOf(d, g)
@@ -110,15 +111,7 @@ export function fromDrafts(d: Database, goods: GoodDraft[]): NewShipmentItem[] {
   })
 }
 
-/** What the summary shows for a line: its quantity when it is a valid one. */
-export const draftLine = (d: Database, g: GoodDraft) => {
-  const a = akcizOf(d, g)
-  const q = numOf(g.quantity)
-  const price = numOf(g.price)
-  return { key: g.key, name: g.name.trim(), unit: a ? akcizUnit(d.rs, a).unitTxt : g.unitTxt, quantity: q && q > 0 ? q : null, price: price != null && price >= 0 ? price : null }
-}
-
-export function ShipmentGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
+export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
   const products = active(d.products)
   const units = rsUnits(d.rs)
   const set = (key: string, patch: Partial<GoodDraft>) => {

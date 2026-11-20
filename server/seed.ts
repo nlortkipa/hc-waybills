@@ -2,7 +2,7 @@ import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 27
+export const DB_VERSION = 28
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -48,8 +48,10 @@ type V22Route = Omit<CarrierRoute, 'goods'> & { productIds: string[] }
 type V22Item = Omit<ShipmentItem, 'lineId' | 'price' | 'vatType'>
 /** v23–v25: routes carried the goods lines; shipment items named the line they came from. */
 type V25Good = Omit<ShipmentItem, 'quantity'> & { id: string; productId: string; quantity?: number }
-type V25Route = CarrierRoute & { goods: V25Good[] }
+type V25Route = V27Route & { goods: V25Good[] }
 type V25Item = ShipmentItem & { lineId?: string; productId?: string }
+/** Before v28: routes had their own waybill type and buyer, and (before v27) goods lines of their own shape. */
+type V27Route = Omit<CarrierRoute, 'goods'> & { waybillType?: number; buyerTin?: string; buyerName?: string; buyerForeign?: boolean }
 /** Before v23 price and VAT type were global settings. */
 type V22Rs = RsSettings & { price?: number; vatType?: 0 | 1 | 2 }
 
@@ -209,22 +211,22 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     const product = <T extends { productId: string; barCode: string }>(g: T): T => ({ ...g, productId: g.productId && codeOf(g.productId) === g.barCode ? g.barCode : '' })
     const routes = (d.routes as V25Route[]).map((r) => ({ ...r, goods: r.goods.map(product) }))
     const shipments = d.shipments.map((s) => storedShipment({ ...s, items: ((s.items ?? []) as V25Item[]).map((i) => product({ ...i, productId: i.productId ?? '' })) }))
-    d = { ...d, version: 24, routes, shipments }
+    d = { ...d, version: 24, routes: routes as unknown as CarrierRoute[], shipments }
   }
   // v24 → v25: the quantity prefilled on new shipments is set per goods line of a route, not once in
   // the settings. Every line takes the settings' old value.
   if (d.version === 24) {
     const { quantity = 0, ...rs } = d.rs as RsSettings & { quantity?: number }
     const routes = (d.routes as V25Route[]).map((r) => ({ ...r, goods: r.goods.map((g) => (quantity > 0 ? { ...g, quantity } : g)) }))
-    d = { ...d, version: 25, rs, routes }
+    d = { ...d, version: 25, rs, routes: routes as unknown as CarrierRoute[] }
   }
   // v25 → v26: the buyer and transport cost are per waybill, not in the settings. A settings buyer
   // moves onto the routes that had none (and weren't შიდა გადაზიდვა), so their waybills keep it.
   if (d.version === 25) {
     const { buyerTin = '', buyerName = '', buyerForeign = false, transportCost: _c, ...rs } = d.rs as RsSettings & { buyerTin?: string; buyerName?: string; buyerForeign?: boolean; transportCost?: number }
     const own = buyerTin && buyerTin !== rs.sellerTin
-    const routes = d.routes.map((r) => (own && !r.buyerTin && r.waybillType !== 1 ? { ...r, buyerTin, buyerName, ...(buyerForeign && { buyerForeign }) } : r))
-    d = { ...d, version: 26, rs, routes }
+    const routes = (d.routes as unknown as V27Route[]).map((r) => (own && !r.buyerTin && r.waybillType !== 1 ? { ...r, buyerTin, buyerName, ...(buyerForeign && { buyerForeign }) } : r))
+    d = { ...d, version: 26, rs, routes: routes as unknown as CarrierRoute[] }
   }
   // v26 → v27: the RS.ge settings keep only the service user: everything on a waybill is set per
   // shipment, and the goods are chosen on the shipment instead of the route.
@@ -236,8 +238,8 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     const { transId = 1, transTxt = '', transporterTin = '' } = old
     const rs = { ...old } as Record<string, unknown>
     for (const k of ['buyerTin', 'buyerName', 'buyerForeign', 'transId', 'transTxt', 'transporterTin', 'transportCost', 'tranCostPayer', 'receptionInfo', 'receiverInfo', 'comment', 'unitId', 'unitTxt']) delete rs[k]
-    const oldRoutes = d.routes as V25Route[]
-    const routes: CarrierRoute[] = oldRoutes.map(({ goods: _g, ...r }) => r)
+    const oldRoutes = d.routes as unknown as V25Route[]
+    const routes = oldRoutes.map(({ goods: _g, ...r }) => r) as unknown as CarrierRoute[]
     const shipments = d.shipments.map((s) => {
       const items = (s.items as V25Item[] | undefined)?.map(({ lineId, productId: _p, ...i }) => {
         const line = lineId ? oldRoutes.find((r) => r.id === s.routeId)?.goods?.find((g) => g.id === lineId) : undefined
@@ -249,6 +251,18 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
       return { ...s, ...(items && { items }), ...(waybill && { waybill }) }
     })
     d = { ...d, version: 27, rs: rs as unknown as RsSettings, routes, shipments }
+  }
+  // v27 → v28: operators pick only the route, driver and truck; the admin sets everything else on the
+  // route, and every waybill is შიდა გადაზიდვა. Routes lose their type and buyer and get goods lines:
+  // those of the newest shipment on the route whose goods are stored here (else none: the admin sets
+  // them before the route can be picked). Shipments not on RS.ge yet keep what they would have sent.
+  if (d.version === 27) {
+    const newest = [...d.shipments].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const routes = (d.routes as unknown as V27Route[]).map(({ waybillType: _t, buyerTin: _b, buyerName: _n, buyerForeign: _f, ...r }) => {
+      const items = newest.find((s) => s.routeId === r.id && s.items?.length)?.items ?? []
+      return { ...r, goods: items.map((i) => ({ ...i })) }
+    })
+    d = { ...d, version: 28, routes }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d

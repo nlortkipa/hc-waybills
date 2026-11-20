@@ -11,7 +11,7 @@ const isConnected = (rs: RsSettings) => !!rs.su && !!rs.spSet
 
 /* ------------------------------- Screen ------------------------------- */
 
-/** RS.ge: the service user, connected once. Everything on a waybill is set per shipment. Admin only. */
+/** RS.ge: the service user, connected once. Everything else on a waybill comes from its route. Admin only. */
 export function RsSettings() {
   const d = useDb()
   const connected = isConnected(d.rs)

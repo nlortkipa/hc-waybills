@@ -16,36 +16,44 @@ export interface Carrier extends SoftDeletable {
 }
 
 /**
- * A route the admin opened for a carrier: the carrier's start address → the end address typed here.
- * Operators pick one of these for each shipment and add the goods the truck carries there.
+ * A route the admin opened for a carrier: the carrier's start address → the end address typed here,
+ * with everything its waybills carry: the goods lines (quantities included) and the transport details.
+ * Operators only pick a route, a driver and a truck; the waybill is always შიდა გადაზიდვა.
  */
-export interface CarrierRoute extends SoftDeletable {
+export interface CarrierRoute extends SoftDeletable, RouteWaybill {
   id: string
   carrierId: string
   endAddress: string
   /** ID of the scale at the end address. */
   scaleId: string
-  /** Waybill type for shipments on this route; missing = by the buyer (buyer set → 2, else 1). */
-  waybillType?: WaybillType
-  /**
-   * Buyer for shipments on this route; empty = none (შიდა გადაზიდვა). RS.ge's name when it knows the
-   * number (buyerForeign false), else the typed name.
-   */
-  buyerTin?: string
-  buyerName?: string
-  buyerForeign?: boolean
+  /** The goods lines of this route's waybills, sent as written. Empty on routes not set up yet (they can't be picked). */
+  goods: RouteGood[]
+}
+
+/** A goods line of a route: what one goods row of its waybills says, quantity included. */
+export type RouteGood = ShipmentItem
+
+/** Transport details a route's waybills carry; missing = the default (საავტომობილო, the seller pays, empty). */
+export interface RouteWaybill {
+  transId?: number
+  transTxt?: string
+  transporterTin?: string
+  transportCost?: number
+  tranCostPayer?: 1 | 2
+  receptionInfo?: string
+  receiverInfo?: string
+  comment?: string
 }
 
 /**
- * RS.ge waybill types this app writes: 1 შიდა გადაზიდვა, 2 ტრანსპორტირებით,
- * 3 ტრანსპორტირების გარეშე, 5 უკან დაბრუნება. (4 დისტრიბუცია and 6 ქვე-ზედნადები are
- * not used: a truck trip here is always one waybill.)
+ * RS.ge waybill types: 1 შიდა გადაზიდვა (the only one this app writes now), 2 ტრანსპორტირებით,
+ * 3 ტრანსპორტირების გარეშე, 5 უკან დაბრუნება (older shipments and waybills read from RS.ge).
  */
 export type WaybillType = 1 | 2 | 3 | 5
 
 /**
- * What a shipment's waybill says beyond the route, driver, truck and goods: chosen on the shipment
- * (prefilled from the route, then from the RS.ge settings) and kept, so retries and corrections send the same.
+ * What a shipment's waybill says beyond the route, driver, truck and goods: taken from the route when
+ * the shipment is made and kept, so retries and corrections send the same.
  */
 export interface ShipmentWaybill {
   type: WaybillType
@@ -70,9 +78,10 @@ export interface ShipmentWaybill {
 }
 
 /**
- * One goods line of a shipment's waybill, as the operator writes it: bar code, name and unit typed in
+ * One goods line of a waybill, as the admin writes it on the route: bar code, name and unit typed in
  * or filled from the RS.ge product list (and then still editable; nothing is added to RS.ge's list),
- * price, VAT type and quantity. Stored until the waybill is on RS.ge, then RS.ge's goods rows.
+ * price, VAT type and quantity. A shipment takes its route's lines when it is made; they are stored
+ * until the waybill is on RS.ge, then RS.ge's goods rows.
  */
 export interface ShipmentItem {
   /** W_NAME. */
@@ -123,7 +132,7 @@ export interface Truck extends SoftDeletable {
  * A product (საქონელი): one entry of the connected taxpayer's RS.ge product list (get_bar_codes /
  * save_bar_code), read from RS.ge. The bar code is its identity on RS.ge (and its id here), so it
  * can't be changed once saved. The unit price and VAT type, which RS.ge's API doesn't carry, are
- * stored here by bar code. Picking a product for a shipment's goods line fills the line with it.
+ * stored here by bar code. Picking a product for a route's goods line fills the line with it.
  */
 export interface Product extends SoftDeletable {
   /** = barCode. */
@@ -150,7 +159,7 @@ export interface User extends SoftDeletable {
   phone: string
   email: string
   role: Role
-  /** Operators work for one or more carriers (chosen per shipment) and see those carriers' shipments. */
+  /** Operators work for one or more carriers (their routes are the ones they can pick) and see those carriers' shipments. */
   carrierIds?: string[]
 }
 
@@ -170,8 +179,8 @@ export interface ShipmentEvent {
 
 /**
  * A shipment (რეისი). Stored here is only what RS.ge doesn't know: who made it for which carrier,
- * route, driver and truck, the RS.ge waybill ID, the driver's SMS and the history. What the operator
- * typed (goods, quantities, waybill options) is stored only until the waybill is on RS.ge; after that
+ * route, driver and truck, the RS.ge waybill ID, the driver's SMS and the history. What came from the
+ * route (goods, quantities, waybill options) is stored only until the waybill is on RS.ge; after that
  * RS.ge has it, and the server fills those fields from RS.ge in every view (see server/rscache.ts),
  * along with the fields marked "from RS.ge". They are missing while RS.ge's copy can't be read.
  */
@@ -182,11 +191,11 @@ export interface Shipment {
   carrierId: string
   /** The route picked (CarrierRoute.id); the addresses are resolved from it. */
   routeId: string
-  /** '' for a waybill without transport (type 3). */
+  /** '' on older waybills without transport (type 3). */
   driverId: string
-  /** '' for a waybill without transport (type 3). */
+  /** '' on older waybills without transport (type 3). */
   truckId: string
-  /** Type, buyer, start time and transport details. Stored until the waybill is on RS.ge, then from RS.ge. */
+  /** Type, buyer, start time and transport details, from the route. Stored until the waybill is on RS.ge, then from RS.ge. */
   waybill?: ShipmentWaybill
   /** Save on RS.ge without activating (შენახვა); cleared when it is activated. */
   draft?: boolean
@@ -315,7 +324,7 @@ export interface RsRefItem {
 }
 
 /**
- * RS.ge connection: the service user, set by the admin. Everything on a waybill is set per shipment.
+ * RS.ge connection: the service user, set by the admin. Everything else on a waybill comes from its route.
  * The password (sp) never leaves the server: clients get '' plus spSet.
  * Fields marked "from RS.ge" are never stored: the server reads them from RS.ge and adds them to each view.
  */

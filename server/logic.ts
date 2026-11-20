@@ -2,7 +2,7 @@
  * Business rules. Every check that used to run in the browser runs here now, so a
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
-import { canUseCarrier, resolveRoute, routeText, routeUsable } from '../src/lib/route.ts'
+import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
 import { akcizUnit, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
@@ -12,6 +12,7 @@ import type {
   Database,
   Driver,
   Product,
+  RouteWaybill,
   RsListWaybill,
   RsRemoteWaybill,
   RsSettings,
@@ -231,14 +232,14 @@ function dropCarrierRoutes(carrierId: string) {
 const MAX_GOODS = 50
 
 /**
- * The goods lines of a shipment, checked. Each is sent as written (filled from the product list or
+ * The goods lines of a route, checked. Each is sent as written (filled from the product list or
  * typed in): RS.ge requires a name, bar code and unit on every line. Price ≥ 0, VAT 0/1/2, quantity > 0.
- * A unit or excise code RS.ge no longer lists is accepted only on a line the shipment already had.
+ * A unit or excise code RS.ge no longer lists is accepted only on a line the route already had.
  */
 function parseItems(raw: unknown, prev: ShipmentItem[] = []): ShipmentItem[] {
   const rs = rsView()
   const list = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []
-  if (!list.length) fail('რეისზე მინიმუმ ერთი პროდუქტი უნდა იყოს')
+  if (!list.length) fail('დაამატე მინიმუმ ერთი პროდუქტი')
   if (list.length > MAX_GOODS) fail(`ერთ ზედნადებზე მაქსიმუმ ${MAX_GOODS} პროდუქტია`)
   const units = rsUnits(rs)
   const codes = new Set<string>()
@@ -340,23 +341,21 @@ export const refs = {
       const r = rec as CarrierRoute
       const d = db.get()
       const was = prev as CarrierRoute | undefined
-      // Only these fields are kept.
-      Object.assign(r, {
-        carrierId: str(r.carrierId),
-        endAddress: str(r.endAddress).trim(),
-        scaleId: str(r.scaleId).trim(),
-        ...(await routeWaybill(r, was)),
-      })
-      for (const k of Object.keys(r)) if (!['id', 'carrierId', 'endAddress', 'scaleId', 'waybillType', 'buyerTin', 'buyerName', 'buyerForeign'].includes(k)) delete (r as unknown as Record<string, unknown>)[k]
-      if (r.waybillType == null) delete r.waybillType
-      if (!r.buyerTin) for (const k of ['buyerTin', 'buyerName', 'buyerForeign'] as const) delete r[k]
-      const carrier = d.carriers.find((c) => c.id === r.carrierId)
+      const raw = r as unknown as Record<string, unknown>
+      const carrierId = str(r.carrierId)
+      const carrier = d.carriers.find((c) => c.id === carrierId)
       if (!carrier || carrier.deletedAt) fail('აირჩიე კარიერი')
-      if (!r.endAddress) fail('შეიყვანე დასრულების მისამართი')
-      if (!r.scaleId) fail('შეიყვანე სასწორის ID')
-      // The same address may be opened again for another buyer or waybill type. Checked only when one of
-      // these changes: routes that differed only by their goods before v26 can still be edited.
-      const key = (x: CarrierRoute) => [x.carrierId, x.endAddress.trim().toLowerCase(), x.waybillType ?? '', x.buyerTin ?? ''].join('|')
+      const endAddress = str(r.endAddress).trim()
+      if (!endAddress) fail('შეიყვანე დასრულების მისამართი')
+      const scaleId = str(r.scaleId).trim()
+      if (!scaleId) fail('შეიყვანე სასწორის ID')
+      const goods = parseItems(raw.goods, was?.goods)
+      const extras = parseRouteWaybill(raw, was)
+      // Only these fields are kept.
+      for (const k of Object.keys(raw)) if (k !== 'id') delete raw[k]
+      Object.assign(r, { carrierId, endAddress, scaleId, goods, ...extras })
+      // One route per address. Checked only when it changes: routes that differed by the buyer before v28 can still be edited.
+      const key = (x: CarrierRoute) => [x.carrierId, x.endAddress.trim().toLowerCase()].join('|')
       if ((!was || key(was) !== key(r)) && active(d.routes).some((x) => x.id !== r.id && key(x) === key(r))) fail('ეს მარშრუტი უკვე არსებობს')
     }
     db.put(col, rec as never)
@@ -385,23 +384,42 @@ export const refs = {
   },
 }
 
-/** A waybill type sent by a client: 1, 2, 3 or 5; anything else is undefined. */
-const waybillType = (v: unknown): WaybillType | undefined => ([1, 2, 3, 5] as const).find((t) => t === Number(v))
+const MAX_INFO = 250
 
 /**
- * A route's own waybill type and buyer (both optional: no type → by the buyer, no buyer → შიდა გადაზიდვა).
- * The buyer is looked up on RS.ge. Checked against what RS.ge refuses:
- * a buyer is needed on every type but შიდა გადაზიდვა (-1004), and may not be the seller (-1047).
+ * A route's transport details, checked: a transport type RS.ge lists (or the one the route already
+ * had, if RS.ge's list isn't loaded), its name for "other", a 9- or 11-digit transporter, cost ≥ 0.
+ * Only what differs from the default is kept.
  */
-async function routeWaybill(r: CarrierRoute, prev: CarrierRoute | undefined): Promise<Pick<CarrierRoute, 'waybillType' | 'buyerTin' | 'buyerName' | 'buyerForeign'>> {
+function parseRouteWaybill(x: Record<string, unknown>, prev: CarrierRoute | undefined): RouteWaybill {
   const rs = rsView()
-  const type = str(r.waybillType) ? (waybillType(r.waybillType) ?? fail('აირჩიე ზედნადების ტიპი')) : undefined
-  const tin = type === 1 ? '' : str(r.buyerTin)
-  if (tin && rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
-  const buyer = tin ? await resolveBuyer(tin, str(r.buyerName), { buyerTin: prev?.buyerTin ?? '', buyerName: prev?.buyerName ?? '', buyerForeign: !!prev?.buyerForeign }) : { buyerTin: '', buyerName: '', buyerForeign: false }
-  const effective = waybillDefaults(rs, { waybillType: type, ...buyer })
-  if (effective.type !== 1 && !effective.buyerTin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება')
-  return { waybillType: type, ...buyer }
+  const was = waybillDefaults(prev)
+  const text = (v: unknown, label: string) => {
+    const t = str(v).trim()
+    if (t.length > MAX_INFO) fail(`${label}: მაქსიმუმ ${MAX_INFO} სიმბოლო`)
+    return t
+  }
+  const transId = str(x.transId) ? Math.trunc(num(x.transId, NaN)) : RS_TRANS_CAR
+  if (!(transId > 0) || (transId !== was.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტის ტიპი')
+  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, 'ტრანსპორტის ტიპი') : ''
+  if (transId === RS_TRANS_OTHER && !transTxt) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე ტიპის დასახელება')
+  const transporterTin = str(x.transporterTin).trim()
+  if (transporterTin && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
+  const transportCost = str(x.transportCost) ? num(String(x.transportCost).replace(',', '.'), NaN) : 0
+  if (!(transportCost >= 0)) fail('ტრანსპორტირების ღირებულება უნდა იყოს 0 ან მეტი')
+  const out: RouteWaybill = {
+    transId,
+    transTxt,
+    transporterTin,
+    transportCost: Math.round(transportCost * 100) / 100,
+    tranCostPayer: Number(x.tranCostPayer) === 1 ? 1 : 2,
+    receptionInfo: text(x.receptionInfo, 'მიმწოდებლის ინფორმაცია'),
+    receiverInfo: text(x.receiverInfo, 'მიმღების ინფორმაცია'),
+    comment: text(x.comment, 'კომენტარი'),
+  }
+  const base = waybillDefaults()
+  for (const k of Object.keys(out) as (keyof RouteWaybill)[]) if (out[k] === base[k]) delete out[k]
+  return out
 }
 
 /* ------------------------------ Products ------------------------------ */
@@ -590,37 +608,10 @@ function truckRecord(id: string): string {
 
 const num = (v: unknown, fallback = 0) => (v === '' || v == null || !Number.isFinite(Number(v)) ? fallback : Number(v))
 
-/**
- * The buyer as it is stored: RS.ge's name when it knows the number, else the typed one (required).
- * If RS.ge can't be asked, an unchanged number keeps what was saved.
- */
-type Buyer = { buyerTin: string; buyerName: string; buyerForeign: boolean }
-
-async function resolveBuyer(tin: string, typedName: string, prev: Buyer): Promise<Buyer> {
-  if (!tin) return { buyerTin: '', buyerName: '', buyerForeign: false }
-  if (tin.length > 50) fail('მყიდველის ნომერი ძალიან გრძელია')
-  let rsKnown: string
-  try {
-    rsKnown = await rsName(tin)
-  } catch (e) {
-    if (tin === prev.buyerTin && prev.buyerName) return { buyerTin: tin, buyerName: prev.buyerForeign ? typedName || prev.buyerName : prev.buyerName, buyerForeign: prev.buyerForeign }
-    throw e
-  }
-  if (rsKnown) return { buyerTin: tin, buyerName: rsKnown, buyerForeign: false }
-  return { buyerTin: tin, buyerName: typedName || fail('მყიდველი RS.ge-ზე ვერ მოიძებნა — შეიყვანე დასახელება'), buyerForeign: true }
-}
-
 /** Name RS.ge has for the number, '' when it doesn't know it. Needs the stored service user. */
 async function rsName(tin: string) {
   const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
   return rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
-}
-
-/** Name of a Georgian taxpayer from RS.ge, with the stored service user. */
-async function lookupName(tin: string, who = 'გადამხდელი') {
-  const c = storedCreds() ?? fail('ჯერ დაუკავშირდი RS.ge-ს')
-  const name = await rsge.nameFromTin(c, tin).catch((e: Error) => fail(e.message, 502))
-  return name || fail(`${who} ამ ნომრით RS.ge-ზე ვერ მოიძებნა`)
 }
 
 /**
@@ -656,17 +647,6 @@ export async function disconnectRs(user: User) {
   // No account: nothing read from RS.ge stays (products, plates, waybills, the seller).
   resetRsCache()
   rsCache.reset()
-}
-
-/** Looks up a taxpayer's name by tax ID / personal number (get_name_from_tin). */
-export async function rsNameFromTin(body: { tin?: string; foreign?: boolean } | undefined, user: User) {
-  // Operators pick a shipment's buyer too.
-  if (user.role === 'report') fail('მოქმედება ხელმისაწვდომი არ არის', 403)
-  const tin = str(body?.tin)
-  // A foreign number has no fixed format, and RS.ge not knowing it is an answer, not an error ('').
-  if (body?.foreign) return { name: tin && tin.length <= 50 ? await rsName(tin) : fail('არასწორი ნომერი') }
-  if (!/^\d{9}$|^\d{11}$/.test(tin)) fail('9 ან 11 ციფრი')
-  return { name: await lookupName(tin) }
 }
 
 /* ------------------------------ SMS ------------------------------ */
@@ -720,13 +700,13 @@ const refTag = (shipmentId: string) => `HC:${shipmentId}`
 type WaybillSource = Pick<Shipment, 'id' | 'routeId' | 'driverId' | 'truckId' | 'items' | 'waybill'>
 
 /**
- * Builds the waybill for a shipment from its waybill options (type, buyer, transport details), the
- * chosen route, driver, truck and goods lines.
+ * Builds the waybill for a shipment from its waybill options (type, transport details) and goods lines,
+ * both taken from the route, and the chosen route, driver and truck.
  */
 function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
   const rs = rsView()
   const route = resolveRoute(d, s.routeId)
-  const w = shipmentWaybill(s, rs, route.route)
+  const w = shipmentWaybill(s, route.route)
   const driver = d.drivers.find((x) => x.id === s.driverId)
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const moving = !noTransport(w.type)
@@ -810,107 +790,49 @@ const noReport = (user: User) => user.role === 'report' && fail('რეპორ
 
 const running = new Set<string>()
 
-/** A goods line as the client sends it; checked by parseItems. */
-export type NewShipmentItem = Omit<ShipmentItem, 'aTitle'>
-
-/** Waybill options as the client sends them; anything left out comes from the route and the settings. */
-export type WaybillInput = Partial<Omit<ShipmentWaybill, 'beginAt'>> & { beginAt?: string | null }
-
+/** What an operator picks for a shipment: everything else comes from the route. */
 export interface NewShipmentInput {
-  carrierId: string
   routeId: string
   driverId: string
   truckId: string
-  items: NewShipmentItem[]
-  waybill?: WaybillInput
   /** Save on RS.ge without activating. */
   draft?: boolean
 }
 
-const MAX_INFO = 250
-
 /**
- * A shipment's waybill options: what the client chose, else the route's, else the settings'. The buyer
- * is looked up on RS.ge (its name wins) unless it is the one already resolved for the route.
- * `keepBegin`: a correction keeps the start RS.ge already has.
+ * Route, driver and truck of a new or edited shipment, checked, with the goods and waybill options of
+ * the route. A waybill already on RS.ge keeps its goods and options while the route stays the same (a
+ * later change to the route doesn't rewrite it); otherwise they are the route's as it is now.
  */
-async function parseWaybillInput(raw: WaybillInput | undefined, route: CarrierRoute, prev?: ShipmentWaybill): Promise<ShipmentWaybill> {
-  const rs = rsView()
-  const base = prev ?? waybillDefaults(rs, route)
-  const x = raw ?? {}
-  const type = x.type == null ? base.type : (waybillType(x.type) ?? fail('აირჩიე ზედნადების ტიპი'))
-  let buyer: Buyer = { buyerTin: '', buyerName: '', buyerForeign: false }
-  if (type !== 1) {
-    // The route's buyer when the type alone was changed and none is typed.
-    const fallback = base.buyerTin ? base : waybillDefaults(rs, { ...route, waybillType: 2 })
-    const tin = x.buyerTin == null ? fallback.buyerTin : str(x.buyerTin)
-    if (!tin) fail('ამ ტიპის ზედნადებს მყიდველი სჭირდება — ჩაწერე მყიდველის საიდენტიფიკაციო ნომერი')
-    if (tin.length > 50) fail('მყიდველის ნომერი ძალიან გრძელია')
-    if (rs.sellerTin && tin === rs.sellerTin) fail('მყიდველი გამყიდველს ემთხვევა — ასეთი ზედნადები მხოლოდ შიდა გადაზიდვაა')
-    const known = tin === fallback.buyerTin && fallback.buyerName && (!str(x.buyerName) || str(x.buyerName) === fallback.buyerName)
-    buyer = known ? { buyerTin: tin, buyerName: fallback.buyerName, buyerForeign: fallback.buyerForeign } : await resolveBuyer(tin, str(x.buyerName), fallback)
-  }
-  let beginAt: string | undefined
-  if (x.beginAt) {
-    const t = Date.parse(x.beginAt)
-    if (!Number.isFinite(t)) fail('ტრანსპორტირების დაწყების დრო არასწორია')
-    if (t < Date.now() - 5 * 60_000) fail('ტრანსპორტირების დაწყება წარსულში ვერ იქნება')
-    if (t > Date.now() + MAX_DEFER_MS - 5 * 60_000) fail('RS.ge ტრანსპორტირების დაწყებას მაქსიმუმ 3 დღით გადადების საშუალებას იძლევა')
-    // Within a couple of minutes is "now".
-    if (t > Date.now() + 2 * 60_000) beginAt = new Date(t).toISOString()
-  } else if (x.beginAt === undefined && prev?.beginAt && Date.parse(prev.beginAt) > Date.now()) beginAt = prev.beginAt
-  const transportCost = x.transportCost == null ? base.transportCost : num(x.transportCost, NaN)
-  if (!(transportCost >= 0)) fail('ტრანსპორტირების ღირებულება უნდა იყოს 0 ან მეტი')
-  const text = (v: unknown, fallback: string, label: string) => {
-    const t = v == null ? fallback : str(v)
-    if (t.length > MAX_INFO) fail(`${label}: მაქსიმუმ ${MAX_INFO} სიმბოლო`)
-    return t
-  }
-  // A transport type RS.ge lists (or the one the waybill already had, if RS.ge's list isn't loaded).
-  const transId = x.transId == null ? base.transId : Math.trunc(num(x.transId, NaN))
-  if (!(transId > 0) || (transId !== base.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტის ტიპი')
-  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, base.transTxt, 'ტრანსპორტის ტიპი') : ''
-  if (transId === RS_TRANS_OTHER && !transTxt && !noTransport(type)) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე ტიპის დასახელება')
-  const transporterTin = x.transporterTin == null ? base.transporterTin : str(x.transporterTin)
-  if (transporterTin && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
-  return {
-    type,
-    ...buyer,
-    ...(beginAt && { beginAt }),
-    transId,
-    transTxt,
-    transporterTin,
-    transportCost: Math.round(transportCost * 100) / 100,
-    tranCostPayer: x.tranCostPayer == null ? base.tranCostPayer : Number(x.tranCostPayer) === 1 ? 1 : 2,
-    receptionInfo: text(x.receptionInfo, base.receptionInfo, 'მიმწოდებლის ინფორმაცია'),
-    receiverInfo: text(x.receiverInfo, base.receiverInfo, 'მიმღების ინფორმაცია'),
-    comment: text(x.comment, base.comment, 'კომენტარი'),
-  }
-}
-
-/** Route, driver, truck, goods and waybill options of a new or edited shipment, checked. */
 async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?: Shipment) {
-  const input = { carrierId: str(body.carrierId), routeId: str(body.routeId), driverId: str(body.driverId), truckId: str(body.truckId) }
-  if (!canUseCarrier(user, input.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
   const d = db.get()
-  const carrier = d.carriers.find((c) => c.id === input.carrierId)
-  if (!carrier || carrier.deletedAt) fail('კარიერი ვერ მოიძებნა ან წაშლილია')
-  const picked = d.routes.find((x) => x.id === input.routeId && x.carrierId === input.carrierId)
-  if (!picked || !routeUsable(d.carriers, picked)) fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
-  const waybill = await parseWaybillInput(body.waybill, picked!, prev?.waybill)
+  const route = d.routes.find((x) => x.id === str(body.routeId))
+  if (!route || !routeLive(d.carriers, route)) return fail('მარშრუტი ვერ მოიძებნა ან წაშლილია')
+  if (!canUseCarrier(user, route.carrierId)) fail('ოპერატორს შეუძლია მხოლოდ მისთვის მინიჭებული კარიერების გამოყენება', 403)
+  const input = { carrierId: route.carrierId, routeId: route.id, driverId: str(body.driverId), truckId: str(body.truckId) }
+  const same = !!prev?.rsWaybillId && prev.routeId === route.id && prev.items.length > 0
+  if (!same && !route.goods?.length) fail('ამ მარშრუტზე პროდუქტები ჯერ არ არის მითითებული — მიმართე ადმინისტრატორს')
   // A driver or truck kept from before may have been deleted since; a new pick must be live.
   const usable = <T extends { id: string; deletedAt?: string }>(xs: T[], id: string, was?: string) => xs.some((x) => x.id === id && (!x.deletedAt || id === was))
-  if (noTransport(waybill.type)) {
-    input.driverId = ''
-    input.truckId = ''
-  } else {
-    if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('მძღოლი ვერ მოიძებნა ან წაშლილია')
-    // Trucks are RS.ge's car numbers (with the model and trailer stored here).
-    if (!usable(trucksView(d.trucks), input.truckId, prev?.truckId)) fail('მანქანა ვერ მოიძებნა ან წაშლილია')
-  }
-  const items = parseItems(body.items, prev?.items)
+  if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('აირჩიე მძღოლი')
+  // Trucks are RS.ge's car numbers (with the model and trailer stored here).
+  if (!usable(trucksView(d.trucks), input.truckId, prev?.truckId)) fail('აირჩიე მანქანა')
+  // Always შიდა გადაზიდვა.
+  const kept = same && prev!.waybill ? { ...prev!.waybill, type: 1 as const, buyerTin: '', buyerName: '', buyerForeign: false } : undefined
+  return { ...input, ...routeContent(route, prev, kept && { items: prev!.items, waybill: kept }) }
+}
+
+/**
+ * The goods, quantity and waybill options a shipment on this route sends: `kept` ones, else the route's
+ * as they are now. A planned start already set on the shipment stays while it is ahead.
+ */
+function routeContent(route: CarrierRoute, prev: Pick<Shipment, 'waybill'> | undefined, kept?: { items: ShipmentItem[]; waybill: ShipmentWaybill }) {
+  const items = kept?.items ?? route.goods.map((g) => ({ ...g }))
   const quantity = Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000
-  return { ...input, items, quantity, waybill }
+  const { beginAt: _b, ...rest } = kept?.waybill ?? waybillDefaults(route)
+  const beginAt = prev?.waybill?.beginAt && Date.parse(prev.waybill.beginAt) > Date.now() ? prev.waybill.beginAt : undefined
+  const waybill: ShipmentWaybill = { ...rest, ...(beginAt && { beginAt }) }
+  return { items, quantity, waybill }
 }
 
 /** The shipment's items with what was sent to RS.ge (a product may have been renamed since the shipment was made). */
@@ -1043,7 +965,7 @@ export const shipments = {
     // The start asked for is stored until the activation is done (the pipeline reads it).
     patch(
       id,
-      () => ({ draft: undefined, status: 'uploading', rs: { status: 'pending' }, waybill: { ...shipmentWaybill(s, rsView(), resolveRoute(db.get(), s.routeId).route), beginAt } }),
+      () => ({ draft: undefined, status: 'uploading', rs: { status: 'pending' }, waybill: { ...shipmentWaybill(s, resolveRoute(db.get(), s.routeId).route), beginAt } }),
       { level: 'info', message: beginAt ? `მოთხოვნილია გააქტიურება, ტრანსპორტირების დაწყება ${tbilisiTime(beginAt)}` : 'მოთხოვნილია გააქტიურება' },
     )
     void shipments.run(id)
@@ -1052,7 +974,7 @@ export const shipments = {
   /**
    * Changes a shipment. Before anything reached RS.ge only the record changes (retry sends it). A
    * draft on RS.ge is overwritten; an active waybill is corrected (კორექტირება), as on the portal: its
-   * type and start stay, the rest follows the new route, driver, truck, goods and options. The driver
+   * type and start stay, the rest follows the new route (and its goods and options), driver and truck. The driver
    * is texted again when the driver or truck changed.
    */
   async edit(id: string, body: Partial<NewShipmentInput>, user: User) {
@@ -1067,7 +989,7 @@ export const shipments = {
       fail('უცნობია, შეინახა თუ არა წინა მცდელობამ ზედნადები RS.ge-ზე — ჯერ დააჭირე „ხელახლა ცდას“')
     const active = s.status === 'uploaded'
     const onRs = !!s.rsWaybillId
-    const x = await parseShipment({ ...body, carrierId: body.carrierId ?? s.carrierId }, user, s)
+    const x = await parseShipment(body, user, s)
     if (active && s.waybill && x.waybill.type !== s.waybill.type) fail('აქტიურ ზედნადებზე ტიპს ვერ შეცვლი (RS.ge)')
     // An active waybill keeps the start RS.ge has.
     if (active) {
@@ -1389,7 +1311,11 @@ async function runPipeline(id: string) {
  */
 async function saveNew(id: string): Promise<number> {
   // With RS.ge's copy filled in: a draft deleted on the portal is saved again from what RS.ge had.
-  const s = get(id)
+  let s = get(id)
+  // Nothing reached RS.ge yet: the route's goods and options as they are now, so an admin's fix to the
+  // route applies to the retry. (Older shipments of another waybill type keep what they had.)
+  const route = db.get().routes.find((r) => r.id === s.routeId)
+  if (!s.rsWaybillId && route?.goods?.length && (s.waybill?.type ?? 1) === 1) s = { ...s, ...routeContent(route, s) }
   const payload = buildWaybill(db.get(), s)
   // Recorded before the call: from here on, a lost answer means "maybe saved".
   // The items keep what was sent (a product may have been renamed since the shipment was created).

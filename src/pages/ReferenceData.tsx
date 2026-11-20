@@ -1,17 +1,16 @@
-import { AlertTriangle, Building2, Check, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, Check, ChevronDown, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
-import { TIN_RE } from '../components/TinLookup'
+import { products, refs, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
-import { routeAddresses, routeLabel } from '../lib/route'
-import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, waybillDefaults, WAYBILL_TYPES, waybillTypeLabel } from '../lib/rs'
+import { goodsText, routeAddresses, routeLabel } from '../lib/route'
+import { RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, transTypes } from '../lib/rs'
 import type { CarrierRoute, Database } from '../types'
+import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 import { OptionRow } from '../components/pickers'
-import { WAYBILL_TYPE_ICON } from '../components/icons'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -32,8 +31,9 @@ interface FieldDef {
   initial?: (d: Database, r?: Rec) => string
   /** Can't be changed once saved. */
   fixed?: boolean
-  /** A tax ID: a search button (or Enter) looks its name up on RS.ge and puts it in this other field. */
-  lookup?: string
+  inputMode?: 'numeric' | 'decimal'
+  /** Shown under "დამატებითი ველები", folded until opened. */
+  more?: boolean
 }
 
 const vFullName = (v: string) => (v.trim().split(/\s+/).length < 2 ? 'შეიყვანე სახელი და გვარი' : null)
@@ -60,6 +60,7 @@ const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
 const vPrice = (v: string) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი')
+const vTransporter = (v: string) => (/^\d{9}$|^\d{11}$/.test(v.trim()) ? null : '9 ან 11 ციფრი')
 /** A product's unit price as RS.ge shows it: 10 → '10.00'. */
 const fmtPrice = (v?: string) => (Number(v) || 0).toFixed(2)
 const vatLabel = (v?: string) => RS_VAT_TYPES.find((x) => String(x.value) === (v || '0'))?.label ?? '—'
@@ -77,6 +78,8 @@ const carrierNames = (d: Database, r: Rec) =>
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
 /** A route record resolved to its carrier and addresses. */
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
+/** A route record's goods lines. */
+const goodsOf = (r: Rec) => (r as unknown as CarrierRoute).goods ?? []
 
 /** Connected to RS.ge (the admin's copy shows the service user). Products and plates are RS.ge's, so they need it. */
 const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet
@@ -107,32 +110,28 @@ const TABS: TabDef[] = [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name, icon: <Building2 />, sub: c.startAddress })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
+      // The waybill's transport details: the same on every shipment of the route.
+      { key: 'transId', label: 'ტრანსპორტის ტიპი', type: 'select', more: true, initial: () => String(RS_TRANS_CAR), options: (d) => transTypes(d.rs).map((t) => ({ value: String(t.id), label: t.name })) },
+      { key: 'transTxt', label: 'ტრანსპორტის ტიპის დასახელება', more: true, showIf: (r) => r.transId === String(RS_TRANS_OTHER) },
+      { key: 'transportCost', label: 'ტრანსპორტირების ღირებულება (₾)', placeholder: '0', optional: true, more: true, validate: vPrice, inputMode: 'decimal' },
       {
-        key: 'waybillType',
-        label: 'ზედნადების ტიპი',
+        key: 'tranCostPayer',
+        label: 'ტრანსპორტირების ხარჯს იხდის',
         type: 'select',
-        wide: true,
-        // Routes saved without a type show the one their waybills got (buyer set → 2, else 1).
-        initial: (d, r) => String(waybillDefaults(d.rs, r as unknown as CarrierRoute | undefined).type),
-        options: () => WAYBILL_TYPES.map((t) => ({ value: String(t.value), label: t.label, icon: WAYBILL_TYPE_ICON[t.value], sub: t.hint })),
+        more: true,
+        initial: () => '2',
+        options: () => [
+          { value: '2', label: 'გამყიდველი' },
+          { value: '1', label: 'მყიდველი' },
+        ],
       },
-      {
-        key: 'buyerTin',
-        label: 'მყიდველის ს/ნ',
-        optional: true,
-        mono: true,
-        lookup: 'buyerName',
-        showIf: (r) => r.waybillType !== '1',
-      },
-      {
-        key: 'buyerName',
-        label: 'მყიდველის დასახელება',
-        optional: true,
-        showIf: (r) => r.waybillType !== '1',
-      },
+      { key: 'transporterTin', label: 'გადამზიდავი კომპანიის ს/ნ', optional: true, mono: true, more: true, wide: true, validate: vTransporter, inputMode: 'numeric' },
+      { key: 'receptionInfo', label: 'მიმწოდებლის ინფორმაცია', optional: true, more: true },
+      { key: 'receiverInfo', label: 'მიმღების ინფორმაცია', optional: true, more: true },
+      { key: 'comment', label: 'კომენტარი', optional: true, more: true, wide: true },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
-    subtitle: (r, d) => [carrierName(d, r.carrierId), r.buyerName || r.buyerTin].filter(Boolean).join(' · '),
+    subtitle: (r, d) => [carrierName(d, r.carrierId), goodsText(goodsOf(r)) || 'პროდუქტები არ არის'].join(' · '),
     columns: [
       { label: 'კარიერი', render: (r, d) => <span className="font-medium text-slate-900">{carrierName(d, r.carrierId)}</span> },
       {
@@ -146,15 +145,11 @@ const TABS: TabDef[] = [
       },
       { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px] whitespace-nowrap">{r.scaleId || '—'}</span> },
       {
-        label: 'ზედნადები',
-        render: (r, d) => {
-          const w = waybillDefaults(d.rs, r as unknown as CarrierRoute)
-          return (
-            <span>
-              {waybillTypeLabel(w.type)}
-              {w.type !== 1 && <span className="block text-xs text-slate-500">{w.buyerName || w.buyerTin || 'მყიდველი არ არის'}</span>}
-            </span>
-          )
+        label: 'პროდუქტები',
+        render: (r) => {
+          const goods = goodsOf(r)
+          // A route without goods can't be picked for a shipment until they are set.
+          return goods.length ? <span className="block min-w-40">{goodsText(goods)}</span> : <Badge tone="amber">არ არის მითითებული</Badge>
         },
       },
     ],
@@ -166,7 +161,7 @@ const TABS: TabDef[] = [
     icon: UserRound,
     fields: [
       { key: 'fullName', label: 'სახელი და გვარი', validate: vAnyName },
-      { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true },
+      { key: 'personalId', label: 'პირადი ნომერი', placeholder: '11 ციფრი', validate: vPid, mono: true, inputMode: 'numeric' },
       { key: 'phone', label: 'ტელეფონი', type: 'tel', placeholder: '5XX XX XX XX', validate: vPhone },
       {
         key: 'citizenship',
@@ -292,7 +287,7 @@ export function ReferenceData() {
     const text = (r: Rec): string[] => {
       if (tab.key === 'routes') {
         const x = routeOf(d, r)
-        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', r.buyerName ?? '', r.buyerTin ?? '']
+        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', ...goodsOf(r).flatMap((g) => [g.name, g.barCode])]
       }
       return [...Object.values(r).filter((v) => typeof v === 'string'), ...(tab.key === 'users' ? [carrierNames(d, r)] : [])]
     }
@@ -570,10 +565,13 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   // Deleted carriers drop out of the list; saving removes them from the operator.
   const [carrierIds, setCarrierIds] = useState<string[]>(() => carrierIdsOf(rec).filter((id) => liveCarriers.some((c) => c.id === id)))
   const pickCarriers = tab.key === 'users' && form.role === 'operator'
+  // A route's goods lines, as typed.
+  const isRoute = tab.key === 'routes'
+  const [goods, setGoods] = useState<GoodDraft[]>(() => (rec.id ? goodsOf(rec).map(toDraft) : [blankGood(d)]))
+  const [more, setMore] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
-  const [searching, setSearching] = useState('')
   const isNew = !rec.id
 
   const submit = async (e?: FormEvent) => {
@@ -591,6 +589,10 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
       if (msg) errs[f.key] = msg
     }
     if (pickCarriers && !carrierIds.length) errs.carrierIds = liveCarriers.length ? 'მონიშნე მინიმუმ ერთი კარიერი' : 'ჯერ დაამატე კარიერი — ოპერატორი კარიერის გარეშე ვერ შეიქმნება'
+    if (isRoute) {
+      Object.assign(errs, checkGoods(goods))
+      if (tab.fields.some((f) => f.more && errs[f.key])) setMore(true)
+    }
     setErrors(errs)
     setSaveError('')
     if (Object.keys(errs).length) return
@@ -602,7 +604,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         let v = (r[f.key] ?? '').trim()
         if (f.key === 'plateNumber' || f.key === 'trailerNumber') v = v.toUpperCase()
         if (f.key === 'phone') v = fmtPhone(v)
-        if (f.key === 'price') v = v.replace(',', '.')
+        if (f.key === 'price' || f.key === 'transportCost') v = v.replace(',', '.')
         if (f.key === 'fullName') {
           const [first, ...rest] = v.split(/\s+/)
           Object.assign(clean, { firstName: first, lastName: rest.join(' ') })
@@ -611,6 +613,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         clean[f.key] = v
       }
       if (pickCarriers) Object.assign(clean, { carrierIds })
+      if (isRoute) Object.assign(clean, { goods: fromDrafts(d, goods) })
       await refs.save(tab.key, clean as never)
       toast('success', isNew ? 'ჩანაწერი დაემატა' : 'ცვლილებები შენახულია')
       onClose()
@@ -627,30 +630,54 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
     if (key === 'role' && value === 'operator' && !carrierIds.length && liveCarriers.length === 1) setCarrierIds([liveCarriers[0].id])
   }
 
-  /** Looks a tax ID field's name up on RS.ge (any number: one RS.ge doesn't know is typed by hand). */
-  const search = async (f: FieldDef) => {
-    const tin = (form[f.key] ?? '').trim()
-    if (!tin) return setErrors((x) => ({ ...x, [f.key]: 'შეიყვანე ნომერი' }))
-    setSearching(f.key)
-    try {
-      const { name } = await rsSettings.nameFromTin(tin, !TIN_RE.test(tin))
-      if (name) setField(f.lookup!, name)
-      setErrors((x) => ({ ...x, [f.key]: name ? '' : 'RS.ge-ზე ვერ მოიძებნა — დასახელება შეიყვანე ხელით' }))
-    } catch (err) {
-      setErrors((x) => ({ ...x, [f.key]: (err as Error).message }))
-    } finally {
-      setSearching('')
-    }
-  }
-
   const r = form
-  const fields = tab.fields.filter((f) => !f.showIf || f.showIf(r))
+  const shown = tab.fields.filter((f) => !f.showIf || f.showIf(r))
+  const fields = shown.filter((f) => !f.more)
+  const moreFields = shown.filter((f) => f.more)
   const routeStart = tab.key === 'routes' ? d.carriers.find((c) => c.id === r.carrierId)?.startAddress : undefined
+
+  const renderField = (f: FieldDef, fields: FieldDef[]) => {
+    const opts = f.type === 'select' ? f.options!(d) : []
+    const rich = opts.some((o) => o.icon)
+    return (
+      <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
+        <Field label={f.label} error={errors[f.key]}>
+          {f.type === 'select' ? (
+            <Select rich={rich} searchable={rich && opts.length > 5} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
+              {opts.map((o) => (
+                <option key={o.value} value={o.value} label={o.label} data-search={o.sub}>
+                  {rich ? <OptionRow icon={o.icon} title={o.label} sub={o.sub} /> : o.label}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <Input
+              type={f.type ?? 'text'}
+              value={r[f.key] ?? ''}
+              placeholder={f.placeholder}
+              inputMode={f.inputMode}
+              className={f.mono ? 'font-mono' : undefined}
+              invalid={!!errors[f.key]}
+              disabled={!!f.fixed && !isNew}
+              onChange={(e) => setField(f.key, e.target.value)}
+            />
+          )}
+        </Field>
+        {f.key === 'carrierId' && routeStart !== undefined && (
+          <p className="mt-1.5 px-1 text-sm">
+            <span className="text-slate-500">დაწყების მისამართი: </span>
+            <span className="font-medium text-slate-900">{routeStart || '—'}</span>
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <Modal
       open
       onClose={onClose}
+      wide={isRoute}
       title={`${tab.singular} ${isNew ? 'დამატება' : 'რედაქტირება'}`}
       footer={
         <>
@@ -670,68 +697,24 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
             <span>{saveError}</span>
           </div>
         )}
-        {fields.map((f) => {
-          const opts = f.type === 'select' ? f.options!(d) : []
-          const rich = opts.some((o) => o.icon)
-          return (
-            <div key={f.key} className={cx((f.wide || (fields.length % 2 === 1 && f === fields[0])) && 'sm:col-span-2')}>
-              <Field label={f.label} error={errors[f.key]}>
-                {f.type === 'select' ? (
-                  <Select rich={rich} searchable={rich && opts.length > 5} value={r[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} invalid={!!errors[f.key]} disabled={!opts.length}>
-                    {opts.map((o) => (
-                      <option key={o.value} value={o.value} label={o.label} data-search={o.sub}>
-                        {rich ? <OptionRow icon={o.icon} title={o.label} sub={o.sub} /> : o.label}
-                      </option>
-                    ))}
-                  </Select>
-                ) : f.lookup ? (
-                  <div className="flex gap-2">
-                    <Input
-                      value={r[f.key] ?? ''}
-                      placeholder={f.placeholder}
-                      inputMode="numeric"
-                      className={f.mono ? 'font-mono' : undefined}
-                      invalid={!!errors[f.key]}
-                      onChange={(e) => setField(f.key, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter') return
-                        e.preventDefault()
-                        void search(f)
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void search(f)}
-                      disabled={searching === f.key}
-                      aria-label="RS.ge-ზე ძებნა"
-                      title="RS.ge-ზე ძებნა"
-                      className="pressable inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-[10px] bg-fill text-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:cursor-wait"
-                    >
-                      {searching === f.key ? <Loader2 className="size-[18px] animate-spin" /> : <Search className="size-[18px]" />}
-                    </button>
-                  </div>
-                ) : (
-                  <Input
-                    type={f.type ?? 'text'}
-                    value={r[f.key] ?? ''}
-                    placeholder={f.placeholder}
-                    inputMode={f.key === 'personalId' ? 'numeric' : undefined}
-                    className={f.mono ? 'font-mono' : undefined}
-                    invalid={!!errors[f.key]}
-                    disabled={!!f.fixed && !isNew}
-                    onChange={(e) => setField(f.key, e.target.value)}
-                  />
-                )}
-              </Field>
-              {f.key === 'carrierId' && routeStart !== undefined && (
-                <p className="mt-1.5 px-1 text-sm">
-                  <span className="text-slate-500">დაწყების მისამართი: </span>
-                  <span className="font-medium text-slate-900">{routeStart || '—'}</span>
-                </p>
-              )}
-            </div>
-          )
-        })}
+        {fields.map((f) => renderField(f, fields))}
+
+        {isRoute && (
+          <div className="sm:col-span-2">
+            <RouteGoodsEditor d={d} goods={goods} onChange={setGoods} errors={errors} onClearError={(k) => setErrors((x) => ({ ...x, [k]: '' }))} />
+          </div>
+        )}
+
+        {moreFields.length > 0 && (
+          <div className="sm:col-span-2">
+            <button type="button" onClick={() => setMore((x) => !x)} className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-600">
+              <ChevronDown className={cx('size-4 transition-transform', more && 'rotate-180')} />
+              დამატებითი ველები
+              {!more && <span className="hidden font-normal text-slate-400 sm:inline"> · ტრანსპორტი, ღირებულება, კომენტარი…</span>}
+            </button>
+            {more && <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">{moreFields.map((f) => renderField(f, moreFields))}</div>}
+          </div>
+        )}
 
         {pickCarriers && (
           <Chips
