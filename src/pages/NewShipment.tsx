@@ -55,15 +55,6 @@ export function EditShipment() {
   return <ShipmentForm key={s.id} seed={seedFrom(s)} editing={s} />
 }
 
-/** The truck a driver drove last (and the other way round), so picking one suggests the other. */
-function lastPair(d: Database, key: 'driverId' | 'truckId', id: string) {
-  const other = key === 'driverId' ? 'truckId' : 'driverId'
-  const s = [...d.shipments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).find((x) => x[key] === id && x[other])
-  const pick = s?.[other]
-  const list = other === 'truckId' ? d.trucks : d.drivers
-  return pick && list.some((x) => x.id === pick && !x.deletedAt) ? pick : ''
-}
-
 /**
  * The operator picks the route, the driver and the truck; everything else on the waybill (goods,
  * quantities, transport details) is the route's, set by the admin, and the waybill is შიდა გადაზიდვა.
@@ -86,14 +77,8 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   const route = routes.find((x) => x.id === form.routeId) ?? (routes.length === 1 ? routes[0] : undefined)
   const set = (k: keyof Seed) => (e: { target: { value: string } }) => {
     const v = e.target.value
-    setForm((f) => {
-      const next = { ...f, [k]: v }
-      // The truck this driver drove last (and the other way round), when none is picked yet.
-      if (k === 'driverId' && v && !f.truckId) next.truckId = lastPair(d, 'driverId', v)
-      if (k === 'truckId' && v && !f.driverId) next.driverId = lastPair(d, 'truckId', v)
-      return next
-    })
-    setErrors((x) => ({ ...x, [k]: '', ...(k === 'driverId' ? { truckId: '' } : k === 'truckId' ? { driverId: '' } : {}) }))
+    setForm((f) => ({ ...f, [k]: v }))
+    setErrors((x) => ({ ...x, [k]: '' }))
   }
 
   // A waybill on RS.ge keeps its goods and transport details while the route stays the same; otherwise they are the route's.
