@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { rsWaybills, type RsWaybillAction, type RsWaybillDetail } from '../api'
 import { useDb } from '../api/store'
-import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, FilterChips, Input, Modal, PageHeader, RefreshButton, Segmented } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, DatePicker, DeleteButton, EmptyState, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
-import { formatDateTime, formatNumber, tbilisiStamp, formatMoney } from '../lib/util'
+import { formatDateTime, formatNumber, tbilisiDay, tbilisiStamp, formatMoney } from '../lib/util'
 import { downloadXlsx } from '../lib/xlsx'
 import { openPrint } from '../lib/save'
 import { useUser } from '../session'
@@ -14,18 +14,10 @@ import type { RsListWaybill } from '../types'
 import { ActivateModal, CloseModal, InvoiceModal } from './ShipmentDetail'
 
 type Side = 'issued' | 'received'
-type Period = '1' | '3' | '7' | '30'
 type StatusFilter = 'all' | '0' | '1' | '2' | 'off'
 
-const PERIODS: { value: Period; label: string }[] = [
-  { value: '1', label: 'დღე' },
-  { value: '3', label: '3 დღე' },
-  { value: '7', label: 'კვირა' },
-  { value: '30', label: 'თვე' },
-]
-
 const STATUSES: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'ყველა' },
+  { value: 'all', label: 'ყველა სტატუსი' },
   { value: '0', label: 'შენახული' },
   { value: '1', label: 'აქტიური' },
   { value: '2', label: 'დასრულებული' },
@@ -34,6 +26,13 @@ const STATUSES: { value: StatusFilter; label: string }[] = [
 
 /** Rows shown at first, and added by "show more". */
 const PAGE = 100
+
+/** The same day `n` months later (earlier when negative), on the month's last day when it is shorter: `YYYY-MM-DD`. */
+function shiftMonths(day: string, n: number) {
+  const [y, m, d] = day.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m + n, 0)).getUTCDate()
+  return new Date(Date.UTC(y, m - 1 + n, Math.min(d, last))).toISOString().slice(0, 10)
+}
 
 const statusOf = (n: number) => RS_STATUS[n] ?? { label: String(n), tone: 'gray' as const }
 
@@ -46,7 +45,10 @@ export function RsWaybills() {
   const d = useDb()
   const toast = useToast()
   const [side, setSide] = useState<Side>('issued')
-  const [period, setPeriod] = useState<Period>('3')
+  const today = tbilisiDay()
+  // Days in Georgian time, both included: by default the last month (this day of the previous month to today).
+  const [from, setFrom] = useState(() => shiftMonths(today, -1))
+  const [to, setTo] = useState(today)
   const [status, setStatus] = useState<StatusFilter>('all')
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<RsListWaybill[] | null>(null)
@@ -60,23 +62,23 @@ export function RsWaybills() {
     setLoading(true)
     setError('')
     try {
-      const to = new Date()
-      const from = new Date(to.getTime() - Number(period) * 86400_000)
-      setRows(await rsWaybills.list(side, from.toISOString(), to.toISOString()))
+      const start = new Date(`${from}T00:00:00+04:00`)
+      const end = new Date(`${to}T23:59:59.999+04:00`)
+      setRows(await rsWaybills.list(side, start.toISOString(), end.toISOString()))
     } catch (e) {
       setError((e as Error).message)
       setRows(null)
     } finally {
       setLoading(false)
     }
-  }, [side, period])
+  }, [side, from, to])
 
   useEffect(() => {
     if (connected) void load()
   }, [load, connected])
   // A new filter starts from the top.
   const [filterKey, setFilterKey] = useState('')
-  const key = `${side}|${period}|${status}|${q}`
+  const key = `${side}|${from}|${to}|${status}|${q}`
   if (key !== filterKey) {
     setFilterKey(key)
     setLimit(PAGE)
@@ -95,7 +97,7 @@ export function RsWaybills() {
   const party = (r: RsListWaybill) => (side === 'issued' ? { name: r.buyerName, tin: r.buyerTin } : { name: r.sellerName, tin: r.sellerTin })
 
   const exportXlsx = async () => {
-    const err = await downloadXlsx(`rs-${side === 'issued' ? 'gacemuli' : 'migebuli'}-${tbilisiStamp(new Date().toISOString()).slice(0, 10)}.xlsx`, [
+    const err = await downloadXlsx(`rs-${side === 'issued' ? 'gacemuli' : 'migebuli'}-${from}_${to}.xlsx`, [
       ['ნომერი', 'ტიპი', 'სტატუსი', 'შექმნა', 'გააქტიურება', side === 'issued' ? 'მყიდველი' : 'გამყიდველი', 'ს/ნ', 'საიდან', 'სად', 'მძღოლი', 'მანქანა', 'თანხა', 'კომენტარი'],
       ...shown.map((r) => [
         r.number,
@@ -137,22 +139,33 @@ export function RsWaybills() {
         <Card>
           <div className="flex flex-col gap-3 p-4 sm:p-5">
             <div className="flex flex-wrap items-center gap-2">
-              <Segmented
-                value={side}
-                onChange={(v) => {
-                  setSide(v)
-                  setRows(null)
-                }}
-                options={[
-                  { value: 'issued', label: 'გაცემული' },
-                  { value: 'received', label: 'მიღებული' },
-                ]}
-              />
-              <Segmented value={period} onChange={setPeriod} options={PERIODS} />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <FilterChips className="-mx-4 w-[calc(100%+2rem)] px-4 sm:mx-0 sm:w-auto sm:px-0" value={status} onChange={setStatus} options={STATUSES} />
-              <div className="relative w-full min-w-48 sm:w-auto sm:flex-1">
+              <div className="grid w-full grid-cols-[2fr_3fr] gap-2 sm:flex sm:w-auto">
+                <Select
+                  aria-label="გაცემული ან მიღებული"
+                  value={side}
+                  onChange={(e) => {
+                    setSide(e.target.value as Side)
+                    setRows(null)
+                  }}
+                  className="sm:w-32"
+                >
+                  <option value="issued">გაცემული</option>
+                  <option value="received">მიღებული</option>
+                </Select>
+                <Select aria-label="სტატუსი" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)} className="sm:w-44">
+                  {STATUSES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <DatePicker value={from} min={shiftMonths(to, -2)} max={to} onChange={setFrom} className="min-w-0 flex-1 sm:w-36 sm:flex-none" />
+                <span className="text-slate-400">–</span>
+                <DatePicker value={to} min={from} max={[today, shiftMonths(from, 2)].sort()[0]} onChange={setTo} className="min-w-0 flex-1 sm:w-36 sm:flex-none" />
+              </div>
+              <div className="relative w-full min-w-56 sm:w-auto sm:flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ნომერი, კომპანია, მანქანა, მისამართი…" className="pl-9" />
               </div>

@@ -1461,8 +1461,8 @@ async function activate(id: string, waybillId: number): Promise<Activated | null
 
 /* ------------------------- RS.ge registry ------------------------- */
 
-/** The registry reads at most this far back in one go (each 72 hours is one RS.ge call). */
-const LIST_MAX_MS = 31 * 86400_000
+/** The registry reads at most two months of whole days in one go (each 72 hours is one RS.ge call). */
+const LIST_MAX_MS = 63 * 86400_000
 
 /** Shipment of each RS.ge waybill ID, among the shipments the user may see. */
 function shipmentByWaybill(user: User) {
@@ -1485,7 +1485,7 @@ export const rsWaybills = {
     const to = q.to ? new Date(Math.min(Date.parse(q.to), Date.now() + 60_000)) : new Date()
     const from = q.from ? new Date(Date.parse(q.from)) : new Date(to.getTime() - 3 * 86400_000)
     if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) fail('პერიოდი არასწორია')
-    if (to.getTime() - from.getTime() > LIST_MAX_MS) fail('პერიოდი მაქსიმუმ 31 დღეა')
+    if (to.getTime() - from.getTime() > LIST_MAX_MS) fail('პერიოდი მაქსიმუმ 2 თვეა')
     const rows = await rsge.list(side, from, to).catch((e: Error) => fail(e.message, 502))
     const mine = shipmentByWaybill(user)
     return rows.map((r) => ({ ...r, ...(mine.has(r.id) && { shipmentId: mine.get(r.id) }) }))
