@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
-import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing, rsUnits, shipmentWaybill, waybillDefaults, waybillTypeLabel } from '../src/lib/rs.ts'
+import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_UNIT_OTHER, RS_VAT_TYPES, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, shipmentUses, tbilisiStamp, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
@@ -1419,7 +1419,7 @@ const smsQty = (n: number) => String(Math.round(n * 1000) / 1000)
 const smsParty = (name?: string, tin?: string) => [name, tin].filter(Boolean).join(', ')
 
 /**
- * The driver's SMS: the whole waybill as RS.ge has it (w), in blocks split by blank lines: waybill,
+ * The driver's SMS: the whole waybill as RS.ge has it (w), in blocks split by blank lines: its number,
  * route, driver and vehicle, goods, the rest. Empty lines are left out, and so is what is always the
  * same (საავტომობილო transport, ordinary VAT). Without RS.ge's copy (it couldn't be read) the head is
  * written from the shipment and the goods, which only RS.ge holds once the waybill is there, are left out.
@@ -1442,7 +1442,7 @@ function smsText(s: Shipment, d: StoredDatabase, w: RsRemoteWaybill | undefined)
   const units = new Set(w?.goods.map((g) => g.unitTxt))
   const line = (label: string, value: string | false | undefined) => value && `${label}: ${value}`
   const blocks: (string | false | undefined)[][] = [
-    [`ზედნადები №${s.waybillNumber}`, waybillTypeLabel(type)],
+    [`ზედნადები №${s.waybillNumber} ატვირთულია.`],
     [w?.startAddress || route.start, `→ ${w?.endAddress || route.end}`, line('დაწყება', begin && smsDate(begin))],
     [
       line('მძღოლი', w ? smsParty(w.driverName, w.driverTin) : driver && smsParty(`${driver.firstName} ${driver.lastName}`, driver.personalId)),
