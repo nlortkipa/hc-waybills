@@ -1033,9 +1033,11 @@ export const shipments = {
    * for a draft, deletes (del_waybill) the waybill on RS.ge. RS.ge also cancels a completed waybill, so
    * cancel is allowed after close. The waybill is read back after the call: the page shows the result
    * at once, and a refusal because it was already done on the rs.ge portal counts as done. Only an
-   * admin does this by hand; without `user` it is the automatic completion (autoClose).
+   * admin does this by hand; without `user` it is the automatic completion (autoClose). `inPipeline`:
+   * called from the pipeline (which already holds the shipment), before the driver's only SMS, which
+   * then says it is completed: no separate completion SMS.
    */
-  async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User | undefined, body?: { deliveredAt?: string }) {
+  async finish(id: string, action: 'close' | 'cancel' | 'delete', user: User | undefined, body?: { deliveredAt?: string }, inPipeline = false) {
     const s = await current(id, user)
     if (user) requireAdmin(user)
     if (action === 'delete') {
@@ -1045,12 +1047,12 @@ export const shipments = {
     if (action === 'cancel' && s.waybillState === 'cancelled') fail('ზედნადები უკვე გაუქმებულია')
     if (action === 'cancel' && s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს RS.ge ვერ გააუქმებს — ჯერ გააუქმე ფაქტურა RS.ge-ს პორტალზე')
     if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია — დაასრულე ან გააუქმე RS.ge-ს პორტალიდან')
-    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    if (!inPipeline && running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
     const delivered = action === 'close' ? parseDelivered(body?.deliveredAt) : undefined
     const target = action === 'close' ? 'closed' : 'cancelled'
     let error: Error | undefined
     let w: RsRemoteWaybill | null = null
-    running.add(id)
+    if (!inPipeline) running.add(id)
     try {
       try {
         if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id, delivered)
@@ -1061,7 +1063,7 @@ export const shipments = {
       }
       w = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
-      running.delete(id)
+      if (!inPipeline) running.delete(id)
     }
     // Not read back: read again soon, so the state shown follows.
     if (!w) rsCache.stale(s.rsWaybillId!)
@@ -1080,7 +1082,7 @@ export const shipments = {
             : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
     })
     // Completed from here (not on the rs.ge portal): the driver is told.
-    if (action === 'close') await sendDoneSms(id, w?.closedAt ?? nowIso())
+    if (action === 'close' && !inPipeline) await sendDoneSms(id, w?.closedAt ?? nowIso())
   },
 
   /**
@@ -1338,7 +1340,14 @@ async function runPipeline(id: string) {
     if (s.sms.status === 'pending') patch(id, () => ({ sms: { status: 'skipped' } }))
     return
   }
-  if (s.sms.status !== 'ok') await sendSms(id)
+  if (s.sms.status === 'ok') return
+  // WAYBILL_AUTO_CLOSE=0:00 and transport has started: completed first, so the driver gets one SMS
+  // saying so. If that fails, the usual SMS goes and autoClose completes it later (with its own SMS).
+  if (AUTO_CLOSE_MS === 0) {
+    const a = get(id)
+    if (!a.waybillState && a.rsWaybillId && transportStart(a) <= Date.now()) await shipments.finish(id, 'close', undefined, undefined, true).catch(() => {})
+  }
+  await sendSms(id)
 }
 
 /**
@@ -1497,7 +1506,7 @@ function smsText(s: Shipment, d: StoredDatabase, w: RsRemoteWaybill | undefined)
   const units = new Set(w?.goods.map((g) => g.unitTxt))
   const line = (label: string, value: string | false | undefined) => value && `${label}: ${value}`
   const blocks: (string | false | undefined)[][] = [
-    [`ზედნადები №${s.waybillNumber} გააქტიურებულია.`],
+    [w?.status === 2 ? `ზედნადები №${s.waybillNumber} დასრულებულია ${smsDate(w.closedAt ?? nowIso())}.` : `ზედნადები №${s.waybillNumber} გააქტიურებულია.`],
     [w?.startAddress || route.start, `→ ${w?.endAddress || route.end}`, line('დაწყება', begin && smsDate(begin))],
     [
       line('მძღოლი', w ? smsParty(w.driverName, w.driverTin) : driver && smsParty(`${driver.firstName} ${driver.lastName}`, driver.personalId)),
