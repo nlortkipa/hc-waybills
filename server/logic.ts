@@ -928,6 +928,8 @@ export const shipments = {
     } finally {
       running.delete(id)
     }
+    // Activated, the driver texted: with WAYBILL_AUTO_CLOSE=0:00 it is completed now, not at the next check.
+    if (AUTO_CLOSE_MS === 0) void autoClose()
   },
 
   /**
@@ -1156,7 +1158,7 @@ export const shipments = {
     db.get()
       .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
       .forEach((s) => void shipments.run(s.id))
-    if (AUTO_CLOSE_MS) {
+    if (AUTO_CLOSE_MS !== null) {
       void autoClose()
       setInterval(() => void autoClose(), AUTO_CLOSE_CHECK_MS).unref()
     }
@@ -1171,6 +1173,8 @@ const AUTO_CLOSE_CHECK_MS = 60_000
 const AUTO_CLOSE_RETRY_MS = 30 * 60_000
 const autoCloseFailed = new Map<string, number>()
 let autoClosing = false
+/** Asked for while a pass was running: another pass follows it. */
+let autoCloseAgain = false
 
 /** When transport started (or is planned to): RS.ge's start, the one asked for, else when the waybill was activated. */
 const transportStart = (s: Shipment) => Date.parse(s.rsRemote?.beginAt ?? s.waybill?.beginAt ?? s.rs.at ?? '')
@@ -1179,21 +1183,27 @@ const transportStart = (s: Shipment) => Date.parse(s.rsRemote?.beginAt ?? s.wayb
  * Completes on RS.ge every active waybill whose transport started WAYBILL_AUTO_CLOSE ago or more. Each
  * is read from RS.ge first: one completed or cancelled on the rs.ge portal meanwhile is left alone.
  */
-async function autoClose() {
-  if (autoClosing || !storedCreds()) return
+async function autoClose(): Promise<void> {
+  if (AUTO_CLOSE_MS === null || !storedCreds()) return
+  if (autoClosing) {
+    autoCloseAgain = true
+    return
+  }
   autoClosing = true
+  autoCloseAgain = false
+  const after = AUTO_CLOSE_MS
   try {
     const now = Date.now()
     const due = db
       .get()
       .shipments.map((s) => withRs(s))
-      .filter((s) => s.status === 'uploaded' && !s.waybillState && s.rsWaybillId && !running.has(s.id) && transportStart(s) + AUTO_CLOSE_MS <= now)
+      .filter((s) => s.status === 'uploaded' && !s.waybillState && s.rsWaybillId && !running.has(s.id) && transportStart(s) + after <= now)
       .filter((s) => now - (autoCloseFailed.get(s.id) ?? 0) >= AUTO_CLOSE_RETRY_MS)
     for (const s of due) {
       const w = await rsCache.read(s.rsWaybillId!, s.id).catch(() => null)
       if (!w || w.status !== 1) continue
       // A planned start RS.ge has moved later: due later.
-      if (Date.parse(w.beginAt ?? '') + AUTO_CLOSE_MS > Date.now()) continue
+      if (Date.parse(w.beginAt ?? '') + after > Date.now()) continue
       await shipments.finish(s.id, 'close', undefined).then(
         () => autoCloseFailed.delete(s.id),
         () => autoCloseFailed.set(s.id, Date.now()),
@@ -1202,6 +1212,7 @@ async function autoClose() {
   } finally {
     autoClosing = false
   }
+  if (autoCloseAgain) return autoClose()
 }
 
 /* ------------------------- RS.ge read-back ------------------------- */

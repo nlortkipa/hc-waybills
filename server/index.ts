@@ -215,7 +215,13 @@ if (problems.length) {
 
 server.listen(PORT, HOST, () => {
   console.log(`[api] listening on http://${HOST}:${PORT}`)
-  const m = AUTO_CLOSE_MS / 60_000
-  console.log(m ? `[api] active waybills are completed ${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} after transport starts` : '[api] waybills are not completed automatically (WAYBILL_AUTO_CLOSE)')
+  const m = AUTO_CLOSE_MS === null ? null : AUTO_CLOSE_MS / 60_000
+  console.log(
+    m === null
+      ? '[api] waybills are not completed automatically (WAYBILL_AUTO_CLOSE)'
+      : m
+        ? `[api] active waybills are completed ${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} after transport starts`
+        : '[api] active waybills are completed as soon as transport starts',
+  )
   shipments.resumeAll()
 })
