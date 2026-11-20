@@ -31,7 +31,7 @@ import { createHash, randomInt } from 'node:crypto'
 import { IntegrationError } from './integrations.ts'
 import { rsCache } from './rscache.ts'
 import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
-import { AUTO_CLOSE_MS, configProblems, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
+import { AUTO_CLOSE_MS, configProblems, LOGIN_CODES_TO_CONSOLE, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
 import { newReference, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
@@ -77,25 +77,28 @@ export function loginSmsText(code: string, origin?: string): string {
 }
 
 export const auth = {
-  /** Texts a 6-digit login code to a known user's number. */
+  /** Texts a 6-digit login code to a known user's number (LOGIN_CODES=console: prints it in the server console). */
   async sendCode(phone: string, origin?: string): Promise<{ resendIn: number }> {
     const key = phoneKey(String(phone ?? ''))
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
     const destination = toDestination(user!.phone)
-    if (!destination) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
+    if (!destination && !LOGIN_CODES_TO_CONSOLE) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
     const now = Date.now()
     const prev = loginCodes.get(key)
     const sends = (prev?.sends ?? []).filter((t) => now - t < 3600_000)
     if (prev && now - prev.sentAt < CODE_RESEND_MS) return { resendIn: Math.ceil((CODE_RESEND_MS - (now - prev.sentAt)) / 1000) }
     if (sends.length >= CODE_SENDS_PER_HOUR) fail('ძალიან ბევრი მცდელობა — სცადე ერთ საათში', 429)
-    const c = smsCreds()
-    if (!c) fail('SMS სერვისი არ არის დაკავშირებული', 503)
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
-    try {
-      await smsoffice.send(c!, destination!, loginSmsText(code, origin), newReference(), undefined, loginSmsText('••••••', origin))
-    } catch (e) {
-      fail(`კოდი ვერ გაიგზავნა: ${(e as Error).message}`, 502)
+    if (LOGIN_CODES_TO_CONSOLE) console.log(`[login] code for ${user!.phone} (${user!.firstName} ${user!.lastName}): ${code}`)
+    else {
+      const c = smsCreds()
+      if (!c) fail('SMS სერვისი არ არის დაკავშირებული', 503)
+      try {
+        await smsoffice.send(c!, destination!, loginSmsText(code, origin), newReference(), undefined, loginSmsText('••••••', origin))
+      } catch (e) {
+        fail(`კოდი ვერ გაიგზავნა: ${(e as Error).message}`, 502)
+      }
     }
     loginCodes.set(key, { hash: hashCode(key, code), expires: now + CODE_TTL_MS, tries: 0, sentAt: now, sends: [...sends, now] })
     return { resendIn: Math.ceil(CODE_RESEND_MS / 1000) }

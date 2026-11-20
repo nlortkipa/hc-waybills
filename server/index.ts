@@ -16,7 +16,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
 import { auth, checkServices, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
-import { AUTO_CLOSE_MS } from './config.ts'
+import { AUTO_CLOSE_MS, LOGIN_CODES_TO_CONSOLE } from './config.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -225,5 +225,6 @@ server.listen(PORT, HOST, () => {
         ? `[api] active waybills are completed ${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} after transport starts`
         : '[api] active waybills are completed as soon as transport starts',
   )
+  if (LOGIN_CODES_TO_CONSOLE) console.warn('[api] LOGIN_CODES=console: login codes are printed here, not texted — for testing only')
   shipments.resumeAll()
 })

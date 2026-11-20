@@ -7,6 +7,8 @@
  *   RS_WAYBILL_URL, SMSOFFICE_URL          optional: other endpoints (default: the live services)
  *   WAYBILL_AUTO_CLOSE                     optional "H:MM": an active waybill is completed this long
  *                                          after transport starts (0:00 = at once, empty = never)
+ *   LOGIN_CODES                            optional "sms" (default) or "console": login codes are
+ *                                          printed in the server console instead of texted (testing)
  *
  * The server refuses to start unless every one is set and both services accept them (server/index.ts).
  */
@@ -26,6 +28,10 @@ const autoClose = AUTO_CLOSE_RE.exec(AUTO_CLOSE)
 /** How long after transport starts an active waybill is completed on its own (ms): 0 = at once, null = never. */
 export const AUTO_CLOSE_MS = autoClose ? (Number(autoClose[1]) * 60 + Number(autoClose[2])) * 60_000 : null
 
+/** Where login codes go: texted to the user (default) or printed in the server console, for testing. */
+const LOGIN_CODES = env('LOGIN_CODES').toLowerCase() || 'sms'
+export const LOGIN_CODES_TO_CONSOLE = LOGIN_CODES === 'console'
+
 /** Sender names smsoffice.ge accepts: up to 11 Latin letters, digits, '-', '.' (words may be separated by spaces). */
 export const SENDER_RE = /^[A-Za-z0-9.\- ]{1,11}$/
 
@@ -38,6 +44,7 @@ export function configProblems(): string[] {
   if (!SMS_API_KEY) out.push('SMSOFFICE_API_KEY is not set')
   if (!SMS_SENDER) out.push('SMSOFFICE_SENDER is not set')
   else if (!SENDER_RE.test(SMS_SENDER)) out.push('SMSOFFICE_SENDER: at most 11 Latin letters, digits, "-" or "."')
+  if (LOGIN_CODES !== 'sms' && LOGIN_CODES !== 'console') out.push('LOGIN_CODES must be "sms" or "console", or be empty')
   if (AUTO_CLOSE && !autoClose) out.push('WAYBILL_AUTO_CLOSE must look like H:MM (e.g. 8:30), or be empty')
   return out
 }
