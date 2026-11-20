@@ -145,7 +145,14 @@ function serveStatic(pathname: string, res: ServerResponse) {
   let file = join(DIST, path)
   if (!file.startsWith(DIST + sep) || !existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html')
   if (!existsSync(file)) return send(res, 404, { error: 'Not found' })
-  res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream', 'Content-Length': statSync(file).size })
+  // Built assets have hashed names and never change; everything else (index.html above all) is
+  // checked on every load, so browsers and the Android app pick up a new build right away.
+  const immutable = file.startsWith(join(DIST, 'assets') + sep)
+  res.writeHead(200, {
+    'Content-Type': MIME[extname(file)] ?? 'application/octet-stream',
+    'Content-Length': statSync(file).size,
+    'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+  })
   createReadStream(file)
     .on('error', () => res.destroy())
     .pipe(res)

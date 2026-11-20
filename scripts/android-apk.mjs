@@ -39,22 +39,27 @@ function run(cmd, args, cwd = root, env = process.env) {
   if (r.error || r.status !== 0) process.exit(r.status ?? 1)
 }
 
-// The app has no server of its own: it calls the HC API server at this address.
-// Default: this machine on the local network, port 8787 (what `npm run dev` / `npm run server` listen on).
+// The app opens the HC server's website at this address and shows it, so website updates
+// reach the app without a new APK. Default: this machine on the local network, port 8787
+// (what `npm run server` listens on; it serves the site from dist/).
 function lanAddress() {
   const ips = Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address)
   return ips.find((ip) => /^192\.168\./.test(ip)) ?? ips.find((ip) => /^10\./.test(ip)) ?? ips[0]
 }
-const apiUrl = process.env.VITE_API_URL ?? (lanAddress() && `http://${lanAddress()}:8787`)
-if (!apiUrl) {
+const appUrl = (process.env.VITE_API_URL ?? (lanAddress() && `http://${lanAddress()}:8787`))?.replace(/\/$/, '')
+if (!appUrl) {
   console.error('Could not detect this machine\'s network address. Set VITE_API_URL, e.g. VITE_API_URL=http://192.168.1.10:8787')
   process.exit(1)
 }
-console.log(`API server for this APK: ${apiUrl}  (override with VITE_API_URL)`)
+console.log(`Server for this APK: ${appUrl}  (override with VITE_API_URL)`)
 
 // HC_NATIVE_BUILD keeps the previous APK out of dist/, which goes inside this APK.
-run('npm', ['run', 'build'], root, { ...process.env, HC_NATIVE_BUILD: '1', VITE_API_URL: apiUrl })
-run('npx', ['cap', 'sync', 'android'])
+// The page the app shows comes from the server (same origin as the API), so no VITE_API_URL here.
+const { VITE_API_URL: _, ...webEnv } = process.env
+run('npm', ['run', 'build'], root, { ...webEnv, HC_NATIVE_BUILD: '1' })
+// Shown by the app when the server can't be reached; retries until it can.
+writeFileSync(join(root, 'dist', 'offline.html'), offlinePage(appUrl))
+run('npx', ['cap', 'sync', 'android'], root, { ...process.env, HC_APP_URL: appUrl })
 run(isWin ? 'gradlew.bat' : './gradlew', ['assembleDebug'], androidDir)
 
 const apk = join(androidDir, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')
@@ -66,6 +71,38 @@ mkdirSync(join(root, 'release'), { recursive: true })
 const out = join(root, 'release', `hc-portal-v${version}.apk`)
 copyFileSync(apk, out)
 copyFileSync(apk, join(root, 'release', 'hc-portal.apk'))
-// dist/ now has VITE_API_URL baked in; rebuild it for the web so the site keeps using its own origin.
+// Rebuild dist/ for the web so it also offers the new APK (and drops offline.html).
 run('npm', ['run', 'build'])
-console.log(`\n✔ APK ready: ${out}\n  It talks to ${apiUrl} — keep \`npm run dev\` or \`npm run server\` running there.`)
+console.log(`\n✔ APK ready: ${out}\n  It opens ${appUrl}: keep \`npm run server\` running there. Website updates (\`npm run build\`) reach the app on its next start.`)
+
+function offlinePage(url) {
+  return `<!doctype html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HC Portal</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; background: #f2f2f7; color: #1c1c1e; text-align: center; }
+  @media (prefers-color-scheme: dark) { body { background: #000; color: #f2f2f7; } }
+  main { padding: 24px; max-width: 320px; }
+  p { color: #8e8e93; }
+  button { font: inherit; padding: 12px 24px; border: 0; border-radius: 12px; background: #007aff; color: #fff; }
+</style>
+</head>
+<body>
+<main>
+  <h2>სერვერთან კავშირი ვერ დამყარდა</h2>
+  <p>შეამოწმეთ ინტერნეტი. ვცდილობთ თავიდან…</p>
+  <button onclick="go()">თავიდან ცდა</button>
+</main>
+<script>
+  const url = ${JSON.stringify(url + '/')}
+  function go() { location.replace(url) }
+  setInterval(() => fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(go, () => {}), 5000)
+</script>
+</body>
+</html>
+`
+}

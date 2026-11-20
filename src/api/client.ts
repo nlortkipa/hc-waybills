@@ -1,9 +1,9 @@
 /**
  * HTTP client for the HC API server (server/index.ts).
  *
- * In the browser the API lives on the same origin (Vite proxies /api in dev, the
- * server serves the site in production). The Android app has no server of its own,
- * so its build gets the address baked in via VITE_API_URL.
+ * The API lives on the same origin (Vite proxies /api in dev, the server serves the
+ * site in production, and the Android app opens the site from the server).
+ * VITE_API_URL can point a build at an API on another origin.
  */
 export const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
 
