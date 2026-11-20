@@ -1,9 +1,12 @@
-import { Plus, Search, Truck } from 'lucide-react'
+import { Download, Plus, Search, Truck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { userCarriers, visibleShipments } from '../api'
 import { ShipmentList } from '../components/ShipmentList'
-import { Card, EmptyState, FilterChips, Input, LinkButton, PageHeader, Select, shipmentState } from '../components/ui'
+import { Button, Card, EmptyState, FilterChips, Input, LinkButton, PageHeader, Select, shipmentState } from '../components/ui'
+import { useToast } from '../components/toast'
+import { exportShipments } from '../lib/exportShipments'
+import { tbilisiDay } from '../lib/util'
 import { useLookup } from '../lib/lookup'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -43,6 +46,11 @@ export function Shipments() {
   }, [all, q, f, carrier, L])
 
   const canCreate = user.role !== 'report'
+  const toast = useToast()
+  const exportXlsx = async () => {
+    const err = await exportShipments(`hc-reisebi-${tbilisiDay()}.xlsx`, rows, L)
+    if (err) toast('error', err)
+  }
 
   return (
     <>
@@ -50,13 +58,18 @@ export function Shipments() {
         title="რეისები"
         subtitle={`სულ ${all.length}${user.role === 'operator' && carriers.length === 1 ? ` · ${carriers[0].name}` : ''}`}
         actions={
-          canCreate && (
-            <span className="hidden sm:block">
-              <LinkButton to="/new" icon={<Plus className="size-4" />}>
-                ახალი რეისი
-              </LinkButton>
-            </span>
-          )
+          <>
+            <Button variant="secondary" icon={<Download className="size-4" />} onClick={() => void exportXlsx()} disabled={!rows.length}>
+              Excel
+            </Button>
+            {canCreate && (
+              <span className="hidden sm:block">
+                <LinkButton to="/new" icon={<Plus className="size-4" />}>
+                  ახალი რეისი
+                </LinkButton>
+              </span>
+            )}
+          </>
         }
       />
 

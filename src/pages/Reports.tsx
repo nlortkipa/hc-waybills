@@ -1,10 +1,10 @@
 import { AlertTriangle, Download, FileText, MessageSquare, Truck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { rsPending, useRsLoad, visibleShipments } from '../api'
-import { Button, Card, DatePicker, Field, PageHeader, Select, Stat, statusMeta } from '../components/ui'
-import { cx, formatDay, formatTonnes, tbilisiDay, tbilisiStamp } from '../lib/util'
+import { Button, Card, DatePicker, Field, PageHeader, Select, Stat } from '../components/ui'
+import { cx, formatDay, formatTonnes, tbilisiDay } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { downloadXlsx } from '../lib/xlsx'
+import { exportShipments } from '../lib/exportShipments'
 import { useToast } from '../components/toast'
 import { shipmentQuantity } from '../lib/rs'
 import { useDb } from '../api/store'
@@ -74,13 +74,7 @@ export function Reports() {
 
   const toast = useToast()
   const exportXlsx = async () => {
-    const err = await downloadXlsx(`hc-report-${from}_${to}.xlsx`, [
-      ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
-      ...rows.map((s) => {
-        const x = L.describe(s)
-        return [s.waybillNumber ?? '', tbilisiStamp(s.createdAt), x.carrier, x.route, x.driver, x.plate, x.item, shipmentQuantity(s), s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '', s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label]
-      }),
-    ], 'რეისები')
+    const err = await exportShipments(`hc-report-${from}_${to}.xlsx`, rows, L)
     if (err) toast('error', err)
   }
 
