@@ -1069,16 +1069,18 @@ export const shipments = {
       patch(id, () => ({}), { level: 'error', message: error.message })
       fail(error.message, 502)
     }
-    if (!error)
-      patch(id, () => ({}), {
-        level: 'success',
-        message:
-          action === 'close'
-            ? `ზედნადები №${s.waybillNumber} ${user ? '' : 'ავტომატურად '}დასრულდა RS.ge-ზე`
-            : action === 'cancel'
-              ? `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`
-              : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
-      })
+    if (error) return
+    patch(id, () => ({}), {
+      level: 'success',
+      message:
+        action === 'close'
+          ? `ზედნადები №${s.waybillNumber} ${user ? '' : 'ავტომატურად '}დასრულდა RS.ge-ზე`
+          : action === 'cancel'
+            ? `ზედნადები №${s.waybillNumber} გაუქმდა RS.ge-ზე`
+            : `RS.ge-ზე შენახული ზედნადები (ID ${s.rsWaybillId}) წაიშალა`,
+    })
+    // Completed from here (not on the rs.ge portal): the driver is told.
+    if (action === 'close') await sendDoneSms(id, w?.closedAt ?? nowIso())
   },
 
   /**
@@ -1530,6 +1532,25 @@ function smsText(s: Shipment, d: StoredDatabase, w: RsRemoteWaybill | undefined)
     .map((b) => b.filter(Boolean).join('\n'))
     .filter(Boolean)
     .join('\n\n')
+}
+
+/** "ზედნადები №… დასრულებულია DD.MM.YYYY HH:MM." to the driver; the outcome goes into the shipment's history. */
+async function sendDoneSms(id: string, closedAt: string) {
+  const s = stored(id)
+  const driver = db.get().drivers.find((x) => x.id === s.driverId)
+  if (!driver) return
+  const text = `ზედნადები №${s.waybillNumber} დასრულებულია ${smsDate(closedAt)}.`
+  const c = smsCreds()
+  const destination = toDestination(driver.phone)
+  const failed = (msg: string) => patch(id, () => ({}), { level: 'error', message: `დასრულების SMS ვერ გაიგზავნა: ${msg}` })
+  if (!c) return failed('SMS-ის პარამეტრები არ არის შევსებული')
+  if (!destination) return failed(`მძღოლის ნომერი (${driver.phone}) არ არის ქართული მობილურის ნომერი`)
+  try {
+    await smsoffice.send(c, destination, text, newReference(), id)
+    patch(id, () => ({}), { level: 'success', message: `მძღოლს გაეგზავნა დასრულების SMS (${driver.phone})` })
+  } catch (e) {
+    failed((e as Error).message)
+  }
 }
 
 async function sendSms(id: string) {
