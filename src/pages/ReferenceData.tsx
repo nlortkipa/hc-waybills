@@ -105,10 +105,10 @@ const TABS: TabDef[] = [
     icon: Route,
     fields: [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name, icon: <Building2 />, sub: c.startAddress })) },
-      { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
-      { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
+      { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი', wide: true },
+      { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true, wide: true },
       // The waybill's transport details, the same on every shipment of the route. The transport type is always საავტომობილო.
-      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი (₾)', placeholder: '0', optional: true, validate: vPrice, inputMode: 'decimal' },
+      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი (₾)', placeholder: '0', optional: true, validate: vPrice, inputMode: 'decimal', wide: true },
       { key: 'comment', label: 'კომენტარი', optional: true, wide: true, afterGoods: true },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
