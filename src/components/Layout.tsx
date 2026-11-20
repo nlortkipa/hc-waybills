@@ -1,4 +1,4 @@
-import { BarChart3, ChevronRight, Database, FileStack, FileText, LayoutDashboard, LogOut, MessageSquare, PlusCircle, Truck, Waypoints, X, type LucideIcon } from 'lucide-react'
+import { BarChart3, ChevronRight, Database, FileStack, LayoutDashboard, LogOut, PlusCircle, Truck, Waypoints, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useDb } from '../api/store'
@@ -28,8 +28,6 @@ export const NAV: NavItem[] = [
   { to: '/waybills', tint: 'bg-indigo-500', label: 'RS.ge ზედნადებები', short: 'RS.ge', icon: FileStack, roles: ['admin', 'report'], mobile: ['report'] },
   { to: '/reports', tint: 'bg-violet-500', label: 'რეპორტები', icon: BarChart3, roles: ['admin', 'report'], mobile: ['admin', 'report'] },
   { to: '/refs', tint: 'bg-slate-500', label: 'ცნობარები', short: 'ცნობარები', icon: Database, roles: ['admin'], mobile: ['admin'] },
-  { to: '/rs', tint: 'bg-sky-500', label: 'RS.ge', icon: FileText, roles: ['admin'], mobile: ['admin'] },
-  { to: '/sms', tint: 'bg-teal-500', label: 'SMS', icon: MessageSquare, roles: ['admin'], mobile: [] },
   { to: '/logs', tint: 'bg-rose-500', label: 'API მოთხოვნები', short: 'API', icon: Waypoints, roles: ['admin', 'operator', 'report'], mobile: ['report'] },
 ]
 

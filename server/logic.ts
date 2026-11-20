@@ -671,17 +671,6 @@ export async function checkServices(): Promise<string[]> {
   return []
 }
 
-/** Sends a test SMS with the stored account, so the admin sees the sender name work. */
-export async function testSms(body: { phone?: string } | undefined, user: User) {
-  requireAdmin(user)
-  const c = smsCreds() ?? fail('SMS არ არის დაყენებული (.env)')
-  const destination = toDestination(str(body?.phone)) ?? fail('შეიყვანე მობილურის ნომერი ფორმატით 5XX XX XX XX')
-  await smsoffice.send(c, destination, 'HC Portal: სატესტო შეტყობინება. SMS მუშაობს.', newReference()).catch((e: Error) => fail(e.message, 502))
-  // The test used one message: show the new balance (not fatal if this fails).
-  const balance = await smsoffice.balance(c).catch(() => undefined)
-  if (balance != null) db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
-}
-
 /**
  * Tag written into every waybill's COMMENT. If save_waybill's answer is lost, the next attempt
  * finds the waybill by this tag on RS.ge instead of creating a second one.
@@ -1220,13 +1209,6 @@ function reconcile(id: string, prev: RsRemoteWaybill | undefined, w: RsRemoteWay
   if (changes.length) patch(id, () => ({}), { level: 'info', message: `RS.ge-ზე შეიცვალა — ${changes.join('; ')}` })
 }
 rsCache.onWaybill(reconcile)
-
-/** "Check now" on the settings page: asks RS.ge which waybills changed and reads them again. */
-export async function syncRsNow(user: User) {
-  requireAdmin(user)
-  if (!storedCreds()) fail('ჯერ დაუკავშირდი RS.ge-ს')
-  await rsCache.checkChanges().catch((e: Error) => fail(e.message, 502))
-}
 
 async function runPipeline(id: string) {
   let s = stored(id)

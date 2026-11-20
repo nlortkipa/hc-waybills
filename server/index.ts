@@ -15,7 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, checkServices, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, checkServices, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -63,9 +63,7 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/trucks\/sync$/, ({ body, user }) => readRsList('plates', body, user)],
   // Puts stored trucks' plates that RS.ge's car-number list lacks onto it.
   ['POST', /^\/api\/trucks\/push$/, ({ user }) => pushPlates(user)],
-  ['POST', /^\/api\/rs\/sync$/, ({ user }) => syncRsNow(user)],
   ['GET', /^\/api\/rs\/name\/(\d+)$/, ({ params, user }) => rsTinName(params[0], user)],
-  ['POST', /^\/api\/sms\/test$/, ({ body, user }) => testSms(body, user)],
   ['POST', /^\/api\/shipments$/, async ({ body, user }) => ({ id: await shipments.create(body ?? {}, user) })],
   // Edits a shipment: on RS.ge a draft is overwritten and an active waybill corrected.
   ['PUT', /^\/api\/shipments\/([\w-]+)$/, ({ params, body, user }) => shipments.edit(params[0], body ?? {}, user)],

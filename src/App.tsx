@@ -10,9 +10,7 @@ import { PrintWaybill } from './pages/PrintWaybill'
 import { RsWaybills } from './pages/RsWaybills'
 import { ReferenceData } from './pages/ReferenceData'
 import { Reports } from './pages/Reports'
-import { RsSettings } from './pages/RsSettings'
 import { ShipmentDetail } from './pages/ShipmentDetail'
-import { SmsSettings } from './pages/SmsSettings'
 import { Shipments } from './pages/Shipments'
 import { SessionProvider, useSession } from './session'
 import type { Role } from './types'
@@ -48,8 +46,6 @@ function AppRoutes() {
         <Route path="/waybills" element={<Guard roles={['admin', 'report']}><RsWaybills /></Guard>} />
         <Route path="/reports" element={<Guard roles={['admin', 'report']}><Reports /></Guard>} />
         <Route path="/refs" element={<Guard roles={['admin']}><ReferenceData /></Guard>} />
-        <Route path="/rs" element={<Guard roles={['admin']}><RsSettings /></Guard>} />
-        <Route path="/sms" element={<Guard roles={['admin']}><SmsSettings /></Guard>} />
         <Route path="/logs" element={<ApiLog />} />
         <Route path="*" element={<Navigate to={home[user.role]} replace />} />
       </Routes>

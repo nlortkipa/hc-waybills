@@ -143,19 +143,6 @@ export const rsSettings = {
   nameOf(tin: string) {
     return api<{ tin: string; name: string }>('GET', `/api/rs/name/${tin}`)
   },
-  /** Reads the changes made on RS.ge now instead of waiting for the background sync. */
-  syncNow() {
-    return call('POST', '/api/rs/sync')
-  },
-}
-
-/* ------------------------------ SMS ------------------------------ */
-
-export const smsSettings = {
-  /** Sends a test SMS to the number with the stored account. */
-  test(phone: string) {
-    return call('POST', '/api/sms/test', { phone })
-  },
 }
 
 /* ---------------------------- Shipments ---------------------------- */

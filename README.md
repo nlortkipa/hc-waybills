@@ -128,7 +128,7 @@ RS.ge has no separate sandbox host: everything goes to the normal endpoint, and 
 Setup:
 
 1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and put its user name and password in `.env` as `RS_SERVICE_USER` (`name:taxcode`) and `RS_SERVICE_PASSWORD`. The password never reaches browsers.
-2. Start the server: it checks the service user on RS.ge, reads the seller and RS.ge's units, and refuses to start if RS.ge rejects it. The **RS.ge** tab shows the connected seller.
+2. Start the server: it checks the service user on RS.ge, reads the seller and RS.ge's units, and refuses to start if RS.ge rejects it.
 3. Set up the routes in **ცნობარები → მარშრუტები**: goods lines (quantity, price, VAT type) and transport details are per route; the RS.ge product list is in **ცნობარები → პროდუქტები**. Every waybill is შიდა გადაზიდვა (internal transport between the company's own sites): the buyer is the seller, taken from the connected service user.
 
 Per shipment the server calls `save_waybill` (type 1, შიდა გადაზიდვა, the buyer being the seller; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybil_vd` (sic; activates it with the transport start set to now, or the planned start, and returns the waybill number. Plain `send_waybill` would keep the time of the save, which is wrong when activation is retried later). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. RS.ge also cancels a completed waybill, so **გაუქმება** stays available after **დასრულება**. After either one the waybill is read back; if RS.ge refused because it was already done on the rs.ge portal, that counts as done. Each of these calls appears in **API მოთხოვნები** with the password masked.
@@ -185,8 +185,7 @@ Docs: [smsoffice.ge/integration](https://smsoffice.ge/integration) (in Georgian)
 Setup:
 
 1. On smsoffice.ge, open your profile → integration, turn the API on and copy the **API key**. Register a **sender name** (up to 11 Latin letters, digits, `-` or `.`).
-2. Put both in `.env` as `SMSOFFICE_API_KEY` and `SMSOFFICE_SENDER` and start the server: it checks the key with `getBalance` and refuses to start if smsoffice.ge rejects it. The key never reaches browsers; the **SMS** tab shows the sender and the remaining balance.
-3. The sender can't be checked without sending, so send a **სატესტო SMS** to your own phone. It uses one message.
+2. Put both in `.env` as `SMSOFFICE_API_KEY` and `SMSOFFICE_SENDER` and start the server: it checks the key with `getBalance` and refuses to start if smsoffice.ge rejects it. The key never reaches browsers. The sender can't be checked without sending: a wrong one shows up as an error on the first shipment's SMS.
 
 Per shipment, after RS.ge returns the waybill number, the server sends the driver `ზედნადები №… ატვირთულია. მარშრუტი: … → …. მანქანა: ….` with `POST /api/v2/send/`. The driver's phone (`5XX XX XX XX`) goes out as `9955XXXXXXXX`. All calls are form POSTs with the key in the body, never in the URL. They appear in **API მოთხოვნები** with the key masked.
 
