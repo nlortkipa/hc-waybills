@@ -63,7 +63,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
   if (d.version === 9) d = { ...d, version: 10, rs: defaultRsSettings() }
   // v10 → v11: RS.ge simulator and mode removed. IDs from the simulator mean nothing to RS.ge, so drop them.
   if (d.version === 10) {
-    const { mode: _m, spSet: _ss, ...rs } = d.rs as Database['rs'] & { mode?: string }
+    const { mode: _m, spSet: _ss, ...rs } = d.rs as Database['rs'] & { mode?: string; spSet?: boolean }
     d = {
       ...d,
       version: 11,
@@ -75,7 +75,7 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
     }
   }
   // v11 → v12: service user fields back (v11 had none).
-  if (d.version === 11) d = { ...d, version: 12, rs: { ...d.rs, su: d.rs.su ?? '', sp: d.rs.sp ?? '' } }
+  if (d.version === 11) d = { ...d, version: 12, rs: { ...d.rs, su: d.rs.su ?? '' } }
   // v12 → v13: simulation settings (latency, SMS failure rate) removed.
   if (d.version === 12) {
     const { settings: _s, ...rest } = d as Database & { settings?: unknown }

@@ -3,6 +3,9 @@
  *
  *   node server/index.ts            (PORT, default 8787; HOST, default 0.0.0.0)
  *
+ * RS.ge and smsoffice.ge accounts come from .env (server/config.ts). Before listening the server
+ * checks that both services accept them, and exits if either is missing or doesn't work.
+ *
  * Also serves the built web app from dist/ when it exists, so one process is
  * enough in production. The Android app talks to it over the network.
  */
@@ -12,7 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, clearProducts, clearTrucks, connectRs, connectSms, disconnectRs, disconnectSms, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
+import { auth, checkServices, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, syncRsNow, testSms, viewFor, type RefCollection } from './logic.ts'
 import { rsCache } from './rscache.ts'
 import { store } from './store.ts'
 
@@ -60,12 +63,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/trucks\/sync$/, ({ body, user }) => readRsList('plates', body, user)],
   // Puts stored trucks' plates that RS.ge's car-number list lacks onto it.
   ['POST', /^\/api\/trucks\/push$/, ({ user }) => pushPlates(user)],
-  ['POST', /^\/api\/rs\/connection$/, ({ body, user }) => connectRs(body, user)],
-  ['DELETE', /^\/api\/rs\/connection$/, ({ user }) => disconnectRs(user)],
   ['POST', /^\/api\/rs\/sync$/, ({ user }) => syncRsNow(user)],
   ['GET', /^\/api\/rs\/name\/(\d+)$/, ({ params, user }) => rsTinName(params[0], user)],
-  ['PUT', /^\/api\/sms$/, ({ body, user }) => connectSms(body, user)],
-  ['DELETE', /^\/api\/sms$/, ({ user }) => disconnectSms(user)],
   ['POST', /^\/api\/sms\/test$/, ({ body, user }) => testSms(body, user)],
   ['POST', /^\/api\/shipments$/, async ({ body, user }) => ({ id: await shipments.create(body ?? {}, user) })],
   // Edits a shipment: on RS.ge a draft is overwritten and an active waybill corrected.
@@ -206,6 +205,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
 // Background pipelines run detached from requests: log a stray rejection instead of exiting.
 process.on('unhandledRejection', (e) => console.error('[api] unhandled rejection:', e))
+
+// Both services must work before anything is served.
+console.log('[api] checking RS.ge and SMS…')
+const problems = await checkServices()
+if (problems.length) {
+  console.error(`[api] not starting — fix .env (see .env.example) and start again:\n${problems.map((p) => `  • ${p}`).join('\n')}`)
+  process.exit(1)
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`[api] listening on http://${HOST}:${PORT}`)

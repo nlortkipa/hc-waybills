@@ -69,7 +69,6 @@ export const RS_VAT_TYPES = [
 export function defaultRsSettings(): RsSettings {
   return {
     su: '',
-    sp: '',
     sellerUnId: null,
     sellerUserId: null,
     sellerTin: '',

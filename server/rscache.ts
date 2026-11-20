@@ -13,6 +13,7 @@
  * every change here, so it is part of the state revision clients poll with.
  */
 import type { Product, RsRemoteWaybill } from '../src/types.ts'
+import { RS_SU } from './config.ts'
 import { onAccountChange, rsge, storedCreds, type RsBarCode } from './rsge.ts'
 import { store as db } from './store.ts'
 
@@ -69,7 +70,7 @@ let onWaybill: (shipmentId: string, prev: RsRemoteWaybill | undefined, next: RsR
 /** The service user everything here belongs to. */
 let owner = ''
 function sameOwner() {
-  const su = db.get().rs.su
+  const su = RS_SU
   if (su !== owner) {
     // Another service user: what was read belongs to the previous one.
     owner = su

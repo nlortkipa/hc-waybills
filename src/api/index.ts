@@ -139,14 +139,6 @@ export const rsPending = (s: Shipment) => !!s.rsWaybillId && !s.rsRemote
 /* ------------------------------ RS.ge ------------------------------ */
 
 export const rsSettings = {
-  /** Checks a service user on RS.ge and stores it only if it works. Empty `sp` re-checks the stored password. */
-  connect(creds: { su: string; sp?: string }) {
-    return call<{ tin: string; name: string }>('POST', '/api/rs/connection', creds)
-  },
-  /** Forgets the stored service user. */
-  disconnect() {
-    return call('DELETE', '/api/rs/connection')
-  },
   /** The name RS.ge's register has for a personal number or tax code; '' when it has none. */
   nameOf(tin: string) {
     return api<{ tin: string; name: string }>('GET', `/api/rs/name/${tin}`)
@@ -160,14 +152,6 @@ export const rsSettings = {
 /* ------------------------------ SMS ------------------------------ */
 
 export const smsSettings = {
-  /** Checks the smsoffice.ge key and stores it with the sender. Empty `apiKey` keeps the stored key. Admin only. */
-  save(value: { apiKey?: string; sender: string }) {
-    return call<{ balance: number }>('PUT', '/api/sms', value)
-  },
-  /** Forgets the smsoffice.ge account. */
-  disconnect() {
-    return call('DELETE', '/api/sms')
-  },
   /** Sends a test SMS to the number with the stored account. */
   test(phone: string) {
     return call('POST', '/api/sms/test', { phone })

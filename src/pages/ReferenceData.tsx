@@ -80,9 +80,6 @@ const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown
 /** A route record's goods lines. */
 const goodsOf = (r: Rec) => (r as unknown as CarrierRoute).goods ?? []
 
-/** Connected to RS.ge (the admin's copy shows the service user). Products and plates are RS.ge's, so they need it. */
-const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet
-
 const TABS: TabDef[] = [
   {
     key: 'carriers',
@@ -257,7 +254,6 @@ export function ReferenceData() {
   const [editing, setEditing] = useState<Rec | null>(null)
   const [deleting, setDeleting] = useState<Rec | null>(null)
   const [busy, setBusy] = useState(false)
-  const productsLocked = (tab.key === 'products' || tab.key === 'trucks') && !rsConnected(d)
 
   // Products and plates: read RS.ge's list when the tab opens, so ones added on the rs.ge portal show up.
   useEffect(() => {
@@ -305,7 +301,7 @@ export function ReferenceData() {
         title="ცნობარები"
         actions={
           <span className="hidden sm:block">
-            <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())} disabled={productsLocked}>
+            <Button icon={<Plus className="size-4" />} onClick={() => setEditing(blank())}>
               {tab.singular} დამატება
             </Button>
           </span>
@@ -328,7 +324,7 @@ export function ReferenceData() {
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ძებნა…" className="pl-9" />
         </div>
         <span className="sm:hidden">
-          <Button className="w-11 px-0" icon={<Plus className="size-4" />} onClick={() => setEditing(blank())} disabled={productsLocked} aria-label={`${tab.singular} დამატება`} />
+          <Button className="w-11 px-0" icon={<Plus className="size-4" />} onClick={() => setEditing(blank())} aria-label={`${tab.singular} დამატება`} />
         </span>
       </div>
 
@@ -432,13 +428,6 @@ function RsListLine({ what }: { what: 'products' | 'trucks' }) {
   const isProducts = what === 'products'
   const error = isProducts ? d.rs.productsSyncError : d.rs.platesError
   const list = isProducts ? 'პროდუქტების სია' : 'მანქანების ნომრების სია'
-  if (!rsConnected(d)) {
-    return (
-      <p className="mb-4 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
-        {isProducts ? 'პროდუქტები RS.ge-დან მოდის' : 'მანქანების ნომრები RS.ge-ზე ინახება'} — დასამატებლად და შესაცვლელად ჯერ დაუკავშირდი RS.ge-ს (RS.ge-ს გვერდი).
-      </p>
-    )
-  }
   const run = async () => {
     setBusy(true)
     try {

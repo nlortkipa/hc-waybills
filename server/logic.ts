@@ -29,8 +29,9 @@ import type {
 } from '../src/types.ts'
 import { IntegrationError } from './integrations.ts'
 import { rsCache } from './rscache.ts'
-import { resetRsCache, rsDate, rsge, storedCreds, type RsCreds, type XmlGood } from './rsge.ts'
-import { newReference, SENDER_RE, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
+import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
+import { configProblems, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
+import { newReference, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
 export class HttpError extends Error {
@@ -187,8 +188,8 @@ export function viewFor(user: User): Database {
   const rs = rsView()
   const d: Database = {
     ...raw,
-    rs: { ...rs, sp: '', spSet: !!raw.rs.sp, su: user.role === 'admin' ? raw.rs.su : '' },
-    sms: { ...raw.sms, apiKey: '', apiKeySet: !!raw.sms.apiKey },
+    rs: { ...rs, su: user.role === 'admin' ? RS_SU : '' },
+    sms: { ...raw.sms, sender: SMS_SENDER },
     products: rsCache.products(),
     trucks: trucksView(raw.trucks),
     shipments: raw.shipments.filter((s) => canUseCarrier(user, s.carrierId)).map((s) => withRs(s, rs.akciz)),
@@ -638,81 +639,47 @@ export async function rsTinName(tin: string, user: User) {
   return { tin, name: (await rsName(tin)).trim() }
 }
 
-/**
- * Connects a service user: checks it on RS.ge and, only if it passes, stores it. What RS.ge says about
- * it (seller, reference lists) is kept in memory only. Leaving `sp` empty re-checks the stored password.
- */
-export async function connectRs(body: { su?: string; sp?: string } | undefined, user: User) {
-  requireAdmin(user)
-  const prev = db.get().rs
-  const su = str(body?.su)
-  if (!su) fail('შეიყვანე სერვისის მომხმარებელი')
-  if (!/^[^:]+:(\d{9}|\d{11})$/.test(su)) fail('სერვისის მომხმარებელი უნდა იყოს ფორმატით სახელი:კოდი (კოდი — 9 ან 11 ციფრი)')
-  const sp = str(body?.sp) || (su === prev.su ? prev.sp : '')
-  if (!sp) fail('შეიყვანე სერვისის პაროლი')
-  const c: RsCreds = { su, sp }
-  const r = await rsge.check(c).catch((e: Error) => fail(e.message, 502))
-  if (su !== prev.su || sp !== prev.sp) resetRsCache()
-  // Another taxpayer: everything read from RS.ge for the previous one goes.
-  const before = rsge.account()
-  if (su !== prev.su || (before && before.unId !== r.unId)) rsCache.reset()
-  db.set('rs', { ...db.get().rs, su, sp })
-  // Lists RS.ge didn't return this time keep what was read before.
-  rsge.setAccount(su, { ...r, units: r.units.length ? r.units : (before?.units ?? []), akciz: r.akciz.length ? r.akciz : (before?.akciz ?? []) })
-  void rsCache.loadProducts().catch(() => {})
-  void rsCache.loadPlates().catch(() => {})
-  return { tin: r.tin, name: r.name }
-}
-
-/** Forgets the service user. Waybills already on RS.ge are not touched. */
-export async function disconnectRs(user: User) {
-  requireAdmin(user)
-  db.set('rs', { ...db.get().rs, su: '', sp: '' })
-  // No account: nothing read from RS.ge stays (products, plates, waybills, the seller).
-  resetRsCache()
-  rsCache.reset()
-}
-
 /* ------------------------------ SMS ------------------------------ */
 
-/** The stored smsoffice.ge account, or null when SMS isn't set up. */
-const smsCreds = (): SmsCreds | null => {
-  const { apiKey, sender } = db.get().sms
-  return apiKey && sender ? { apiKey, sender } : null
-}
+/** The smsoffice.ge account from .env. */
+const smsCreds = (): SmsCreds | null => (SMS_API_KEY && SMS_SENDER ? { apiKey: SMS_API_KEY, sender: SMS_SENDER } : null)
+
+/* ------------------------------ Startup ------------------------------ */
 
 /**
- * Saves the smsoffice.ge account after checking the key (getBalance). An empty key keeps the stored
- * one. The sender can't be checked without sending: the test SMS does that.
+ * Checks the accounts in .env before the server starts: both must be set, RS.ge must accept the service
+ * user (the seller is read and kept) and smsoffice.ge the API key (the balance is kept). Resolves with
+ * what went wrong, one line each; empty = both work.
  */
-export async function connectSms(body: { apiKey?: string; sender?: string } | undefined, user: User) {
-  requireAdmin(user)
-  const prev = db.get().sms
-  const sender = str(body?.sender)
-  if (!sender) fail('შეიყვანე გამგზავნის სახელი')
-  if (!SENDER_RE.test(sender)) fail('გამგზავნის სახელი: მაქსიმუმ 11 ლათინური ასო, ციფრი, „-“ ან „.“')
-  const apiKey = str(body?.apiKey) || prev.apiKey
-  if (!apiKey) fail('შეიყვანე API გასაღები')
-  const balance = await smsoffice.balance({ apiKey }).catch((e: Error) => fail(e.message, 502))
-  db.set('sms', { apiKey, sender, balance, checkedAt: nowIso() })
-  return { balance }
-}
-
-/** Forgets the smsoffice.ge account: drivers get no SMS until it is set up again. */
-export function disconnectSms(user: User) {
-  requireAdmin(user)
-  db.set('sms', { apiKey: '', sender: '' })
+export async function checkServices(): Promise<string[]> {
+  const problems = configProblems()
+  if (problems.length) return problems
+  const [rs, sms] = await Promise.allSettled([rsge.loadAccount(storedCreds()!), smsoffice.balance({ apiKey: SMS_API_KEY })])
+  const why = (label: string, e: unknown) => ((e as Error).message.startsWith(label) ? (e as Error).message : `${label}: ${(e as Error).message}`)
+  const out: string[] = []
+  if (rs.status === 'rejected') out.push(why('RS.ge', rs.reason))
+  if (sms.status === 'rejected') out.push(why('SMS', sms.reason))
+  if (out.length) return out
+  const balance = (sms as PromiseFulfilledResult<number>).value
+  db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
+  db.dropStoredAccounts()
+  const a = (rs as PromiseFulfilledResult<Awaited<ReturnType<typeof rsge.loadAccount>>>).value
+  console.log(`[rs.ge] connected: ${a.name} (${a.tin})`)
+  console.log(`[sms] connected: sender ${SMS_SENDER}, ${balance} messages left`)
+  void rsCache.loadProducts().catch(() => {})
+  void rsCache.loadPlates().catch(() => {})
+  return []
 }
 
 /** Sends a test SMS with the stored account, so the admin sees the sender name work. */
 export async function testSms(body: { phone?: string } | undefined, user: User) {
   requireAdmin(user)
-  const c = smsCreds() ?? fail('ჯერ შეინახე smsoffice.ge-ს API გასაღები და გამგზავნი')
+  const c = smsCreds() ?? fail('SMS არ არის დაყენებული (.env)')
   const destination = toDestination(str(body?.phone)) ?? fail('შეიყვანე მობილურის ნომერი ფორმატით 5XX XX XX XX')
   await smsoffice.send(c, destination, 'HC Portal: სატესტო შეტყობინება. SMS მუშაობს.', newReference()).catch((e: Error) => fail(e.message, 502))
   // The test used one message: show the new balance (not fatal if this fails).
   const balance = await smsoffice.balance(c).catch(() => undefined)
-  if (balance != null && db.get().sms.apiKey === c.apiKey) db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
+  if (balance != null) db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
 }
 
 /**

@@ -237,14 +237,10 @@ export type ServiceName = 'RS.ge' | 'SMS'
 export type SmsDelivery = 'Pending' | 'Delivered' | 'Undelivered' | 'Expired' | 'Unknown'
 
 /**
- * smsoffice.ge account, set by the admin. The API key never leaves the server: clients get '' plus apiKeySet.
+ * smsoffice.ge account. The API key and sender are in the server's .env and the key never leaves the server.
  */
 export interface SmsSettings {
-  /** API key from smsoffice.ge (profile → integration). Empty in every client copy. */
-  apiKey: string
-  /** True when a key is stored on the server. Set only in client copies. */
-  apiKeySet?: boolean
-  /** Sender name registered on smsoffice.ge: up to 11 Latin letters, digits, '-' or '.'. */
+  /** Sender name registered on smsoffice.ge (SMSOFFICE_SENDER in .env). Filled in by the server's view only. */
   sender: string
   /** Messages left on the account when it was last checked. */
   balance?: number
@@ -317,17 +313,13 @@ export interface RsRefItem {
 }
 
 /**
- * RS.ge connection: the service user, set by the admin. Everything else on a waybill comes from its route.
- * The password (sp) never leaves the server: clients get '' plus spSet.
+ * RS.ge connection: the service user, from the server's .env. Everything else on a waybill comes from its route.
+ * The password never leaves the server.
  * Fields marked "from RS.ge" are never stored: the server reads them from RS.ge and adds them to each view.
  */
 export interface RsSettings {
-  /** Service user (სერვისის მომხმარებელი). */
+  /** Service user (სერვისის მომხმარებელი, RS_SERVICE_USER in .env). Admins only; never stored. */
   su: string
-  /** Service user password. Empty in every client copy. */
-  sp: string
-  /** True when a password is stored on the server. Set only in client copies. */
-  spSet?: boolean
 
   /* From RS.ge — the seller: the taxpayer that owns the service user. */
   sellerUnId: number | null
@@ -371,7 +363,6 @@ export const RS_LIVE_FIELDS = [
   'productsSyncError',
   'platesReadAt',
   'platesError',
-  'spSet',
 ] as const
 
 /** Everything one waybill needs, in RS.ge terms. Built when a shipment is created. */

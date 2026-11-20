@@ -67,9 +67,9 @@ RS.ge's details.
 
 The app is a React + TypeScript front end (Vite, Tailwind) plus a small Node API server (`server/`, no dependencies). The front end runs in the browser and is wrapped as a native Android app with [Capacitor](https://capacitorjs.com). Browsers and the Android app all talk to the same server, which owns the data, enforces roles and runs the RS.ge → SMS pipeline.
 
-> **RS.ge** (`server/rsge.ts`) and **SMS** (`server/smsoffice.ts`, through [smsoffice.ge](https://smsoffice.ge)) are called for real with the accounts the admin enters. There is no simulator. Data is stored by the server in SQLite at `server/data/hc.db` (Node's built-in `node:sqlite`; override with `HC_DB_FILE`). Delete `hc.db*` to start over with only the admin. On first start an existing `server/data/db.json` (the old storage) is imported and renamed to `db.json.imported`. Back up `hc.db` with `sqlite3 hc.db ".backup copy.db"` (a plain file copy while the server runs can miss the newest changes in `hc.db-wal`).
+> **RS.ge** (`server/rsge.ts`) and **SMS** (`server/smsoffice.ts`, through [smsoffice.ge](https://smsoffice.ge)) are called for real with the accounts in `.env`. There is no simulator. Data is stored by the server in SQLite at `server/data/hc.db` (Node's built-in `node:sqlite`; override with `HC_DB_FILE`). Delete `hc.db*` to start over with only the admin. On first start an existing `server/data/db.json` (the old storage) is imported and renamed to `db.json.imported`. Back up `hc.db` with `sqlite3 hc.db ".backup copy.db"` (a plain file copy while the server runs can miss the newest changes in `hc.db-wal`).
 
-> **Secrets:** the server reads `.env` in the project root. On first start it generates `HC_SECRET_KEY` there, which encrypts the RS.ge password and the SMS API key in `hc.db`. Keep `.env` out of database backups (a copied `hc.db` is useless without it) but don't lose it: with a different key the RS.ge password and SMS key can't be read and have to be entered again. A password stored by an older version is encrypted on the next start.
+> **Accounts (`.env`):** the RS.ge service user and the smsoffice.ge account live in `.env` in the project root (copy [`.env.example`](.env.example)): `RS_SERVICE_USER`, `RS_SERVICE_PASSWORD`, `SMSOFFICE_API_KEY`, `SMSOFFICE_SENDER`, plus the optional `RS_WAYBILL_URL` / `SMSOFFICE_URL`. They are not stored in `hc.db` and can't be changed in the app: edit `.env` and restart. **The server doesn't start** unless all four are set, RS.ge accepts the service user and smsoffice.ge accepts the key (`getBalance`); it prints what is wrong and exits. Accounts stored in `hc.db` by older versions are removed from it on the first start that passes this check.
 
 > **Sessions** end after 30 days without use or 90 days after login. A user is logged out everywhere when their phone number or role changes, or when they're deleted. **Times** are always shown and grouped by day in Georgian time (UTC+4), whatever the device's time zone.
 
@@ -117,7 +117,7 @@ The interface is in Georgian.
 2. As an operator, open **ახალი რეისი** (new shipment) and pick only the route (routes of all the operator's carriers, each showing its goods), the driver and the truck (picking one suggests the other from the last shipment), then press **ზედნადების ატვირთვა** (upload waybill), or **მხოლოდ შენახვა** to save it on RS.ge without activating. Everything else on the waybill is the route's, and the waybill is always შიდა გადაზიდვა; the summary shows what will be sent. The shipment page shows each step live: RS.ge → SMS, and offers everything the rs.ge portal does for that waybill (see below). **ასლი** starts a new shipment with the same data.
 3. In **API მოთხოვნები**: watch every RS.ge and SMS request and response (admins can clear the log).
 
-SMS needs an smsoffice.ge account (see below). Without one, the SMS step fails with a message saying so; once it's set up, **ხელახლა გაგზავნა** on the shipment sends it.
+SMS needs an smsoffice.ge account in `.env` (see below); the server doesn't start without one.
 
 ### RS.ge waybills
 
@@ -125,10 +125,10 @@ Protocol: [`docs/rs-ge/waybill_protocol.pdf`](docs/rs-ge/waybill_protocol.pdf) (
 
 RS.ge has no separate sandbox host: everything goes to the normal endpoint, and waybills belong to whoever owns the service user. The test users in the protocol (`tbilisi` / `satesto2`) are rejected as of Nov 2026; the public test service user `YVELAM GAMOIYENET:12345678910` / `123456` works (test taxpayer 12345678910, driver `11111111111`). Anyone can see and change its waybills, so cancel each one right after with **გაუქმება**.
 
-Setup (admin, **RS.ge** tab):
+Setup:
 
-1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and enter its user name (`su`) and password (`sp`). The password is stored only on the server, encrypted (AES-256-GCM) with `HC_SECRET_KEY`, and never sent to browsers.
-2. Press **კავშირის შემოწმება** (check connection). Typed-but-unsaved values are only tested; for the saved user this fills in the seller and loads RS.ge's units and transport types (it also happens on the first upload).
+1. Create a **service user** on eservices.rs.ge (register the server's public IP for it) and put its user name and password in `.env` as `RS_SERVICE_USER` (`name:taxcode`) and `RS_SERVICE_PASSWORD`. The password never reaches browsers.
+2. Start the server: it checks the service user on RS.ge, reads the seller and RS.ge's units, and refuses to start if RS.ge rejects it. The **RS.ge** tab shows the connected seller.
 3. Set up the routes in **ცნობარები → მარშრუტები**: goods lines (quantity, price, VAT type) and transport details are per route; the RS.ge product list is in **ცნობარები → პროდუქტები**. Every waybill is შიდა გადაზიდვა (internal transport between the company's own sites): the buyer is the seller, taken from the connected service user.
 
 Per shipment the server calls `save_waybill` (type 1, შიდა გადაზიდვა, the buyer being the seller; returns the waybill ID, which is stored so a retry reuses it) and then `send_waybil_vd` (sic; activates it with the transport start set to now, or the planned start, and returns the waybill number. Plain `send_waybill` would keep the time of the save, which is wrong when activation is retried later). On the shipment page, **დასრულება** calls `close_waybill` and **გაუქმება** calls `ref_waybill`. RS.ge also cancels a completed waybill, so **გაუქმება** stays available after **დასრულება**. After either one the waybill is read back; if RS.ge refused because it was already done on the rs.ge portal, that counts as done. Each of these calls appears in **API მოთხოვნები** with the password masked.
@@ -182,10 +182,10 @@ Mapping notes:
 
 Docs: [smsoffice.ge/integration](https://smsoffice.ge/integration) (in Georgian). Endpoints are under `https://smsoffice.ge` (override with `SMSOFFICE_URL`, e.g. to point at a local mock).
 
-Setup (admin, **SMS** tab):
+Setup:
 
 1. On smsoffice.ge, open your profile → integration, turn the API on and copy the **API key**. Register a **sender name** (up to 11 Latin letters, digits, `-` or `.`).
-2. Enter both and press **შემოწმება და შენახვა**. The key is checked with `getBalance` before it's saved and is then stored only on the server, encrypted with `HC_SECRET_KEY`, and never sent to browsers. The page shows the remaining SMS balance.
+2. Put both in `.env` as `SMSOFFICE_API_KEY` and `SMSOFFICE_SENDER` and start the server: it checks the key with `getBalance` and refuses to start if smsoffice.ge rejects it. The key never reaches browsers; the **SMS** tab shows the sender and the remaining balance.
 3. The sender can't be checked without sending, so send a **სატესტო SMS** to your own phone. It uses one message.
 
 Per shipment, after RS.ge returns the waybill number, the server sends the driver `ზედნადები №… ატვირთულია. მარშრუტი: … → …. მანქანა: ….` with `POST /api/v2/send/`. The driver's phone (`5XX XX XX XX`) goes out as `9955XXXXXXXX`. All calls are form POSTs with the key in the body, never in the URL. They appear in **API მოთხოვნები** with the key masked.

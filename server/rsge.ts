@@ -17,17 +17,16 @@
  * them), so a save is only trusted after reading the code back.
  *
  * RS.ge has no separate sandbox host: testing is done on the normal endpoint with a test
- * service user. The service user (su / sp) is entered by the admin and stored on the server,
- * the password encrypted (server/secret.ts). Every call goes to the integration log, with the
- * password masked. Read-backs are tagged
+ * service user. The service user (su / sp) comes from .env (server/config.ts). Every call goes
+ * to the integration log, with the password masked. Read-backs are tagged
  * (readBack) so the log keeps them apart from the uploads.
  *
  * What RS.ge says about the service user (the seller, its units, transport types and excise codes)
  * is kept in memory only (`account`): read on connect, or on first need after a restart.
  */
 import type { IntegrationLog, RsAkciz, RsListWaybill, RsRefItem, RsRemoteWaybill, RsWaybillPayload } from '../src/types.ts'
+import { RS_SP, RS_SU } from './config.ts'
 import { IntegrationError, log } from './integrations.ts'
-import { store as db } from './store.ts'
 
 /** The connected service user as RS.ge describes it. Memory only. */
 export interface RsAccount {
@@ -611,10 +610,9 @@ const live = {
 
 /* -------------------------------- Facade -------------------------------- */
 
-/** The service user the admin connected. */
+/** The service user from .env (RS_SERVICE_USER / RS_SERVICE_PASSWORD). */
 export function storedCreds(): RsCreds | null {
-  const rs = db.get().rs
-  return rs.su && rs.sp ? { su: rs.su, sp: rs.sp } : null
+  return RS_SU && RS_SP ? { su: RS_SU, sp: RS_SP } : null
 }
 
 function activeCreds(): RsCreds {
@@ -656,7 +654,7 @@ export const rsge = {
   check: (c: RsCreds) => live.check(c),
 
   /** The account info for the stored service user, if it has been read since the server started. */
-  account: (): RsAccount | null => (account && account.su === db.get().rs.su ? account : null),
+  account: (): RsAccount | null => (account && account.su === RS_SU ? account : null),
   accountError: () => accountError,
 
   /** Records what a successful check returned (connecting). */

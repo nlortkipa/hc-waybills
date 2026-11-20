@@ -10,8 +10,8 @@
  * whether the phone got it is known later from getMessageStatus. getBalance has no error format: a
  * wrong key gets a .NET stack trace, so any answer that is not a number means the key was refused.
  *
- * The API key and sender are entered by the admin and stored on the server (the key encrypted, see
- * server/secret.ts). Every call goes to the integration log with the key masked.
+ * The API key and sender come from .env (server/config.ts). Every call goes to the integration log
+ * with the key masked.
  */
 import { randomBytes } from 'node:crypto'
 import type { IntegrationLog, SmsDelivery } from '../src/types.ts'
@@ -58,9 +58,6 @@ const ERRORS: Record<number, string> = {
 const TEMPORARY = new Set([-100])
 
 const smsError = (message: string, rejected = false) => new IntegrationError('SMS', message, rejected)
-
-/** Sender names smsoffice.ge accepts: up to 11 Latin letters, digits, '-', '.' (words may be separated by spaces). */
-export const SENDER_RE = /^[A-Za-z0-9.\- ]{1,11}$/
 
 /** A Georgian mobile number (any common spelling) as smsoffice.ge wants it: 9955XXXXXXXX. null if it isn't one. */
 export function toDestination(phone: string): string | null {

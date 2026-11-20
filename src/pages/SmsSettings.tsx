@@ -1,180 +1,46 @@
-import { AlertTriangle, CheckCircle2, Unplug } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { smsSettings } from '../api'
 import { useDb } from '../api/store'
-import { Button, Card, ConfirmModal, Field, Input, PageHeader, Section } from '../components/ui'
+import { Button, Card, Field, Input, PageHeader, Section } from '../components/ui'
 import { useToast } from '../components/toast'
 import { formatDateTime, formatNumber, phoneKey } from '../lib/util'
-import type { SmsSettings as Sms } from '../types'
 
-/** Sender names smsoffice.ge accepts (the server checks the same). */
-const SENDER_RE = /^[A-Za-z0-9.\- ]{1,11}$/
-
-const isConnected = (sms: Sms) => !!sms.apiKeySet && !!sms.sender
-
-/** SMS to drivers through smsoffice.ge: the account (API key + sender) and a test message. Admin only. */
+/** SMS to drivers through smsoffice.ge: the account (from the server's .env) and a test message. Admin only. */
 export function SmsSettings() {
-  const sms = useDb().sms
-  const connected = isConnected(sms)
   return (
     <>
       <PageHeader title="SMS" />
       <div className="space-y-4">
-        {!connected && (
-          <div className="flex gap-3 rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-            <p>SMS არ არის დაყენებული — მძღოლები ზედნადების ნომერს ვერ მიიღებენ.</p>
-          </div>
-        )}
         <AccountCard />
-        {connected && <TestCard />}
+        <TestCard />
       </div>
     </>
   )
 }
 
+/** The account in the server's .env: the server only runs once smsoffice.ge accepted the key. */
 function AccountCard() {
   const sms = useDb().sms
-  const toast = useToast()
-  const connected = isConnected(sms)
-  const [editing, setEditing] = useState(false)
-  const [apiKey, setApiKey] = useState('')
-  const [sender, setSender] = useState(sms.sender)
-  const [errors, setErrors] = useState<{ apiKey?: string; sender?: string }>({})
-  const [busy, setBusy] = useState(false)
-  const [askDisconnect, setAskDisconnect] = useState(false)
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault()
-    const s = sender.trim()
-    const errs = {
-      apiKey: apiKey.trim() || sms.apiKeySet ? '' : 'სავალდებულო ველი',
-      sender: !s ? 'სავალდებულო ველი' : SENDER_RE.test(s) ? '' : 'მაქსიმუმ 11 ლათინური ასო, ციფრი, „-“ ან „.“',
-    }
-    setErrors(errs)
-    if (errs.apiKey || errs.sender) return
-    setBusy(true)
-    try {
-      const r = await smsSettings.save({ apiKey: apiKey.trim() || undefined, sender: s })
-      setApiKey('')
-      setEditing(false)
-      toast('success', `შენახულია — ბალანსზე ${formatNumber(r.balance)} SMS`)
-    } catch (err) {
-      toast('error', (err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const disconnect = async () => {
-    setBusy(true)
-    try {
-      await smsSettings.disconnect()
-      setApiKey('')
-      setSender('')
-      setAskDisconnect(false)
-      toast('success', 'SMS გაითიშა')
-    } catch (err) {
-      toast('error', (err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (connected && !editing) {
-    return (
-      <Card className="p-5 sm:p-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-emerald-500 text-white">
-              <CheckCircle2 className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-slate-900">დაკავშირებულია smsoffice.ge-სთან</h2>
-              <p className="text-sm text-slate-900">
-                გამგზავნი <span className="font-mono text-[13px]">{sms.sender}</span>
-              </p>
-              <p className="text-xs text-slate-500">
-                {sms.balance != null && <>ბალანსზე {formatNumber(sms.balance)} SMS</>}
-                {sms.checkedAt && <> · შემოწმდა {formatDateTime(sms.checkedAt)}</>}
-              </p>
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setSender(sms.sender)
-                setApiKey('')
-                setErrors({})
-                setEditing(true)
-              }}
-            >
-              შეცვლა
-            </Button>
-            <Button type="button" variant="ghost" size="sm" icon={<Unplug className="size-3.5" />} onClick={() => setAskDisconnect(true)}>
-              გათიშვა
-            </Button>
-          </div>
-        </div>
-        <ConfirmModal
-          open={askDisconnect}
-          title="გაითიშოს SMS?"
-          message="მძღოლები SMS-ს აღარ მიიღებენ."
-          confirmLabel="გათიშვა"
-          busy={busy}
-          onConfirm={() => void disconnect()}
-          onClose={() => setAskDisconnect(false)}
-        />
-      </Card>
-    )
-  }
-
   return (
-    <form onSubmit={save} noValidate>
-      <Section title="smsoffice.ge ანგარიში">
-        <Field label="API გასაღები" error={errors.apiKey} hint={sms.apiKeySet && !apiKey ? 'შენახულია — დატოვე ცარიელი, თუ არ ცვლი' : undefined}>
-          <Input
-            type="password"
-            value={apiKey}
-            autoComplete="new-password"
-            className="font-mono"
-            placeholder={sms.apiKeySet ? '••••••' : ''}
-            invalid={!!errors.apiKey}
-            onChange={(e) => {
-              setApiKey(e.target.value)
-              setErrors((x) => ({ ...x, apiKey: '' }))
-            }}
-          />
-        </Field>
-        <Field label="გამგზავნის სახელი" error={errors.sender}>
-          <Input
-            value={sender}
-            autoComplete="off"
-            maxLength={11}
-            className="font-mono"
-            placeholder="HC"
-            invalid={!!errors.sender}
-            onChange={(e) => {
-              setSender(e.target.value)
-              setErrors((x) => ({ ...x, sender: '' }))
-            }}
-          />
-        </Field>
-        <div className="flex justify-end gap-2 sm:col-span-2">
-          {editing && (
-            <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
-              გაუქმება
-            </Button>
-          )}
-          <Button type="submit" loading={busy}>
-            შემოწმება და შენახვა
-          </Button>
+    <Card className="p-5 sm:p-6">
+      <div className="flex items-start gap-3">
+        <div className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-emerald-500 text-white">
+          <CheckCircle2 className="size-4" />
         </div>
-      </Section>
-    </form>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-slate-900">დაკავშირებულია smsoffice.ge-სთან</h2>
+          <p className="text-sm text-slate-900">
+            გამგზავნი <span className="font-mono text-[13px]">{sms.sender}</span>
+          </p>
+          <p className="text-xs text-slate-500">
+            {sms.balance != null && <>ბალანსზე {formatNumber(sms.balance)} SMS</>}
+            {sms.checkedAt && <> · შემოწმდა {formatDateTime(sms.checkedAt)}</>}
+          </p>
+          <p className="text-xs text-slate-500">API გასაღები და გამგზავნი იცვლება სერვერის .env ფაილში</p>
+        </div>
+      </div>
+    </Card>
   )
 }
 

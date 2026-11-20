@@ -10,15 +10,14 @@
  * goes to SQLite first and reaches the copy only after it committed.
  *
  * On first start an existing db.json (the previous storage) is imported and renamed to
- * db.json.imported. The RS.ge password and the SMS API key are stored encrypted (server/secret.ts); the file is
- * still readable by its owner only.
+ * db.json.imported. The RS.ge service user and the SMS account are not stored: they come from .env
+ * (server/config.ts). The file is readable by its owner only.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { RS_LIVE_FIELDS, type IntegrationLog, type RsSettings, type SmsSettings, type StoredDatabase as Database } from '../src/types.ts'
-import { decrypt, encrypt, isEncrypted } from './secret.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import { createSeed, migrate, storedShipment } from './seed.ts'
@@ -89,31 +88,13 @@ function getMeta<T>(key: string): T | undefined {
 const setMetaStmt = sql.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
 const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(seal(key, value)))
 
-/* Secrets (the RS.ge password, the SMS API key) are encrypted in the database and plain only in memory. */
-const SECRET_FIELD: Record<string, { field: string; what: string }> = {
-  rs: { field: 'sp', what: 'RS.ge password — reconnect RS.ge in settings' },
-  sms: { field: 'apiKey', what: 'SMS API key — enter it again in the SMS settings' },
-}
+/* The services' accounts live in .env (server/config.ts). Older versions stored them here: never written again. */
+const ENV_ONLY: Record<MetaKey, string[]> = { rs: ['su', 'sp'], sms: ['apiKey', 'sender'] }
+const omit = <T,>(value: T, keys: readonly string[]): T => (value ? (Object.fromEntries(Object.entries(value).filter(([k]) => !keys.includes(k))) as T) : value)
 function seal(key: string, value: unknown) {
   // What RS.ge says about the account is never stored: it is read again from RS.ge.
-  if (key === 'rs' && value) value = Object.fromEntries(Object.entries(value).filter(([k]) => !(RS_LIVE_FIELDS as readonly string[]).includes(k)))
-  const s = SECRET_FIELD[key]
-  if (!s || !value) return value
-  const v = value as Record<string, string>
-  return { ...v, [s.field]: encrypt(v[s.field] ?? '') }
-}
-function openSecret<T>(key: 'rs' | 'sms', value: T): T {
-  const { field, what } = SECRET_FIELD[key]
-  const v = value as Record<string, string> | undefined
-  if (!v?.[field]) return value
-  try {
-    return { ...v, [field]: decrypt(v[field]) } as T
-  } catch {
-    // Wrong or lost HC_SECRET_KEY: the secret is unreadable. Treat the service as disconnected
-    // (the admin enters it again) instead of refusing to start.
-    console.error(`[secret] can't decrypt the stored ${what}`)
-    return { ...v, [field]: '' } as T
-  }
+  if (key === 'rs') value = omit(value, RS_LIVE_FIELDS)
+  return key in ENV_ONLY ? omit(value, ENV_ONLY[key as MetaKey]) : value
 }
 
 function writeRow(col: StoredCol, rec: { id: string }) {
@@ -151,9 +132,9 @@ function readAll(): Database | null {
     ...(version < 19 && { cargo: getMeta('cargo') }),
     // Before v24 products were stored; migrate() reads them to point route lines at their bar codes.
     ...(version < 24 && { products: tableExists('products') ? parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()) : [] }),
-    rs: openSecret('rs', getMeta<RsSettings>('rs') ?? defaultRsSettings()),
+    rs: { ...defaultRsSettings(), ...omit(getMeta<RsSettings>('rs'), ENV_ONLY.rs) },
     // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
-    sms: openSecret('sms', getMeta<SmsSettings>('sms') ?? defaultSmsSettings()),
+    sms: { ...defaultSmsSettings(), ...omit(getMeta<SmsSettings>('sms'), ENV_ONLY.sms) },
   }
 }
 
@@ -236,15 +217,6 @@ let mem: Database = (() => {
 })()
 console.log(`[db] ${FILE}`)
 
-// A secret stored before encryption existed: encrypt it now.
-for (const key of ['rs', 'sms'] as const) {
-  const plain = getMeta<Record<string, string>>(key)?.[SECRET_FIELD[key].field]
-  if (plain && !isEncrypted(plain)) {
-    tx(() => setMeta(key, mem[key]), false)
-    console.log(`[secret] encrypted the stored ${key} secret`)
-  }
-}
-
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
@@ -309,6 +281,14 @@ export const store = {
         for (const b of barCodes) sql.prepare('DELETE FROM product_prices WHERE bar_code = ?').run(b.toLowerCase())
       })
     },
+  },
+
+  /** Removes the accounts older versions stored (now in .env). Called once .env's accounts were checked and work. */
+  dropStoredAccounts() {
+    const stale = (['rs', 'sms'] as const).filter((k) => ENV_ONLY[k].some((f) => getMeta<Record<string, unknown>>(k)?.[f] !== undefined))
+    if (!stale.length) return
+    tx(() => stale.forEach((k) => setMeta(k, mem[k])), false)
+    console.log(`[db] removed the stored ${stale.join(' and ')} account (now in .env)`)
   },
 
   clearLogs() {
