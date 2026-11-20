@@ -6,7 +6,7 @@
  * on the route carries them as they are.
  */
 import { useEffect, useState } from 'react'
-import { Ban, ChevronDown, ChevronRight, ChevronUp, Package, Pencil, Plus, Search, Stamp, X } from 'lucide-react'
+import { Ban, ChevronDown, ChevronRight, ChevronUp, Pencil, Plus, Search, Stamp, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
 import { bareCls, compoundCls, invalidCls } from './fieldStyles'
 import { OptionRow } from './pickers'
@@ -186,13 +186,20 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     onChange([...goods, g])
     setOpenKey(g.key)
   }
-  const remove = (key: string) => onChange(goods.filter((x) => x.key !== key))
+  const remove = (key: string) => {
+    const rest = goods.filter((x) => x.key !== key)
+    onChange(rest)
+    // The last line left stays open: it can't be folded on its own.
+    if (rest.length === 1) setOpenKey(rest[0].key)
+  }
 
-  const removeBtn = (key: string) => (
-    <button type="button" onClick={() => remove(key)} className="grid size-7 shrink-0 place-items-center rounded-full text-slate-400 transition-colors hover:bg-rose-500/15 hover:text-rose-600" title="პროდუქტის მოხსნა" aria-label="პროდუქტის მოხსნა">
-      <X className="size-4" />
-    </button>
-  )
+  // At least one goods line always stays: the only one can't be removed.
+  const removeBtn = (key: string) =>
+    goods.length > 1 && (
+      <button type="button" onClick={() => remove(key)} className="grid size-7 shrink-0 place-items-center rounded-full text-slate-400 transition-colors hover:bg-rose-500/15 hover:text-rose-600" title="პროდუქტის მოხსნა" aria-label="პროდუქტის მოხსნა">
+        <X className="size-4" />
+      </button>
+    )
 
   return (
     <div>
@@ -281,7 +288,6 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                             {products.map((x) => (
                               <option key={x.id} value={x.id} label={x.name} data-search={x.barCode} disabled={taken.has(x.barCode.toLowerCase())}>
                                 <OptionRow
-                                  icon={<Package />}
                                   title={x.name}
                                   sub={
                                     <>

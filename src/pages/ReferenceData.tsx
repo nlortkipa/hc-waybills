@@ -542,7 +542,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
   const pickCarriers = tab.key === 'users' && form.role === 'operator'
   // A route's goods lines, as typed.
   const isRoute = tab.key === 'routes'
-  const [goods, setGoods] = useState<GoodDraft[]>(() => (rec.id ? goodsOf(rec).map(toDraft) : [blankGood(d)]))
+  const [goods, setGoods] = useState<GoodDraft[]>(() => (rec.id && goodsOf(rec).length ? goodsOf(rec).map(toDraft) : [blankGood(d)]))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState('')

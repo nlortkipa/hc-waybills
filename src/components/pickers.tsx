@@ -451,15 +451,17 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
 }
 
 /**
- * The content of a `rich` Select option: a tinted icon tile, a title and a gray subtitle.
+ * The content of a `rich` Select option: a tinted icon tile (when given), a title and a gray subtitle.
  * Every picker of records (routes, carriers, drivers, trucks, products…) lays its rows out with it.
  */
-export function OptionRow({ icon, title, sub }: { icon: ReactNode; title: ReactNode; sub?: ReactNode }) {
+export function OptionRow({ icon, title, sub }: { icon?: ReactNode; title: ReactNode; sub?: ReactNode }) {
   return (
     <span className="flex items-center gap-2.5">
-      <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white sm:size-8 sm:rounded-[7px] [&>svg]:size-[17px] sm:[&>svg]:size-4">
-        {icon}
-      </span>
+      {icon && (
+        <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white sm:size-8 sm:rounded-[7px] [&>svg]:size-[17px] sm:[&>svg]:size-4">
+          {icon}
+        </span>
+      )}
       <span className="min-w-0 flex-1">
         <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]">{title || '—'}</span>
         {sub && (
