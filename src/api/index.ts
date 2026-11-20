@@ -28,9 +28,14 @@ export const auth = {
       return null
     }
   },
-  /** Logs in by phone number. Later the server will send an SMS code first. */
-  async loginByPhone(phone: string): Promise<User> {
-    const { token, user } = await api<{ token: string; user: User }>('POST', '/api/login', { phone })
+  /** Texts a login code to the number. Resolves to the seconds before another may be asked for. */
+  async sendCode(phone: string): Promise<number> {
+    const { resendIn } = await api<{ resendIn: number }>('POST', '/api/login/code', { phone })
+    return resendIn
+  },
+  /** Logs in with the number and the code from the SMS. */
+  async login(phone: string, code: string): Promise<User> {
+    const { token, user } = await api<{ token: string; user: User }>('POST', '/api/login', { phone, code })
     setToken(token)
     await refresh()
     return user

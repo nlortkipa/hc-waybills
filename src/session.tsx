@@ -8,7 +8,7 @@ interface Session {
   user: User | null
   /** True while a saved login is being restored from the server. */
   restoring: boolean
-  login: (phone: string) => Promise<void>
+  login: (phone: string, code: string) => Promise<void>
   logout: () => void
 }
 
@@ -34,8 +34,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => void off()
   }, [])
 
-  const login = useCallback(async (phone: string) => {
-    const u = await auth.loginByPhone(phone)
+  const login = useCallback(async (phone: string, code: string) => {
+    const u = await auth.login(phone, code)
     setUserId(u.id)
   }, [])
   const logout = useCallback(() => {

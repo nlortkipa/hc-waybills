@@ -35,7 +35,9 @@ type Ctx = { req: IncomingMessage; body: any; params: string[]; user: User; toke
 type Handler = (c: Ctx) => unknown
 
 const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolean][] = [
-  ['POST', /^\/api\/login$/, ({ body }) => auth.login(body?.phone), true],
+  // Login: an SMS code to a known number, then the number and the code start a session.
+  ['POST', /^\/api\/login\/code$/, ({ req, body }) => auth.sendCode(body?.phone, req.headers.origin), true],
+  ['POST', /^\/api\/login$/, ({ body }) => auth.login(body?.phone, body?.code), true],
   ['POST', /^\/api\/logout$/, ({ token }) => auth.logout(token)],
   ['GET', /^\/api\/me$/, ({ user }) => user],
   [

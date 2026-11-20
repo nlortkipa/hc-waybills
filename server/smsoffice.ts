@@ -72,8 +72,8 @@ export const newReference = () => randomBytes(8).toString('hex')
  * POSTs a form to smsoffice.ge and logs the exchange, key masked. Returns the HTTP status and body;
  * throws when no answer arrived (then whether a message went out is unknown).
  */
-async function post(path: string, form: Record<string, string>, ctx: { shipmentId?: string; readBack?: IntegrationLog['readBack']; accepted: (http: number, raw: string) => boolean }) {
-  const logged = { ...form, key: '••••••' }
+async function post(path: string, form: Record<string, string>, ctx: { shipmentId?: string; readBack?: IntegrationLog['readBack']; accepted: (http: number, raw: string) => boolean; loggedContent?: string }) {
+  const logged = { ...form, key: '••••••', ...(ctx.loggedContent !== undefined && { content: ctx.loggedContent }) }
   const endpoint = `POST smsoffice.ge${path}`
   const started = Date.now()
   let http = 0
@@ -128,10 +128,11 @@ const isOkReply = (http: number, raw: string) => http === 200 && /"ErrorCode"\s*
 export const smsoffice = {
   /**
    * Sends one SMS to a number from toDestination(). Resolves once smsoffice.ge accepted it (not yet
-   * delivered). `reference` (newReference()) labels it for status() later.
+   * delivered). `reference` (newReference()) labels it for status() later. `loggedText` is what the
+   * integration log shows instead of the text (a login code is never logged).
    */
-  async send(c: SmsCreds, destination: string, text: string, reference: string, shipmentId?: string): Promise<void> {
-    const { http, raw } = await post('/api/v2/send/', { key: c.apiKey, destination, sender: c.sender, content: text, reference }, { shipmentId, accepted: isOkReply })
+  async send(c: SmsCreds, destination: string, text: string, reference: string, shipmentId?: string, loggedText = text): Promise<void> {
+    const { http, raw } = await post('/api/v2/send/', { key: c.apiKey, destination, sender: c.sender, content: text, reference }, { shipmentId, accepted: isOkReply, loggedContent: loggedText })
     parseReply(http, raw)
   },
 

@@ -27,6 +27,7 @@ import type {
   User,
   WaybillType,
 } from '../src/types.ts'
+import { createHash, randomInt } from 'node:crypto'
 import { IntegrationError } from './integrations.ts'
 import { rsCache } from './rscache.ts'
 import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
@@ -48,12 +49,70 @@ const str = (v: unknown) => String(v ?? '').trim()
 
 /* ------------------------------ Auth ------------------------------ */
 
+/** Login codes sent by SMS, by phone key: only a hash is kept, and only in memory. */
+const loginCodes = new Map<string, { hash: string; expires: number; tries: number; sentAt: number; sends: number[] }>()
+const CODE_TTL_MS = 5 * 60_000
+const CODE_RESEND_MS = 45_000
+const CODE_MAX_TRIES = 5
+const CODE_SENDS_PER_HOUR = 6
+const hashCode = (key: string, code: string) => createHash('sha256').update(`${key}:${code}`).digest('hex')
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of loginCodes) if (v.expires < now && !v.sends.some((t) => now - t < 3600_000)) loginCodes.delete(k)
+}, 10 * 60_000).unref()
+
+/**
+ * The SMS with the login code. Its last line (`@host #code`) lets Chrome on Android offer the code
+ * on the login form (WebOTP); it is only added for the site's own https address.
+ */
+export function loginSmsText(code: string, origin?: string): string {
+  let host = ''
+  try {
+    const u = new URL(origin ?? '')
+    if (u.protocol === 'https:') host = u.host
+  } catch {
+    /* no origin */
+  }
+  return `HC Portal: შესვლის კოდი ${code}` + (host ? `\n\n@${host} #${code}` : '')
+}
+
 export const auth = {
-  /** No SMS code yet: a known number logs in straight away. */
-  login(phone: string): { token: string; user: User } {
+  /** Texts a 6-digit login code to a known user's number. */
+  async sendCode(phone: string, origin?: string): Promise<{ resendIn: number }> {
     const key = phoneKey(String(phone ?? ''))
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
+    const destination = toDestination(user!.phone)
+    if (!destination) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
+    const now = Date.now()
+    const prev = loginCodes.get(key)
+    const sends = (prev?.sends ?? []).filter((t) => now - t < 3600_000)
+    if (prev && now - prev.sentAt < CODE_RESEND_MS) return { resendIn: Math.ceil((CODE_RESEND_MS - (now - prev.sentAt)) / 1000) }
+    if (sends.length >= CODE_SENDS_PER_HOUR) fail('ძალიან ბევრი მცდელობა — სცადე ერთ საათში', 429)
+    const c = smsCreds()
+    if (!c) fail('SMS სერვისი არ არის დაკავშირებული', 503)
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
+    try {
+      await smsoffice.send(c!, destination!, loginSmsText(code, origin), newReference(), undefined, loginSmsText('••••••', origin))
+    } catch (e) {
+      fail(`კოდი ვერ გაიგზავნა: ${(e as Error).message}`, 502)
+    }
+    loginCodes.set(key, { hash: hashCode(key, code), expires: now + CODE_TTL_MS, tries: 0, sentAt: now, sends: [...sends, now] })
+    return { resendIn: Math.ceil(CODE_RESEND_MS / 1000) }
+  },
+  /** Checks the SMS code and starts a session. */
+  login(phone: string, code: string): { token: string; user: User } {
+    const key = phoneKey(String(phone ?? ''))
+    const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
+    if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
+    const entry = loginCodes.get(key)
+    const typed = String(code ?? '').replace(/\D/g, '')
+    if (!entry || entry.expires < Date.now() || entry.tries >= CODE_MAX_TRIES) fail('კოდს ვადა გაუვიდა — მოითხოვე ახალი', 401)
+    if (!typed || hashCode(key, typed) !== entry!.hash) {
+      entry!.tries++
+      fail(entry!.tries >= CODE_MAX_TRIES ? 'კოდი არასწორია — მოითხოვე ახალი' : 'კოდი არასწორია', 401)
+    }
+    loginCodes.set(key, { ...entry!, expires: 0, hash: '', sentAt: 0 })
     return { token: db.sessions.create(user!.id), user: user! }
   },
   user(token: string | undefined): User | null {
