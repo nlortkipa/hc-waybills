@@ -7,7 +7,7 @@ import { active, cx, phoneKey } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { goodsText, routeAddresses, routeLabel } from '../lib/route'
-import { RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit, transHasCost, transHasPayer, transHasTransporter, transTypes } from '../lib/rs'
+import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { CarrierRoute, Database } from '../types'
 import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
 import { OptionRow } from '../components/pickers'
@@ -58,7 +58,6 @@ const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-
 const vPlate = (v: string) => (/^[A-Z]{2}-\d{3}-[A-Z]{2}$/.test(v.trim().toUpperCase()) ? null : 'ფორმატი: AA-123-BB')
 
 const vPrice = (v: string) => (Number(v.replace(',', '.')) >= 0 ? null : 'შეიყვანე 0 ან მეტი')
-const vTransporter = (v: string) => (/^\d{9}$|^\d{11}$/.test(v.trim()) ? null : '9 ან 11 ციფრი')
 /** A product's unit price as RS.ge shows it: 10 → '10.00'. */
 const fmtPrice = (v?: string) => (Number(v) || 0).toFixed(2)
 const vatLabel = (v?: string) => RS_VAT_TYPES.find((x) => String(x.value) === (v || '0'))?.label ?? '—'
@@ -78,9 +77,6 @@ const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id ==
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
 /** A route record's goods lines. */
 const goodsOf = (r: Rec) => (r as unknown as CarrierRoute).goods ?? []
-
-/** A route record's transport type (TRANS_ID). */
-const transOf = (r: Rec) => Number(r.transId) || RS_TRANS_CAR
 
 /** Connected to RS.ge (the admin's copy shows the service user). Products and plates are RS.ge's, so they need it. */
 const rsConnected = (d: Database) => !!d.rs.su && !!d.rs.spSet
@@ -111,22 +107,8 @@ const TABS: TabDef[] = [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name, icon: <Building2 />, sub: c.startAddress })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი' },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true },
-      // The waybill's transport details, the same on every shipment of the route: what RS.ge's შიდა გადაზიდვა form asks for with the transport type.
-      { key: 'transId', label: 'ტრანსპორტირების სახე', type: 'select', initial: () => String(RS_TRANS_CAR), options: (d) => transTypes(d.rs).map((t) => ({ value: String(t.id), label: t.name })) },
-      { key: 'transTxt', label: 'სხვა ტრანსპორტი', showIf: (r) => transOf(r) === RS_TRANS_OTHER },
-      { key: 'transporterTin', label: 'გადამზიდავის ს/ნ', mono: true, validate: vTransporter, inputMode: 'numeric', showIf: (r) => transHasTransporter(transOf(r)) },
-      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი (₾)', placeholder: '0', optional: true, validate: vPrice, inputMode: 'decimal', showIf: (r) => transHasCost(transOf(r)) },
-      {
-        key: 'tranCostPayer',
-        label: 'ხარჯს იხდის',
-        type: 'select',
-        initial: () => '2',
-        showIf: (r) => transHasPayer(transOf(r)),
-        options: () => [
-          { value: '2', label: 'გამყიდველი' },
-          { value: '1', label: 'მყიდველი' },
-        ],
-      },
+      // The waybill's transport details, the same on every shipment of the route. The transport type is always საავტომობილო.
+      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი (₾)', placeholder: '0', optional: true, validate: vPrice, inputMode: 'decimal' },
       { key: 'comment', label: 'კომენტარი', optional: true, wide: true, afterGoods: true },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),

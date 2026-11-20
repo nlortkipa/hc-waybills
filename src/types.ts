@@ -34,19 +34,11 @@ export interface CarrierRoute extends SoftDeletable, RouteWaybill {
 export type RouteGood = ShipmentItem
 
 /**
- * Transport details a route's waybills carry, as RS.ge's შიდა გადაზიდვა form asks for them by transport
- * type (src/lib/rs.ts); missing = the default (საავტომობილო, the seller pays, empty).
+ * What a route's waybills carry beyond the goods; missing = empty. The transport type is always
+ * საავტომობილო (src/lib/rs.ts), with the seller paying the transport cost.
  */
 export interface RouteWaybill {
-  transId?: number
-  /** Only for "other". */
-  transTxt?: string
-  /** Only for გადამზიდავი. */
-  transporterTin?: string
-  /** Only for types with a vehicle. */
   transportCost?: number
-  /** Only for a foreign car. */
-  tranCostPayer?: 1 | 2
   comment?: string
 }
 
@@ -68,14 +60,8 @@ export interface ShipmentWaybill {
   buyerForeign: boolean
   /** Planned start of transport (ISO). Missing = when it is activated. RS.ge allows up to 3 days ahead. */
   beginAt?: string
-  /** TRANS_ID: transport type from get_trans_types. */
-  transId: number
-  /** TRANS_TXT: the type's name when it is "other". */
-  transTxt: string
-  /** TRANSPORTER_TIN: tax ID of a separate transport company; '' = none. */
-  transporterTin: string
+  /** The transport type is always საავტომობილო (RS_TRANS_CAR), paid by the seller. */
   transportCost: number
-  tranCostPayer: 1 | 2
   receptionInfo: string
   receiverInfo: string
   /** Comment typed for this shipment; the trailer number and the HC tag are added to it. */
@@ -355,7 +341,6 @@ export interface RsSettings {
 
   /** From RS.ge: reference lists. */
   units: RsRefItem[]
-  transTypes: RsRefItem[]
   /** Excise goods codes, for goods lines of excise goods. Missing until first loaded. */
   akciz?: RsAkciz[]
 
@@ -379,7 +364,6 @@ export const RS_LIVE_FIELDS = [
   'checkedAt',
   'accountError',
   'units',
-  'transTypes',
   'akciz',
   'syncedTo',
   'syncError',

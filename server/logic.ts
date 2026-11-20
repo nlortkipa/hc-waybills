@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
-import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, transHasCost, transHasPayer, transHasTransporter, waybillDefaults } from '../src/lib/rs.ts'
+import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
@@ -81,7 +81,6 @@ export function rsView(): RsSettings {
     checkedAt: a?.checkedAt,
     accountError: a ? undefined : rsge.accountError(),
     units: a?.units ?? [],
-    transTypes: a?.transTypes ?? [],
     akciz: a?.akciz ?? [],
     syncedTo: changes.to,
     syncError: changes.error,
@@ -152,11 +151,7 @@ function waybillFrom(w: RsRemoteWaybill, shipmentId: string): ShipmentWaybill {
     type,
     ...buyer,
     ...(w.beginAt && Date.parse(w.beginAt) > Date.now() && { beginAt: w.beginAt }),
-    transId: w.transId || RS_TRANS_CAR,
-    transTxt: w.transId === RS_TRANS_OTHER ? (w.transTxt ?? '') : '',
-    transporterTin: w.transporterTin ?? '',
     transportCost: w.transportCost,
-    tranCostPayer: w.tranCostPayer === 1 ? 1 : 2,
     receptionInfo: w.receptionInfo ?? '',
     receiverInfo: w.receiverInfo ?? '',
     comment: typedComment(w.comment, shipmentId),
@@ -357,7 +352,7 @@ export const refs = {
       const scaleId = str(r.scaleId).trim()
       if (!scaleId) fail('შეიყვანე სასწორის ID')
       const goods = parseItems(raw.goods, was?.goods)
-      const extras = parseRouteWaybill(raw, was)
+      const extras = parseRouteWaybill(raw)
       // Only these fields are kept.
       for (const k of Object.keys(raw)) if (k !== 'id') delete raw[k]
       Object.assign(r, { carrierId, endAddress, scaleId, goods, ...extras })
@@ -394,33 +389,19 @@ export const refs = {
 const MAX_INFO = 250
 
 /**
- * A route's transport details, checked: a transport type RS.ge lists (or the one the route already
- * had, if RS.ge's list isn't loaded), and what RS.ge's შიდა გადაზიდვა form asks for with that type: the
- * name for "other", a 9- or 11-digit transporter for გადამზიდავი, a cost ≥ 0 when there is a vehicle,
- * the payer for a foreign car. Only what differs from the default is kept.
+ * A route's transport details, checked: the transport type is always საავტომობილო, so only a cost ≥ 0
+ * and the comment. Only what differs from the default is kept.
  */
-function parseRouteWaybill(x: Record<string, unknown>, prev: CarrierRoute | undefined): RouteWaybill {
-  const rs = rsView()
-  const was = waybillDefaults(prev)
+function parseRouteWaybill(x: Record<string, unknown>): RouteWaybill {
   const text = (v: unknown, label: string) => {
     const t = str(v).trim()
     if (t.length > MAX_INFO) fail(`${label}: მაქსიმუმ ${MAX_INFO} სიმბოლო`)
     return t
   }
-  const transId = str(x.transId) ? Math.trunc(num(x.transId, NaN)) : RS_TRANS_CAR
-  if (!(transId > 0) || (transId !== was.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტირების სახე')
-  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, 'სხვა ტრანსპორტი') : ''
-  if (transId === RS_TRANS_OTHER && !transTxt) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე მისი დასახელება')
-  const transporterTin = transHasTransporter(transId) ? str(x.transporterTin).trim() : ''
-  if (transHasTransporter(transId) && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
-  const transportCost = transHasCost(transId) && str(x.transportCost) ? num(String(x.transportCost).replace(',', '.'), NaN) : 0
+  const transportCost = str(x.transportCost) ? num(String(x.transportCost).replace(',', '.'), NaN) : 0
   if (!(transportCost >= 0)) fail('ტრანსპორტირების ხარჯი უნდა იყოს 0 ან მეტი')
   const out: RouteWaybill = {
-    transId,
-    transTxt,
-    transporterTin,
     transportCost: Math.round(transportCost * 100) / 100,
-    tranCostPayer: transHasPayer(transId) && Number(x.tranCostPayer) === 1 ? 1 : 2,
     comment: text(x.comment, 'კომენტარი'),
   }
   const base = waybillDefaults()
@@ -677,7 +658,7 @@ export async function connectRs(body: { su?: string; sp?: string } | undefined, 
   if (su !== prev.su || (before && before.unId !== r.unId)) rsCache.reset()
   db.set('rs', { ...db.get().rs, su, sp })
   // Lists RS.ge didn't return this time keep what was read before.
-  rsge.setAccount(su, { ...r, units: r.units.length ? r.units : (before?.units ?? []), transTypes: r.transTypes.length ? r.transTypes : (before?.transTypes ?? []), akciz: r.akciz.length ? r.akciz : (before?.akciz ?? []) })
+  rsge.setAccount(su, { ...r, units: r.units.length ? r.units : (before?.units ?? []), akciz: r.akciz.length ? r.akciz : (before?.akciz ?? []) })
   void rsCache.loadProducts().catch(() => {})
   void rsCache.loadPlates().catch(() => {})
   return { tin: r.tin, name: r.name }
@@ -753,9 +734,6 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
   const driver = d.drivers.find((x) => x.id === s.driverId)
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const moving = !noTransport(w.type)
-  // With a transport company (გადამზიდავი) the company fills in the driver and vehicle on RS.ge;
-  // sent by the seller, RS.ge refuses the waybill (-1053).
-  const ownVehicle = moving && !transHasTransporter(w.transId)
   const goods = s.items.map((g) => ({
     name: g.name,
     barCode: g.barCode,
@@ -775,21 +753,21 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     startAddress: route.start,
     // Without transport RS.ge wants the end to be the start (-1036).
     endAddress: moving ? route.end : route.start,
-    driverTin: ownVehicle && driver ? driver.personalId.trim() : '',
-    driverForeign: ownVehicle && driver?.citizenship === 'foreign',
-    driverName: ownVehicle && driver ? `${driver.firstName} ${driver.lastName}` : '',
+    driverTin: moving && driver ? driver.personalId.trim() : '',
+    driverForeign: moving && driver?.citizenship === 'foreign',
+    driverName: moving && driver ? `${driver.firstName} ${driver.lastName}` : '',
     // RS.ge stores plates without dashes: AA-123-BB → AA123BB.
-    carNumber: ownVehicle && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
-    transId: w.transId,
-    transTxt: w.transId === RS_TRANS_OTHER ? w.transTxt : '',
-    // On a შიდა გადაზიდვა only what RS.ge's form asks for with this transport type.
-    tranCostPayer: w.type !== 1 || transHasPayer(w.transId) ? w.tranCostPayer : 2,
-    transportCost: moving && (w.type !== 1 || transHasCost(w.transId)) ? w.transportCost : 0,
-    transporterTin: moving && (w.type !== 1 || transHasTransporter(w.transId)) ? w.transporterTin : '',
+    carNumber: moving && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
+    // Always საავტომობილო, the seller paying the transport cost.
+    transId: RS_TRANS_CAR,
+    transTxt: '',
+    tranCostPayer: 2,
+    transportCost: moving ? w.transportCost : 0,
+    transporterTin: '',
     receptionInfo: w.receptionInfo,
     receiverInfo: w.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
-    comment: [ownVehicle && truck?.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, w.comment, refTag(s.id)].filter(Boolean).join('; '),
+    comment: [moving && truck?.trailerNumber && `მისაბმელი: ${truck.trailerNumber}`, w.comment, refTag(s.id)].filter(Boolean).join('; '),
     goods,
   }
 }
@@ -862,8 +840,6 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
   // Always შიდა გადაზიდვა.
   const kept = same && prev!.waybill ? { ...prev!.waybill, type: 1 as const, buyerTin: '', buyerName: '', buyerForeign: false } : undefined
   const content = routeContent(route, prev, kept && { items: prev!.items, waybill: kept })
-  // With a transport company the company names the driver and vehicle on RS.ge: none is kept here.
-  if (transHasTransporter(content.waybill.transId)) return { ...input, driverId: '', truckId: '', ...content }
   // A driver or truck kept from before may have been deleted since; a new pick must be live.
   const usable = <T extends { id: string; deletedAt?: string }>(xs: T[], id: string, was?: string) => xs.some((x) => x.id === id && (!x.deletedAt || id === was))
   if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('აირჩიე მძღოლი')
@@ -1399,16 +1375,10 @@ type Activated = { number: string; status: number }
 async function activate(id: string, waybillId: number): Promise<Activated | null> {
   try {
     // The stored start: the one asked for with this activation (or typed for the shipment).
-    // With a transport company the waybill goes to it (status 8); the company activates it.
-    const s = stored(id)
-    const toTransporter = transHasTransporter(shipmentWaybill(s, resolveRoute(db.get(), s.routeId).route).transId)
-    return toTransporter
-      ? { number: await rsge.sendToTransporter(waybillId, id, plannedBegin(s)), status: 8 }
-      : { number: await rsge.sendWaybill(waybillId, id, plannedBegin(s)), status: 1 }
+    return { number: await rsge.sendWaybill(waybillId, id, plannedBegin(stored(id))), status: 1 }
   } catch (e) {
     const w = await rsCache.read(waybillId, id).catch(() => null)
-    // Sent to a transport company (8), the waybill may have no number until the company activates it.
-    if (w && w.status !== 0 && (w.number || w.status === 8)) return { number: w.number, status: w.status }
+    if (w && w.status !== 0 && w.number) return { number: w.number, status: w.status }
     if (w?.status === -1) return null
     throw e
   }
@@ -1493,8 +1463,7 @@ async function sendSms(id: string) {
   const s = get(id)
   const d = db.get()
   const route = resolveRoute(d, s.routeId)
-  // With a transport company the driver on the waybill is the company's, not one of ours.
-  const driver = transHasTransporter(shipmentWaybill(s, route.route).transId) ? undefined : d.drivers.find((x) => x.id === s.driverId)
+  const driver = d.drivers.find((x) => x.id === s.driverId)
   if (!driver) return void patch(id, () => ({ sms: { status: 'skipped' } }))
   const truck = d.trucks.find((x) => x.id === s.truckId)
   const start = s.waybill?.beginAt && Date.parse(s.waybill.beginAt) > Date.now() ? ` დაწყება: ${rsDate(new Date(s.waybill.beginAt)).slice(11, 16)}.` : ''

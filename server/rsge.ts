@@ -38,7 +38,6 @@ export interface RsAccount {
   tin: string
   name: string
   units: RsRefItem[]
-  transTypes: RsRefItem[]
   akciz: RsAkciz[]
   checkedAt: string
 }
@@ -400,7 +399,6 @@ const live = {
       tin: tag(tinXml, 'get_tin_from_un_idResult'),
       name: tag(tinXml, 'name'),
       units: await list('get_waybill_units', 'WAYBILL_UNIT'),
-      transTypes: await list('get_trans_types', 'TRANSPORT_TYPE'),
       // Not needed to connect: an empty list is loaded again later.
       akciz: await live.akciz(c).catch(() => [] as RsAkciz[]),
     }
@@ -663,7 +661,7 @@ export const rsge = {
 
   /** Records what a successful check returned (connecting). */
   setAccount(su: string, r: Awaited<ReturnType<typeof live.check>>) {
-    setAccount({ su, unId: r.unId, userId: r.userId, tin: r.tin, name: r.name, units: r.units, transTypes: r.transTypes, akciz: r.akciz, checkedAt: new Date().toISOString() })
+    setAccount({ su, unId: r.unId, userId: r.userId, tin: r.tin, name: r.name, units: r.units, akciz: r.akciz, checkedAt: new Date().toISOString() })
   },
 
   /** The account info, read from RS.ge when it isn't known yet. One read at a time. */

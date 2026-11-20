@@ -1,8 +1,8 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, StoredDatabase, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, ShipmentWaybill, StoredDatabase, User } from '../src/types.ts'
 
-export const DB_VERSION = 28
+export const DB_VERSION = 29
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -247,7 +247,8 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
         const { id: _id, productId: _lp, quantity: _q, ...g } = line
         return { ...i, ...g }
       })
-      const waybill = s.waybill && { ...s.waybill, transId: s.waybill.transId ?? transId, transTxt: s.waybill.transTxt ?? transTxt, transporterTin: s.waybill.transporterTin ?? transporterTin }
+      const w = s.waybill as (ShipmentWaybill & { transId?: number; transTxt?: string; transporterTin?: string }) | undefined
+      const waybill = w && { ...w, transId: w.transId ?? transId, transTxt: w.transTxt ?? transTxt, transporterTin: w.transporterTin ?? transporterTin }
       return { ...s, ...(items && { items }), ...(waybill && { waybill }) }
     })
     d = { ...d, version: 27, rs: rs as unknown as RsSettings, routes, shipments }
@@ -263,6 +264,15 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
       return { ...r, goods: items.map((i) => ({ ...i })) }
     })
     d = { ...d, version: 28, routes }
+  }
+  // v28 → v29: the transport type is always საავტომობილო, paid by the seller. Routes and the shipments'
+  // waybill options lose the type, the "other" name, the transporter and the payer; the cost stays.
+  if (d.version === 28) {
+    const TRANS = ['transId', 'transTxt', 'transporterTin', 'tranCostPayer']
+    const drop = <T extends object>(x: T): T => Object.fromEntries(Object.entries(x).filter(([k]) => !TRANS.includes(k))) as T
+    const routes = d.routes.map(drop)
+    const shipments = d.shipments.map((s) => (s.waybill ? { ...s, waybill: drop(s.waybill) } : s))
+    d = { ...d, version: 29, routes, shipments }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d

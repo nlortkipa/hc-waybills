@@ -7,7 +7,7 @@ import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS, transHasTransporter, waybillTypeLabel } from '../lib/rs'
+import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -67,8 +67,6 @@ export function ShipmentDetail() {
   const x = L.describe(s)
   const driver = L.driver(s.driverId)
   const truck = L.truck(s.truckId)
-  // With a transport company (გადამზიდავი) the company names the driver and vehicle on RS.ge.
-  const viaTransporter = transHasTransporter(s.waybill?.transId ?? 1)
   const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
   const live = !s.waybillState
@@ -146,13 +144,11 @@ export function ShipmentDetail() {
           : (s.sms.error ??
             (s.sms.status === 'running'
               ? 'იგზავნება…'
-              : viaTransporter
-                ? 'არ იგზავნება — მძღოლს გადამზიდავი მიუთითებს'
-                : s.sms.status === 'skipped'
-                  ? 'ტრანსპორტირების გარეშე — მძღოლი არ არის'
-                  : s.status === 'saved'
-                    ? 'გაიგზავნება გააქტიურებისას'
-                    : 'მოლოდინში')),
+              : s.sms.status === 'skipped'
+                ? 'ტრანსპორტირების გარეშე — მძღოლი არ არის'
+                : s.status === 'saved'
+                  ? 'გაიგზავნება გააქტიურებისას'
+                  : 'მოლოდინში')),
       action: canAct && (s.sms.status === 'failed' || smsLost) && (
         <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.retrySms(s.id).catch((e: Error) => toast('error', e.message))}>
           ხელახლა გაგზავნა
@@ -369,13 +365,7 @@ export function ShipmentDetail() {
             <dl className="divide-y divide-separator text-sm">
               <Info k="კარიერი" v={x.carrier} />
               <Info k="მარშრუტი" v={x.route} />
-              {viaTransporter ? (
-                <>
-                  <Info k="გადამზიდავის ს/ნ" v={s.waybill?.transporterTin || undefined} mono />
-                  {/* RS.ge's once the company has named them. */}
-                  <Info k="მძღოლი და მანქანა" v={s.rsRemote?.driverTin || s.rsRemote?.carNumber ? [x.driver, x.plate].filter((v) => v !== '—').join(' · ') : 'მიუთითებს გადამზიდავი'} />
-                </>
-              ) : driver ? (
+              {driver ? (
                 <>
                   <Info k="მძღოლი" v={x.driver} />
                   <Info k="პირადი ნომერი" v={driver.personalId} mono />
@@ -384,7 +374,7 @@ export function ShipmentDetail() {
               ) : (
                 <Info k="ტრანსპორტირება" v="გარეშე" />
               )}
-              {truck && !viaTransporter && (
+              {truck && (
                 <>
                   <Info k="მანქანა" v={truck.model} />
                   <Info k="სახელმწიფო ნომერი" v={truck.plateNumber} mono />
