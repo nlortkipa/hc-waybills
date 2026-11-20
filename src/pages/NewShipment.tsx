@@ -162,6 +162,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 disabled={!routes.length}
                 searchable
                 rich
+                cards
               >
                 {routes.map((x) => {
                   const { carrier } = routeAddresses(d.carriers, x)
@@ -296,32 +297,19 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
         {end || '—'}
       </span>
 
-      {/* Goods: name, then quantity × price and the line total. */}
-      {goods.length > 0 && (
-        <span className="mt-1.5 block space-y-1 rounded-[7px] bg-fill px-2.5 py-1.5 text-[13px] group-data-hi:bg-white/15 sm:mt-1 sm:space-y-0.5 sm:px-2 sm:py-1 sm:text-[12px]">
+      {/* Goods (name: quantity × price = line total), the transport cost and the comment: one label: value line each. */}
+      {(goods.length > 0 || details.length > 0) && (
+        <span className="mt-1.5 block space-y-0.5 text-[13px] sm:mt-1 sm:space-y-0 sm:text-[12px]">
           {goods.map((g, i) => (
-            <span key={i} className="flex min-w-0 items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate" title={g.name}>
-                {g.name}
-              </span>
-              <span className="ml-auto shrink-0 tabular-nums">
-                <span className={muted}>
-                  {formatNumber(g.quantity, 3)}
-                  {g.unitTxt ? ` ${g.unitTxt}` : ''}
-                  {g.price ? ` × ${formatMoney(g.price)}` : ''}
-                </span>
-                {g.price ? <span className="ml-1.5 font-semibold">{formatMoney(itemAmount(g))} ₾</span> : null}
-              </span>
+            <span key={i} className="block tabular-nums [overflow-wrap:anywhere]">
+              <span className={muted}>{g.name}: </span>
+              {formatNumber(g.quantity, 3)}
+              {g.unitTxt ? ` ${g.unitTxt}` : ''}
+              {g.price ? ` × ${formatMoney(g.price)} ₾ = ${formatMoney(itemAmount(g))} ₾` : ''}
             </span>
           ))}
-        </span>
-      )}
-
-      {/* Transport cost and the comment. */}
-      {details.length > 0 && (
-        <span className="mt-1.5 block space-y-0.5 text-[13px] sm:mt-1 sm:space-y-0 sm:text-[12px]">
           {details.map(([k, v]) => (
-            <span key={k} className="block truncate">
+            <span key={k} className="block [overflow-wrap:anywhere]">
               <span className={muted}>{k}: </span>
               {v}
             </span>

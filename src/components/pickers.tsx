@@ -170,6 +170,8 @@ export type SelectProps = {
    * Inside an option, `group-data-hi:` styles apply while its row is highlighted (white on the accent).
    */
   rich?: boolean
+  /** With `rich`: every option is its own tinted card, spaced apart, for options several lines tall (a route and its goods). */
+  cards?: boolean
   /** Inside a compound field (`compoundCls`): no fill or focus ring of its own. */
   bare?: boolean
   /** Shown at the top of the open menu, above the options (e.g. what they all have in common). */
@@ -178,7 +180,7 @@ export type SelectProps = {
   sheetTitle?: string
 }
 
-export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, bare, header, sheetTitle }: SelectProps) {
+export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, cards, bare, header, sheetTitle }: SelectProps) {
   const all = collectOptions(children)
   const [query, setQuery] = useState('')
   const q = searchable ? query.trim().toLowerCase() : ''
@@ -348,7 +350,7 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                 {opts.length === 0 ? (
                   <p className="py-10 text-center text-[15px] text-slate-400">{q ? 'ვერაფერი მოიძებნა' : 'ვარიანტები არ არის'}</p>
                 ) : (
-                  <div id={listId} role="listbox" aria-label={sheetTitle ?? placeholder} className="overflow-hidden rounded-xl bg-surface">
+                  <div id={listId} role="listbox" aria-label={sheetTitle ?? placeholder} className={cards ? 'space-y-2' : 'overflow-hidden rounded-xl bg-surface'}>
                     {opts.map((o, i) => {
                       const on = o.value === (flash ?? cur)
                       return (
@@ -360,8 +362,8 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                           onClick={() => choose(o)}
                           className={cx(
                             'relative flex cursor-default items-center gap-3 py-3 pr-3.5 pl-4 text-[16px] leading-snug transition-colors select-none active:bg-fill',
-                            // Inset hairline between rows, as in iOS grouped lists.
-                            i > 0 && 'before:absolute before:top-0 before:right-0 before:left-4 before:h-px before:origin-top before:scale-y-50 before:bg-separator',
+                            // Cards stand apart; plain rows get an inset hairline between them, as in iOS grouped lists.
+                            cards ? 'rounded-xl bg-surface' : i > 0 && 'before:absolute before:top-0 before:right-0 before:left-4 before:h-px before:origin-top before:scale-y-50 before:bg-separator',
                             o.disabled ? 'text-slate-400' : 'text-slate-900',
                             flash === o.value && 'bg-fill',
                           )}
@@ -432,7 +434,9 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
                       rich
                         ? 'min-h-14 gap-2.5 rounded-[7px] py-2 pr-2.5 pl-2 sm:min-h-11 sm:py-2 sm:text-[13px]'
                         : 'min-h-9 gap-1 py-1.5 pr-3 pl-1 sm:min-h-[24px] sm:py-0 sm:text-[13px] sm:whitespace-nowrap',
+                      cards && 'mb-1 last:mb-0',
                       o.disabled ? 'text-slate-400' : hi ? 'bg-brand-500 text-white' : 'text-slate-900',
+                      cards && !hi && 'bg-fill',
                       flash === o.value && 'animate-menu-blink',
                     )}
                   >
