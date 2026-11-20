@@ -1,13 +1,13 @@
-import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, CopyPlus, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RotateCw } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RotateCw } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, ShipmentBadge, StepIcon } from '../components/ui'
+import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput } from '../lib/util'
 import { useLookup } from '../lib/lookup'
-import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS, waybillTypeLabel } from '../lib/rs'
+import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
@@ -67,7 +67,6 @@ export function ShipmentDetail() {
   const x = L.describe(s)
   const driver = L.driver(s.driverId)
   const truck = L.truck(s.truckId)
-  const creator = L.user(s.createdBy)
   const canAct = user.role !== 'report'
   // Completing, cancelling and deleting a waybill by hand is for admins (WAYBILL_AUTO_CLOSE completes it on time).
   const admin = user.role === 'admin'
@@ -92,8 +91,8 @@ export function ShipmentDetail() {
     s.sms.status === 'failed'
       ? { label: 'ვერ გაიგზავნა', tone: 'red' as const }
       : s.sms.status === 'ok'
-        ? s.sms.delivery && s.sms.delivery !== 'Unknown'
-          ? SMS_DELIVERY[s.sms.delivery]
+        ? smsLost
+          ? SMS_DELIVERY[s.sms.delivery!]
           : { label: 'გაგზავნილია', tone: 'green' as const }
         : { label: 'იგზავნება', tone: 'blue' as const }
 
@@ -142,7 +141,7 @@ export function ShipmentDetail() {
       status: s.sms.status,
       detail:
         s.sms.status === 'ok'
-          ? `გაეგზავნა ${s.sms.to}${s.sms.delivery && s.sms.delivery !== 'Pending' && s.sms.delivery !== 'Unknown' ? ` · ${SMS_DELIVERY[s.sms.delivery].label.toLowerCase()}` : ''}`
+          ? `გაეგზავნა ${s.sms.to}`
           : (s.sms.error ??
             (s.sms.status === 'running'
               ? 'იგზავნება…'
@@ -170,15 +169,7 @@ export function ShipmentDetail() {
 
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className={cx('text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl', s.waybillNumber && 'font-mono')}>{title}</h1>
-            <ShipmentBadge s={s} />
-            {type && <Badge tone="gray">{waybillTypeLabel(type)}</Badge>}
-            {s.invoiceId && <Badge tone="blue">ფაქტურა №{s.invoiceId}</Badge>}
-          </div>
-          <p className="mt-1 text-sm text-slate-500">
-            შექმნა {creator ? `${creator.firstName} ${creator.lastName}` : '—'} · {formatDateTime(s.createdAt)} · {x.carrier}
-          </p>
+          <h1 className={cx('text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl', s.waybillNumber && 'font-mono')}>{title}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           {canAct && isDraft && (
@@ -218,11 +209,6 @@ export function ShipmentDetail() {
               }}
             >
               №
-            </Button>
-          )}
-          {canAct && (
-            <Button variant="secondary" size="sm" icon={<CopyPlus className="size-3.5" />} onClick={() => nav(`/new?from=${s.id}`)} title="ახალი რეისი იგივე მონაცემებით">
-              ასლი
             </Button>
           )}
           {admin && isDraft && <DeleteButton onClick={() => setDialog('delete')} />}
