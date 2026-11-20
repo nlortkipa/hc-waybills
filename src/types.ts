@@ -33,15 +33,20 @@ export interface CarrierRoute extends SoftDeletable, RouteWaybill {
 /** A goods line of a route: what one goods row of its waybills says, quantity included. */
 export type RouteGood = ShipmentItem
 
-/** Transport details a route's waybills carry; missing = the default (საავტომობილო, the seller pays, empty). */
+/**
+ * Transport details a route's waybills carry, as RS.ge's შიდა გადაზიდვა form asks for them by transport
+ * type (src/lib/rs.ts); missing = the default (საავტომობილო, the seller pays, empty).
+ */
 export interface RouteWaybill {
   transId?: number
+  /** Only for "other". */
   transTxt?: string
+  /** Only for გადამზიდავი. */
   transporterTin?: string
+  /** Only for types with a vehicle. */
   transportCost?: number
+  /** Only for a foreign car. */
   tranCostPayer?: 1 | 2
-  receptionInfo?: string
-  receiverInfo?: string
   comment?: string
 }
 

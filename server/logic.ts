@@ -3,7 +3,7 @@
  * client cannot skip it. Errors are thrown with the Georgian message shown to the user.
  */
 import { canUseCarrier, resolveRoute, routeLive, routeText } from '../src/lib/route.ts'
-import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, waybillDefaults } from '../src/lib/rs.ts'
+import { akcizUnit, itemAmount, MAX_DEFER_MS, noTransport, plateKey, RS_TRANS_CAR, RS_TRANS_OTHER, RS_UNIT_OTHER, rsMissing, rsUnits, shipmentWaybill, transHasCost, transHasPayer, transHasTransporter, waybillDefaults } from '../src/lib/rs.ts'
 import { active, nowIso, phoneKey, shipmentUses, uid } from '../src/lib/util.ts'
 import { SMS_FINAL } from '../src/lib/sms.ts'
 import type {
@@ -393,8 +393,9 @@ const MAX_INFO = 250
 
 /**
  * A route's transport details, checked: a transport type RS.ge lists (or the one the route already
- * had, if RS.ge's list isn't loaded), its name for "other", a 9- or 11-digit transporter, cost ≥ 0.
- * Only what differs from the default is kept.
+ * had, if RS.ge's list isn't loaded), and what RS.ge's შიდა გადაზიდვა form asks for with that type: the
+ * name for "other", a 9- or 11-digit transporter for გადამზიდავი, a cost ≥ 0 when there is a vehicle,
+ * the payer for a foreign car. Only what differs from the default is kept.
  */
 function parseRouteWaybill(x: Record<string, unknown>, prev: CarrierRoute | undefined): RouteWaybill {
   const rs = rsView()
@@ -405,21 +406,19 @@ function parseRouteWaybill(x: Record<string, unknown>, prev: CarrierRoute | unde
     return t
   }
   const transId = str(x.transId) ? Math.trunc(num(x.transId, NaN)) : RS_TRANS_CAR
-  if (!(transId > 0) || (transId !== was.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტის ტიპი')
-  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, 'ტრანსპორტის ტიპი') : ''
-  if (transId === RS_TRANS_OTHER && !transTxt) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე ტიპის დასახელება')
-  const transporterTin = str(x.transporterTin).trim()
-  if (transporterTin && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
-  const transportCost = str(x.transportCost) ? num(String(x.transportCost).replace(',', '.'), NaN) : 0
-  if (!(transportCost >= 0)) fail('ტრანსპორტირების ღირებულება უნდა იყოს 0 ან მეტი')
+  if (!(transId > 0) || (transId !== was.transId && rs.transTypes.length && !rs.transTypes.some((t) => t.id === transId))) fail('აირჩიე ტრანსპორტირების სახე')
+  const transTxt = transId === RS_TRANS_OTHER ? text(x.transTxt, 'სხვა ტრანსპორტი') : ''
+  if (transId === RS_TRANS_OTHER && !transTxt) fail('„სხვა“ ტრანსპორტისთვის ჩაწერე მისი დასახელება')
+  const transporterTin = transHasTransporter(transId) ? str(x.transporterTin).trim() : ''
+  if (transHasTransporter(transId) && !/^\d{9}$|^\d{11}$/.test(transporterTin)) fail('გადამზიდავის ს/ნ უნდა იყოს 9 ან 11 ციფრი')
+  const transportCost = transHasCost(transId) && str(x.transportCost) ? num(String(x.transportCost).replace(',', '.'), NaN) : 0
+  if (!(transportCost >= 0)) fail('ტრანსპორტირების ხარჯი უნდა იყოს 0 ან მეტი')
   const out: RouteWaybill = {
     transId,
     transTxt,
     transporterTin,
     transportCost: Math.round(transportCost * 100) / 100,
-    tranCostPayer: Number(x.tranCostPayer) === 1 ? 1 : 2,
-    receptionInfo: text(x.receptionInfo, 'მიმწოდებლის ინფორმაცია'),
-    receiverInfo: text(x.receiverInfo, 'მიმღების ინფორმაცია'),
+    tranCostPayer: transHasPayer(transId) && Number(x.tranCostPayer) === 1 ? 1 : 2,
     comment: text(x.comment, 'კომენტარი'),
   }
   const base = waybillDefaults()
@@ -771,9 +770,10 @@ function buildWaybill(d: StoredDatabase, s: WaybillSource): RsWaybillPayload {
     carNumber: moving && truck ? truck.plateNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : '',
     transId: w.transId,
     transTxt: w.transId === RS_TRANS_OTHER ? w.transTxt : '',
-    tranCostPayer: w.tranCostPayer,
-    transportCost: moving ? w.transportCost : 0,
-    transporterTin: moving ? w.transporterTin : '',
+    // On a შიდა გადაზიდვა only what RS.ge's form asks for with this transport type.
+    tranCostPayer: w.type !== 1 || transHasPayer(w.transId) ? w.tranCostPayer : 2,
+    transportCost: moving && (w.type !== 1 || transHasCost(w.transId)) ? w.transportCost : 0,
+    transporterTin: moving && (w.type !== 1 || transHasTransporter(w.transId)) ? w.transporterTin : '',
     receptionInfo: w.receptionInfo,
     receiverInfo: w.receiverInfo,
     // RS.ge has no trailer field, so the trailer goes into the comment.
