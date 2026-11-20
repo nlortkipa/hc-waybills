@@ -3,10 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { rsWaybills, type RsWaybillAction, type RsWaybillDetail } from '../api'
 import { useDb } from '../api/store'
-import { Badge, Button, Card, ConfirmModal, DatePicker, DeleteButton, EmptyState, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
+import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
+import { DateRange } from '../components/DateRange'
 import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
-import { formatDateTime, formatNumber, tbilisiDay, tbilisiStamp, formatMoney } from '../lib/util'
+import { formatDateTime, formatNumber, shiftMonths, tbilisiDay, tbilisiStamp, formatMoney } from '../lib/util'
 import { downloadXlsx } from '../lib/xlsx'
 import { openPrint } from '../lib/save'
 import { useUser } from '../session'
@@ -27,13 +28,6 @@ const STATUSES: { value: StatusFilter; label: string }[] = [
 /** Rows shown at first, and added by "show more". */
 const PAGE = 100
 
-/** The same day `n` months later (earlier when negative), on the month's last day when it is shorter: `YYYY-MM-DD`. */
-function shiftMonths(day: string, n: number) {
-  const [y, m, d] = day.split('-').map(Number)
-  const last = new Date(Date.UTC(y, m + n, 0)).getUTCDate()
-  return new Date(Date.UTC(y, m - 1 + n, Math.min(d, last))).toISOString().slice(0, 10)
-}
-
 const statusOf = (n: number) => RS_STATUS[n] ?? { label: String(n), tone: 'gray' as const }
 
 /**
@@ -45,10 +39,9 @@ export function RsWaybills() {
   const d = useDb()
   const toast = useToast()
   const [side, setSide] = useState<Side>('issued')
-  const today = tbilisiDay()
   // Days in Georgian time, both included: by default the last month (this day of the previous month to today).
-  const [from, setFrom] = useState(() => shiftMonths(today, -1))
-  const [to, setTo] = useState(today)
+  const [from, setFrom] = useState(() => shiftMonths(tbilisiDay(), -1))
+  const [to, setTo] = useState(tbilisiDay)
   const [status, setStatus] = useState<StatusFilter>('all')
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<RsListWaybill[] | null>(null)
@@ -139,7 +132,7 @@ export function RsWaybills() {
         <Card>
           <div className="flex flex-col gap-3 p-4 sm:p-5">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="grid w-full grid-cols-[2fr_3fr] gap-2 sm:flex sm:w-auto">
+              <div className="grid w-full grid-cols-[2fr_3fr] gap-2 sm:flex sm:w-auto sm:shrink-0">
                 <Select
                   aria-label="გაცემული ან მიღებული"
                   value={side}
@@ -160,11 +153,7 @@ export function RsWaybills() {
                   ))}
                 </Select>
               </div>
-              <div className="flex w-full items-center gap-2 sm:w-auto">
-                <DatePicker value={from} min={shiftMonths(to, -2)} max={to} onChange={setFrom} className="min-w-0 flex-1 sm:w-36 sm:flex-none" />
-                <span className="text-slate-400">–</span>
-                <DatePicker value={to} min={from} max={[today, shiftMonths(from, 2)].sort()[0]} onChange={setTo} className="min-w-0 flex-1 sm:w-36 sm:flex-none" />
-              </div>
+              <DateRange from={from} to={to} onFrom={setFrom} onTo={setTo} maxMonths={2} />
               <div className="relative w-full min-w-56 sm:w-auto sm:flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="ნომერი, კომპანია, მანქანა, მისამართი…" className="pl-9" />

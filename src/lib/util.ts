@@ -30,6 +30,13 @@ const tbilisi = (d: Date | string) => new Date(new Date(d).getTime() + TBILISI_O
 /** `YYYY-MM-DD` of the Georgian calendar day of an instant (default: now). */
 export const tbilisiDay = (d: Date | string = new Date()) => tbilisi(d).toISOString().slice(0, 10)
 
+/** The same day `n` months later (earlier when negative), on the month's last day when it is shorter: `YYYY-MM-DD`. */
+export function shiftMonths(day: string, n: number) {
+  const [y, m, d] = day.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m + n, 0)).getUTCDate()
+  return new Date(Date.UTC(y, m - 1 + n, Math.min(d, last))).toISOString().slice(0, 10)
+}
+
 /** `YYYY-MM-DD HH:MM` in Georgian time, for exports. */
 export const tbilisiStamp = (iso: string) => tbilisi(iso).toISOString().slice(0, 16).replace('T', ' ')
 
