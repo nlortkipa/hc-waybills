@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, CircleDot, FileCheck2, Info, Loader2, MapPin, PencilLine, Save, Truck as TruckIcon, UserRound } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine, Save, Truck as TruckIcon, UserRound } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
@@ -6,11 +6,11 @@ import { Button, Card, EmptyState, Field, PageHeader, Select } from '../componen
 import { OptionRow } from '../components/pickers'
 import { formatDateTime, formatNumber } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
-import { editable, itemAmount, rsMissing } from '../lib/rs'
+import { editable, itemAmount, rsMissing, RS_TRANS_OTHER, transHasCost, transHasTransporter, transTypes } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
-import type { Database, Shipment } from '../types'
+import type { CarrierRoute, Database, Shipment } from '../types'
 
 /** Where the form starts: empty, a copy of another shipment (`?from=`), or the shipment being edited. */
 type Seed = { routeId: string; driverId: string; truckId: string }
@@ -84,8 +84,6 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   const routes = d.routes.filter((x) => carriers.some((c) => c.id === x.carrierId) && (routeUsable(d.carriers, x) || x.id === editing?.routeId))
   // With a single route there is nothing to choose: it is preselected.
   const route = routes.find((x) => x.id === form.routeId) ?? (routes.length === 1 ? routes[0] : undefined)
-  const routeCarriers = new Set(routes.map((x) => x.carrierId))
-  const oneCarrier = routeCarriers.size <= 1 ? d.carriers.find((c) => routeCarriers.has(c.id)) : undefined
   const set = (k: keyof Seed) => (e: { target: { value: string } }) => {
     const v = e.target.value
     setForm((f) => {
@@ -177,23 +175,13 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 disabled={!routes.length}
                 searchable
                 rich
-                header={
-                  // Every route of a carrier starts at the carrier's address: said once, not on each row.
-                  oneCarrier && (
-                    <span className="flex items-center gap-1.5 px-0.5 text-[13px] text-slate-500 sm:text-[12px]">
-                      <CircleDot className="size-3.5 shrink-0" strokeWidth={2.25} />
-                      <span className="shrink-0">დაწყება</span>
-                      <span className="min-w-0 truncate font-medium text-slate-700">{oneCarrier.startAddress || '—'}</span>
-                    </span>
-                  )
-                }
               >
                 {routes.map((x) => {
-                  const { carrier, end } = routeAddresses(d.carriers, x)
-                  const goodsLine = goodsText(x.goods)
+                  const { carrier } = routeAddresses(d.carriers, x)
+                  const label = routePickLabel(d, x)
                   return (
-                    <option key={x.id} value={x.id} label={routeLabel(d.carriers, x)} data-search={[carrier?.name, carrier?.startAddress, goodsLine].join(' ')}>
-                      <OptionRow icon={<MapPin />} title={end} sub={oneCarrier ? goodsLine : [carrier?.name, goodsLine].filter(Boolean).join(' · ')} />
+                    <option key={x.id} value={x.id} label={label} data-search={[carrier?.name, carrier?.startAddress, x.scaleId, x.comment, x.transporterTin, goodsText(x.goods)].join(' ')}>
+                      <RouteOption d={d} route={x} />
                     </option>
                   )
                 })}
@@ -252,7 +240,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
             <h2 className="text-sm font-semibold text-slate-900">შეჯამება</h2>
             <dl className="mt-3 space-y-2.5 text-sm">
               <Row k="ტიპი" v="შიდა გადაზიდვა" />
-              <Row k="მარშრუტი" v={route ? routeLabel(d.carriers, route) : undefined} />
+              <Row k="მარშრუტი" v={route ? routePickLabel(d, route) : undefined} />
               <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
               <Row k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
               {goods.length ? goods.map((g) => <Row key={g.barCode} k={g.name} v={`${formatNumber(g.quantity, 3)}${g.unitTxt ? ` ${g.unitTxt}` : ''}`} />) : <Row k="პროდუქტი" />}
@@ -285,5 +273,45 @@ function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
       <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">{k}</dt>
       <dd className={`ml-auto min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
     </div>
+  )
+}
+
+/** 'Carrier: Start → End': a route as the operator picks it. */
+const routePickLabel = (d: Database, r: CarrierRoute) => {
+  const carrier = d.carriers.find((c) => c.id === r.carrierId)
+  return `${carrier?.name ? `${carrier.name}: ` : ''}${routeLabel(d.carriers, r)}`
+}
+
+/** A route in the picker: carrier and addresses on top, then everything its waybills will carry. */
+function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
+  const { carrier, start, end } = routeAddresses(d.carriers, r)
+  const transId = r.transId ?? 1
+  const trans = transId === RS_TRANS_OTHER && r.transTxt ? r.transTxt : (transTypes(d.rs).find((t) => t.id === transId)?.name ?? `ტიპი ${transId}`)
+  const meta = [
+    trans,
+    transHasTransporter(transId) && r.transporterTin && `გადამზიდავი ${r.transporterTin}`,
+    transHasCost(transId) && r.transportCost ? `ტრანსპ. ${r.transportCost.toFixed(2)} ₾` : '',
+    r.scaleId && `სასწორი ${r.scaleId}`,
+  ].filter(Boolean)
+  const sub = 'text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]'
+  return (
+    <span className="block min-w-0 space-y-0.5">
+        <span className="block font-medium [overflow-wrap:anywhere]">
+          {carrier?.name && <span className="font-semibold">{carrier.name}: </span>}
+          {start || '—'} → {end || '—'}
+        </span>
+        {(r.goods ?? []).map((g, i) => (
+          <span key={i} className={`flex min-w-0 flex-wrap items-baseline gap-x-1.5 ${sub}`}>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{g.name}</span>
+            <span className="ml-auto shrink-0 tabular-nums">
+              {formatNumber(g.quantity, 3)}
+              {g.unitTxt ? ` ${g.unitTxt}` : ''}
+              {g.price ? ` × ${g.price.toFixed(2)} = ${itemAmount(g).toFixed(2)} ₾` : ''}
+            </span>
+          </span>
+        ))}
+        {meta.length > 0 && <span className={`block [overflow-wrap:anywhere] ${sub}`}>{meta.join(' · ')}</span>}
+        {r.comment && <span className={`block italic [overflow-wrap:anywhere] ${sub}`}>{r.comment}</span>}
+    </span>
   )
 }
