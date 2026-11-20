@@ -7,6 +7,8 @@ interface HCNativeBridge {
   saveFile?: (name: string, mime: string, base64: string) => string
   /** Asks Android for the next SMS (SMS User Consent); its code arrives as a `hc-otp` window event. */
   listenForSmsCode?: () => void
+  /** Opens Android's print dialog for the page (a WebView ignores window.print()). */
+  print?: (jobName: string) => void
 }
 declare global {
   interface Window {
@@ -37,4 +39,19 @@ export async function saveFile(name: string, mime: string, bytes: Uint8Array): P
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
   return null
+}
+
+/** True inside the Android app. */
+export const inApp = () => !!window.HCNative
+
+/** Prints the page: the browser's dialog, or Android's in the app. */
+export function printPage(jobName = document.title) {
+  if (window.HCNative?.print) window.HCNative.print(jobName)
+  else window.print()
+}
+
+/** Opens the printable waybill: a new tab in a browser, the same view in the app (it has no tabs). */
+export function openPrint(rsWaybillId: number | string) {
+  if (inApp()) window.location.hash = `#/print/${rsWaybillId}`
+  else window.open(`#/print/${rsWaybillId}`, '_blank')
 }

@@ -10,6 +10,7 @@ import { useLookup } from '../lib/lookup'
 import { editable, itemAmount, MAX_DEFER_MS, plateKey, RS_STATUS } from '../lib/rs'
 import { SMS_DELIVERY, SMS_FINAL } from '../lib/sms'
 import { useDb } from '../api/store'
+import { openPrint } from '../lib/save'
 import { useUser } from '../session'
 import type { StepStatus } from '../types'
 
@@ -193,7 +194,7 @@ export function ShipmentDetail() {
             </Button>
           )}
           {printable && (
-            <Button variant="secondary" size="sm" icon={<Printer className="size-3.5" />} onClick={() => window.open(`#/print/${s.rsWaybillId}`, '_blank')}>
+            <Button variant="secondary" size="sm" icon={<Printer className="size-3.5" />} onClick={() => s.rsWaybillId && openPrint(s.rsWaybillId)}>
               ბეჭდვა
             </Button>
           )}

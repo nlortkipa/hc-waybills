@@ -1,10 +1,11 @@
-import { Loader2, Printer } from 'lucide-react'
+import { ChevronLeft, Loader2, Printer } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { rsWaybills, type RsWaybillDetail } from '../api'
 import { Button } from '../components/ui'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { formatDateTime, formatNumber, formatMoney } from '../lib/util'
+import { inApp, printPage } from '../lib/save'
 
 /**
  * A waybill as RS.ge has it now, laid out for paper (A4): what the driver carries and the receiver
@@ -21,7 +22,7 @@ export function PrintWaybill() {
   useEffect(() => {
     if (!w) return
     document.title = `ზედნადები ${w.number || w.id}`
-    const t = setTimeout(() => window.print(), 300)
+    const t = setTimeout(() => printPage(), 300)
     return () => clearTimeout(t)
   }, [w])
 
@@ -38,8 +39,15 @@ export function PrintWaybill() {
   return (
     <div className="min-h-dvh bg-white text-[12px] leading-snug text-black print:min-h-0">
       <div className="mx-auto max-w-[800px] p-6 print:max-w-none print:p-0">
-        <div className="mb-4 flex justify-end print:hidden">
-          <Button icon={<Printer className="size-4" />} onClick={() => window.print()}>
+        <div className="mb-4 flex justify-between gap-2 print:hidden">
+          {inApp() || window.history.length > 1 ? (
+            <Button variant="ghost" icon={<ChevronLeft className="size-4" />} onClick={() => window.history.back()}>
+              უკან
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button icon={<Printer className="size-4" />} onClick={() => printPage()}>
             ბეჭდვა
           </Button>
         </div>
@@ -109,7 +117,8 @@ export function PrintWaybill() {
           </tbody>
         </table>
 
-        <table className="mt-4 w-full border-collapse">
+        <div className="mt-4 overflow-x-auto print:overflow-visible">
+          <table className="w-full min-w-[560px] border-collapse print:min-w-0">
           <thead>
             <tr className="bg-black/5">
               <th className={`${cell} w-8 text-left`}>№</th>
@@ -143,6 +152,7 @@ export function PrintWaybill() {
             </tr>
           </tbody>
         </table>
+        </div>
         {w.fullAmountText && <p className="mt-1">თანხა სიტყვიერად: {w.fullAmountText}</p>}
 
         {(w.receptionInfo || w.receiverInfo || w.comment) && (

@@ -11,6 +11,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -34,6 +36,7 @@ import java.util.regex.Pattern;
  *  - saveFile(name, mime, base64): writes an export to Downloads and opens it ("" = saved, else the error)
  *  - listenForSmsCode(): waits for the login SMS (SMS User Consent: the user taps "Allow" once, no SMS
  *    permission) and hands its 6-digit code to the page as a `hc-otp` window event.
+ *  - print(jobName): Android's print dialog for the page (a WebView ignores window.print()).
  */
 public class MainActivity extends BridgeActivity {
     private static final Pattern CODE = Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)");
@@ -145,6 +148,17 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 return "ფაილი ვერ შეინახა: " + e.getMessage();
             }
+        }
+
+        @JavascriptInterface
+        public void print(String jobName) {
+            runOnUiThread(() -> {
+                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                if (pm == null) return;
+                String name = jobName == null || jobName.isEmpty() ? "HC Portal" : jobName;
+                pm.print(name, getBridge().getWebView().createPrintDocumentAdapter(name),
+                    new PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build());
+            });
         }
 
         @JavascriptInterface

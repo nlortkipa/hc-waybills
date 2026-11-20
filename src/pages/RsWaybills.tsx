@@ -8,6 +8,7 @@ import { useToast } from '../components/toast'
 import { RS_STATUS, waybillTypeLabel } from '../lib/rs'
 import { formatDateTime, formatNumber, tbilisiStamp, formatMoney } from '../lib/util'
 import { downloadXlsx } from '../lib/xlsx'
+import { openPrint } from '../lib/save'
 import { useUser } from '../session'
 import type { RsListWaybill } from '../types'
 import { ActivateModal, CloseModal, InvoiceModal } from './ShipmentDetail'
@@ -346,7 +347,7 @@ function WaybillSheet({ id, side, onClose, onChanged }: { id: number; side: Side
                 </Button>
               )}
               {w.status >= 0 && (
-                <Button size="sm" variant="secondary" icon={<Printer className="size-3.5" />} onClick={() => window.open(`#/print/${w.id}`, '_blank')}>
+                <Button size="sm" variant="secondary" icon={<Printer className="size-3.5" />} onClick={() => w.id && openPrint(w.id)}>
                   ბეჭდვა
                 </Button>
               )}

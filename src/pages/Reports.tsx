@@ -126,7 +126,7 @@ export function Reports() {
         <Stat label="შეცდომით" value={failed} sub="RS.ge ან SMS" icon={<AlertTriangle className="size-5" />} accent={failed ? 'bg-rose-500' : 'bg-slate-400'} />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="mt-6 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Card className="p-5">
           <h2 className="text-sm font-semibold text-slate-900">დეკლარირებული ტონაჟი დღეების მიხედვით</h2>
           <p className="text-xs text-slate-500">ტონა, რეისის შექმნის თარიღით</p>
