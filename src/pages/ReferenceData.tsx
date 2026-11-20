@@ -30,6 +30,8 @@ interface FieldDef {
   /** Value of a new record (default: '' or a select's first option). */
   initial?: (d: Database, r?: Rec) => string
   inputMode?: 'numeric' | 'decimal'
+  /** Shown inside the field, after the value (a currency sign). */
+  suffix?: string
   /** Shown below a route's goods, where RS.ge's form has it. */
   afterGoods?: boolean
 }
@@ -108,7 +110,7 @@ const TABS: TabDef[] = [
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი', wide: true },
       { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true, wide: true },
       // The waybill's transport details, the same on every shipment of the route. The transport type is always საავტომობილო.
-      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი (₾)', placeholder: '0', optional: true, validate: vPrice, inputMode: 'decimal', wide: true },
+      { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი', placeholder: '0.00', suffix: '₾', optional: true, validate: vPrice, inputMode: 'decimal', wide: true },
       { key: 'comment', label: 'კომენტარი', optional: true, wide: true, afterGoods: true },
     ],
     title: (r, d) => routeLabel(d.carriers, r as unknown as CarrierRoute),
@@ -198,7 +200,7 @@ const TABS: TabDef[] = [
         initial: (d) => String(tonneUnit(d.rs)),
       },
       { key: 'unitTxt', label: 'ერთეულის დასახელება', placeholder: 'ტონა', showIf: (r) => r.unitId === String(RS_UNIT_OTHER), initial: () => 'ტონა' },
-      { key: 'price', label: 'ერთეულის თანხა (₾)', placeholder: '0.00', initial: () => '0', validate: vPrice },
+      { key: 'price', label: 'ერთეულის თანხა', placeholder: '0.00', suffix: '₾', inputMode: 'decimal', initial: () => '0', validate: vPrice },
       {
         key: 'vatType',
         label: 'დაბეგვრა',
@@ -656,6 +658,7 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
               value={r[f.key] ?? ''}
               placeholder={isDriver && f.key === 'fullName' && r.citizenship !== 'foreign' ? 'შეივსება პირადი ნომრით' : f.placeholder}
               inputMode={f.inputMode}
+              suffix={f.suffix}
               className={f.mono ? 'font-mono' : undefined}
               invalid={!!errors[f.key] || (f.key === 'personalId' && isDriver && !!pidMissing)}
               onChange={(e) => setField(f.key, e.target.value)}

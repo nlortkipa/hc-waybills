@@ -23,7 +23,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { cx, formatDay, tbilisiDay } from '../lib/util'
-import { inputCls, invalidCls } from './fieldStyles'
+import { bareCls, inputCls, invalidCls } from './fieldStyles'
 
 /* --------------------------- Popover plumbing --------------------------- */
 
@@ -170,13 +170,15 @@ export type SelectProps = {
    * Inside an option, `group-data-hi:` styles apply while its row is highlighted (white on the accent).
    */
   rich?: boolean
+  /** Inside a compound field (`compoundCls`): no fill or focus ring of its own. */
+  bare?: boolean
   /** Shown at the top of the open menu, above the options (e.g. what they all have in common). */
   header?: ReactNode
   /** Title of the bottom sheet a `rich` Select opens as on a phone; the placeholder when missing. */
   sheetTitle?: string
 }
 
-export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, header, sheetTitle }: SelectProps) {
+export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, bare, header, sheetTitle }: SelectProps) {
   const all = collectOptions(children)
   const [query, setQuery] = useState('')
   const q = searchable ? query.trim().toLowerCase() : ''
@@ -303,15 +305,14 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
         className={
           icon
             ? cx('grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-40', open && 'bg-brand-50 text-brand-600', className)
-            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', rich && 'h-auto min-h-11 py-2', open && 'ring-2 ring-brand-500/50!', invalid && invalidCls, className)
+            : cx(bare ? bareCls : inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', rich && 'h-auto min-h-11 py-2 sm:min-h-9 sm:py-1.5', !bare && open && 'ring-2 ring-brand-500/50!', !bare && invalid && invalidCls, className)
         }
       >
         {icon ?? (
           <>
             <span className={cx('min-w-0 flex-1', rich ? 'line-clamp-2 leading-snug [overflow-wrap:anywhere]' : 'truncate', !selected && 'text-slate-400')}>{selected ? selected.short : placeholder}</span>
-            <span className="grid size-[22px] shrink-0 place-items-center rounded-[6px] bg-brand-500 text-white shadow-[0_0.5px_1px_rgba(0,0,0,0.2),inset_0_0.5px_0_rgba(255,255,255,0.25)]">
-              <ChevronsUpDown className="size-3.5" strokeWidth={2.5} />
-            </span>
+            {/* A quiet chevron: in a dense form, the accent is kept for focus and the primary action. */}
+            <ChevronsUpDown className="size-4 shrink-0 text-slate-500" strokeWidth={2} />
           </>
         )}
       </button>

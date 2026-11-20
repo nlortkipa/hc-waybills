@@ -5,8 +5,10 @@
  * optional additional quantity. Every shipment
  * on the route carries them as they are.
  */
-import { Ban, Package, Plus, RotateCcw, Search, Stamp, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Ban, ChevronDown, ChevronRight, ChevronUp, Package, Pencil, Plus, Search, Stamp, X } from 'lucide-react'
 import { Button, Field, Input, Select } from './ui'
+import { bareCls, compoundCls, invalidCls } from './fieldStyles'
 import { OptionRow } from './pickers'
 import { active, cx, uid } from '../lib/util'
 import { akcizUnit, itemAmount, RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
@@ -120,6 +122,11 @@ export function fromDrafts(d: Database, goods: GoodDraft[]): NewRouteGood[] {
   })
 }
 
+/** A line's number, as on the waybill. */
+const LineNo = ({ n }: { n: number }) => <span className="grid size-6 shrink-0 place-items-center rounded-full bg-slate-500/15 text-[12px] font-semibold text-slate-600 tabular-nums">{n}</span>
+
+const money = (v: number | null) => (v != null && v >= 0 ? `${v.toFixed(2)} ₾` : '—')
+
 export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: { d: Database; goods: GoodDraft[]; onChange: (g: GoodDraft[]) => void; errors: Record<string, string>; onClearError: (key: string) => void }) {
   const products = active(d.products)
   const units = rsUnits(d.rs)
@@ -158,9 +165,38 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
     })
   }
 
+  // One line is open at a time; the others fold into a summary row. A single or unfinished line starts open.
+  const [openKey, setOpenKey] = useState<string | null>(() => (goods.length === 1 ? goods[0].key : (goods.find((g) => Object.keys(checkGoods([g])).length)?.key ?? null)))
+  // Lines whose rarely used fields (additional quantity, excise) are shown.
+  const [moreOpen, setMoreOpen] = useState<ReadonlySet<string>>(() => new Set())
+  // The line whose საქონლის ფასი is being typed in by hand.
+  const [editAmount, setEditAmount] = useState<string | null>(null)
+
+  const lineBad = (key: string) => Object.keys(errors).some((k) => k.startsWith(`${key}.`) && errors[k])
+  // After a failed save, the first line with a mistake opens (the open one stays if it has one).
+  useEffect(() => {
+    if (openKey && lineBad(openKey)) return
+    const bad = goods.find((g) => lineBad(g.key))
+    if (bad) setOpenKey(bad.key)
+    // Only a new set of errors moves the open line.
+  }, [errors])
+
+  const add = () => {
+    const g = blankGood(d)
+    onChange([...goods, g])
+    setOpenKey(g.key)
+  }
+  const remove = (key: string) => onChange(goods.filter((x) => x.key !== key))
+
+  const removeBtn = (key: string) => (
+    <button type="button" onClick={() => remove(key)} className="grid size-7 shrink-0 place-items-center rounded-full text-slate-400 transition-colors hover:bg-rose-500/15 hover:text-rose-600" title="პროდუქტის მოხსნა" aria-label="პროდუქტის მოხსნა">
+      <X className="size-4" />
+    </button>
+  )
+
   return (
     <div>
-      <p className="mb-1.5 ml-1 text-[13px] text-slate-500">პროდუქტები</p>
+      <p className="mb-1 ml-1 text-[12px] font-medium text-slate-600">პროდუქტები</p>
       <div className="space-y-2">
         {goods.map((g, i) => {
           const err = (f: keyof GoodDraft) => errors[`${g.key}.${f}`]
@@ -170,22 +206,72 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
           const lockedUnit = exc && akcizUnit(d.rs, exc)
           const unitId = lockedUnit ? String(lockedUnit.unitId) : g.unitId
           const other = Number(unitId) === RS_UNIT_OTHER
-          // A product whose bar code is already on another line can't be picked again.
+          const unitName = lockedUnit?.unitTxt ?? (other ? g.unitTxt : (units.find((u) => String(u.id) === unitId)?.name ?? g.unitTxt))
           // საქონლის ფასი as RS.ge's form fills it: quantity × price, until one is typed in (a new quantity or price recalculates it).
           const q = numOf(g.quantity)
           const pr = numOf(g.price)
           const auto = q != null && pr != null && q >= 0 && pr >= 0 ? itemAmount({ quantity: q, price: pr }).toFixed(2) : ''
-          const taken = new Set(goods.filter((x) => x.key !== g.key).map((x) => x.barCode.trim().toLowerCase()))
-          return (
-            <div key={g.key} className="@container rounded-[10px] p-3 ring-1 ring-slate-200">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-slate-500">{i + 1}.</span>
-                <button type="button" onClick={() => onChange(goods.filter((x) => x.key !== g.key))} className="-my-1 rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label="პროდუქტის მოხსნა">
-                  <X className="size-4" />
+          const manual = g.amount.trim() !== ''
+          const total = manual ? numOf(g.amount) : auto ? Number(auto) : null
+          const bad = lineBad(g.key)
+
+          if (openKey !== g.key) {
+            // A folded line: what it is and what it comes to, in one row.
+            return (
+              <div key={g.key} className={cx('@container flex items-center gap-1 rounded-[12px] bg-slate-50 pr-2 transition-colors hover:bg-slate-100', bad && 'ring-2 ring-rose-500/60 ring-inset')}>
+                <button type="button" onClick={() => setOpenKey(g.key)} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 py-2.5 pl-3 text-left" aria-expanded={false}>
+                  <LineNo n={i + 1} />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5 @lg:flex-row @lg:items-center @lg:gap-4">
+                    <span className="min-w-0 flex-1">
+                      <span className={cx('block truncate text-[14px] font-medium', g.name.trim() ? 'text-slate-900' : 'text-slate-400')}>{g.name.trim() || 'უსახელო პროდუქტი'}</span>
+                      <span className="block truncate font-mono text-xs text-slate-500">{(locked ?? g.barCode).trim() || 'შტრიხკოდის გარეშე'}</span>
+                    </span>
+                    <span className="shrink-0 text-[13px] text-slate-600 tabular-nums">
+                      {g.quantity.trim() || '—'} {unitName} × {money(pr)} <span className="font-semibold text-slate-900">= {money(total)}</span>
+                    </span>
+                  </span>
+                  {bad && <span className="shrink-0 text-xs font-medium text-rose-600">შესასწორებელია</span>}
+                  <ChevronDown className="size-4 shrink-0 text-slate-400" />
                 </button>
+                {removeBtn(g.key)}
               </div>
-              <div className="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3">
-                <div className="@md:col-span-2">
+            )
+          }
+
+          // A product whose bar code is already on another line can't be picked again.
+          const taken = new Set(goods.filter((x) => x.key !== g.key).map((x) => x.barCode.trim().toLowerCase()))
+          const showAkciz = akciz.length > 0 || !!g.aId
+          // Filled-in extras stay in view; empty ones fold away behind "მეტი".
+          const extrasSet = !!g.quantityExt.trim() || !!g.aId || !!err('quantityExt')
+          const extras = extrasSet || moreOpen.has(g.key)
+          const toggleMore = () =>
+            setMoreOpen((s) => {
+              const n = new Set(s)
+              if (n.has(g.key)) n.delete(g.key)
+              else n.add(g.key)
+              return n
+            })
+
+          return (
+            <div key={g.key} className="@container rounded-[12px] bg-slate-50 p-3 sm:p-4">
+              <div className="mb-3 flex items-center gap-2.5">
+                <LineNo n={i + 1} />
+                <button
+                  type="button"
+                  onClick={() => goods.length > 1 && setOpenKey(null)}
+                  className={cx('flex min-w-0 flex-1 items-center gap-1.5 text-left', goods.length > 1 && 'cursor-pointer')}
+                  aria-expanded
+                  title={goods.length > 1 ? 'ჩაკეცვა' : undefined}
+                >
+                  <span className={cx('truncate text-[14px] font-semibold', g.name.trim() ? 'text-slate-900' : 'text-slate-400')}>{g.name.trim() || 'ახალი პროდუქტი'}</span>
+                  {goods.length > 1 && <ChevronUp className="size-4 shrink-0 text-slate-400" />}
+                </button>
+                {removeBtn(g.key)}
+              </div>
+
+              <div className="animate-fade-in space-y-3">
+                {/* What it is */}
+                <div className="grid grid-cols-1 gap-3 @md:grid-cols-[minmax(0,1fr)_13rem]">
                   <Field label="დასახელება" error={err('name')}>
                     <div className="relative">
                       <Input value={g.name} placeholder="ღორღი 0–5 მმ" invalid={!!err('name')} className={products.length ? 'pr-11' : undefined} onChange={(e) => set(g.key, { name: e.target.value })} />
@@ -211,74 +297,99 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                       )}
                     </div>
                   </Field>
-                </div>
-                <div>
                   <Field label={locked ? 'შტრიხკოდი (აქციზის კოდი)' : 'შტრიხკოდი'} error={err('barCode')}>
                     <Input
                       value={locked ?? g.barCode}
                       readOnly={locked != null}
                       title={locked != null ? 'აქციზური საქონლის კოდი — იცვლება აქციზის არჩევით' : undefined}
-                      className={cx('font-mono', locked != null && 'bg-slate-50 text-slate-500')}
+                      className={cx('font-mono', locked != null && 'text-slate-500')}
                       invalid={!!err('barCode')}
                       onChange={(e) => set(g.key, { barCode: e.target.value })}
                     />
                   </Field>
                 </div>
-                <div>
+
+                {/* How much: quantity × unit price = line total */}
+                <div className="grid grid-cols-1 gap-3 @md:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)]">
                   <Field label="რაოდენობა" error={err('quantity')}>
-                    <Input type="text" inputMode="decimal" value={g.quantity} invalid={!!err('quantity')} onChange={(e) => set(g.key, { quantity: e.target.value, amount: '' })} />
-                  </Field>
-                </div>
-                <div>
-                  <Field label="დამატებითი რაოდენობა" error={err('quantityExt')}>
-                    <Input type="text" inputMode="decimal" value={g.quantityExt} placeholder="—" invalid={!!err('quantityExt')} onChange={(e) => set(g.key, { quantityExt: e.target.value })} />
-                  </Field>
-                </div>
-                <div>
-                  <Field label="საზომი ერთეული">
-                    <Select searchable={units.length > 8} value={unitId} disabled={!!lockedUnit} title={lockedUnit ? 'აქციზური საქონლის ერთეული — იცვლება აქციზის არჩევით' : undefined} onChange={(e) => set(g.key, { unitId: e.target.value })}>
-                      {units.map((u) => (
-                        <option key={u.id} value={String(u.id)}>
-                          {u.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                </div>
-                {other && (
-                  <div>
-                    <Field label="ერთეულის სახელი" error={err('unitTxt')}>
-                      <Input value={lockedUnit?.unitTxt ?? g.unitTxt} readOnly={!!lockedUnit} className={cx(lockedUnit && 'bg-slate-50 text-slate-500')} placeholder="ტონა" invalid={!!err('unitTxt')} onChange={(e) => set(g.key, { unitTxt: e.target.value })} />
-                    </Field>
-                  </div>
-                )}
-                <div>
-                  <Field label="ერთეულის ფასი (₾)" error={err('price')}>
-                    <Input type="text" inputMode="decimal" value={g.price} placeholder="0.00" invalid={!!err('price')} onChange={(e) => set(g.key, { price: e.target.value, amount: '' })} />
-                  </Field>
-                </div>
-                <div>
-                  <Field label="საქონლის ფასი (₾)" error={err('amount')} hint={g.amount.trim() ? (auto ? `ხელით · რაოდ. × ფასი = ${auto}` : 'ხელით') : undefined}>
-                    <div className="relative">
-                      <Input
+                    <div className={cx(compoundCls, err('quantity') && invalidCls)}>
+                      <input
                         type="text"
                         inputMode="decimal"
-                        value={g.amount || auto}
-                        placeholder="0.00"
-                        title="რაოდენობა × ერთეულის ფასი — შეგიძლია ხელით შეცვალო"
-                        invalid={!!err('amount')}
-                        className={g.amount.trim() ? 'pr-9' : undefined}
-                        onChange={(e) => set(g.key, { amount: e.target.value })}
+                        value={g.quantity}
+                        placeholder="0"
+                        aria-invalid={!!err('quantity')}
+                        className={cx(bareCls, 'min-w-0 flex-1 text-right tabular-nums')}
+                        onChange={(e) => set(g.key, { quantity: e.target.value, amount: '' })}
                       />
-                      {g.amount.trim() !== '' && (
-                        <button type="button" onClick={() => set(g.key, { amount: '' })} className="absolute inset-y-0 right-1 my-auto flex size-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="დაბრუნება: რაოდ. × ფასი" aria-label="საქონლის ფასის გადათვლა">
-                          <RotateCcw className="size-4" />
-                        </button>
-                      )}
+                      <span className="my-2 w-px shrink-0 bg-slate-500/30" />
+                      <div className="w-[48%] shrink-0">
+                        <Select
+                          bare
+                          aria-label="საზომი ერთეული"
+                          searchable={units.length > 8}
+                          value={unitId}
+                          disabled={!!lockedUnit}
+                          title={lockedUnit ? 'აქციზური საქონლის ერთეული — იცვლება აქციზის არჩევით' : 'საზომი ერთეული'}
+                          onChange={(e) => set(g.key, { unitId: e.target.value })}
+                        >
+                          {units.map((u) => (
+                            <option key={u.id} value={String(u.id)}>
+                              {u.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     </div>
                   </Field>
+                  <Field label="× ერთეულის ფასი" error={err('price')}>
+                    <Input type="text" inputMode="decimal" value={g.price} placeholder="0.00" suffix="₾" invalid={!!err('price')} onChange={(e) => set(g.key, { price: e.target.value, amount: '' })} />
+                  </Field>
+                  <div>
+                    <Field label="= საქონლის ფასი" error={err('amount')}>
+                      {manual || editAmount === g.key ? (
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={g.amount}
+                          placeholder={auto || '0.00'}
+                          suffix="₾"
+                          autoFocus={editAmount === g.key && !manual}
+                          invalid={!!err('amount')}
+                          onBlur={() => setEditAmount(null)}
+                          onChange={(e) => set(g.key, { amount: e.target.value })}
+                        />
+                      ) : (
+                        // Worked out, not typed: plain text until it is clicked to be set by hand.
+                        <button
+                          type="button"
+                          onClick={() => setEditAmount(g.key)}
+                          title="რაოდენობა × ერთეულის ფასი — დააჭირე ხელით შესაცვლელად"
+                          className="group flex h-11 w-full cursor-text items-center justify-end gap-2 rounded-[10px] px-3 text-[16px] font-semibold text-slate-900 tabular-nums transition-colors hover:bg-fill sm:h-9 sm:rounded-[8px] sm:text-[14px]"
+                        >
+                          <Pencil className="size-3.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+                          {auto ? `${auto} ₾` : <span className="font-normal text-slate-400">—</span>}
+                        </button>
+                      )}
+                    </Field>
+                    {manual && !err('amount') && (
+                      <p className="mt-1 ml-1 text-xs text-slate-500">
+                        ხელით
+                        {auto && (
+                          <>
+                            {' · '}
+                            <button type="button" onClick={() => set(g.key, { amount: '' })} className="cursor-pointer font-medium text-brand-600 hover:underline" title="დაბრუნება: რაოდ. × ფასი">
+                              გადათვლა ({auto} ₾)
+                            </button>
+                          </>
+                        )}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <div>
+
+                {/* Tax, and the unit's name when it is RS.ge's "other" */}
+                <div className="grid grid-cols-1 gap-3 @md:grid-cols-2">
                   <Field label="დაბეგვრის ტიპი">
                     <Select value={g.vatType} onChange={(e) => set(g.key, { vatType: e.target.value })}>
                       {RS_VAT_TYPES.map((v) => (
@@ -288,26 +399,45 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
                       ))}
                     </Select>
                   </Field>
-                </div>
-                {(akciz.length > 0 || g.aId) && (
-                  <div className="col-span-full">
-                    <Field label="აქციზი (მხოლოდ აქციზური საქონლისთვის)">
-                      <Select searchable rich value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
-                        <option value="" label="არ არის აქციზური">
-                          <OptionRow icon={<Ban />} title="არ არის აქციზური" />
-                        </option>
-                        {g.aId && !akciz.some((a) => String(a.id) === g.aId) && (
-                          <option value={g.aId} label={g.aTitle || g.aId}>
-                            <OptionRow icon={<Stamp />} title={g.aTitle || g.aId} />
-                          </option>
-                        )}
-                        {akciz.map((a) => (
-                          <option key={a.id} value={String(a.id)} label={`${a.code} · ${a.title}`} data-search={a.code}>
-                            <OptionRow icon={<Stamp />} title={a.title} />
-                          </option>
-                        ))}
-                      </Select>
+                  {other && (
+                    <Field label="ერთეულის სახელი" error={err('unitTxt')}>
+                      <Input value={lockedUnit?.unitTxt ?? g.unitTxt} readOnly={!!lockedUnit} className={cx(lockedUnit && 'text-slate-500')} placeholder="ტონა" invalid={!!err('unitTxt')} onChange={(e) => set(g.key, { unitTxt: e.target.value })} />
                     </Field>
+                  )}
+                </div>
+
+                {/* Rarely used: folded away until needed */}
+                {!extrasSet && (
+                  <button type="button" onClick={toggleMore} aria-expanded={extras} className="-ml-1 flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-[13px] font-medium text-brand-600 hover:bg-brand-500/10">
+                    <ChevronRight className={cx('size-4 transition-transform', extras && 'rotate-90')} />
+                    მეტი
+                    <span className="font-normal text-slate-500">· დამატებითი რაოდენობა{showAkciz && ', აქციზი'}</span>
+                  </button>
+                )}
+                {extras && (
+                  <div className={cx('animate-fade-in grid grid-cols-1 gap-3 @md:grid-cols-[13rem_minmax(0,1fr)]', extrasSet && 'border-t border-slate-500/15 pt-3')}>
+                    <Field label="დამატებითი რაოდენობა" error={err('quantityExt')}>
+                      <Input type="text" inputMode="decimal" value={g.quantityExt} placeholder="—" invalid={!!err('quantityExt')} onChange={(e) => set(g.key, { quantityExt: e.target.value })} />
+                    </Field>
+                    {showAkciz && (
+                      <Field label="აქციზი (მხოლოდ აქციზური საქონლისთვის)">
+                        <Select searchable rich value={g.aId} onChange={(e) => pickAkciz(g, e.target.value)}>
+                          <option value="" label="არ არის აქციზური">
+                            <OptionRow icon={<Ban />} title="არ არის აქციზური" />
+                          </option>
+                          {g.aId && !akciz.some((a) => String(a.id) === g.aId) && (
+                            <option value={g.aId} label={g.aTitle || g.aId}>
+                              <OptionRow icon={<Stamp />} title={g.aTitle || g.aId} />
+                            </option>
+                          )}
+                          {akciz.map((a) => (
+                            <option key={a.id} value={String(a.id)} label={`${a.code} · ${a.title}`} data-search={a.code}>
+                              <OptionRow icon={<Stamp />} title={a.title} />
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    )}
                   </div>
                 )}
               </div>
@@ -315,7 +445,7 @@ export function RouteGoodsEditor({ d, goods, onChange, errors, onClearError }: {
           )
         })}
       </div>
-      <Button type="button" variant="secondary" size="sm" className="mt-2" icon={<Plus className="size-4" />} onClick={() => onChange([...goods, blankGood(d)])}>
+      <Button type="button" variant="secondary" size="sm" className="mt-2" icon={<Plus className="size-4" />} onClick={add}>
         პროდუქტის დამატება
       </Button>
       {errors.goods && <p className="mt-2 ml-1 text-xs text-rose-600">{errors.goods}</p>}

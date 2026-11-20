@@ -109,15 +109,24 @@ export function Section({ title, children }: { title: string; children: ReactNod
 export function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 ml-1 block text-[13px] text-slate-500">{label}</span>
+      <span className="mb-1 ml-1 block text-[12px] font-medium text-slate-600">{label}</span>
       {children}
       {error ? <span className="mt-1 ml-1 block text-xs text-rose-600">{error}</span> : hint ? <span className="mt-1 ml-1 block text-xs text-slate-500">{hint}</span> : null}
     </label>
   )
 }
 
-export function Input({ className, invalid, ...rest }: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
-  return <input {...rest} className={cx(inputCls, invalid && invalidCls, className)} />
+/** A text field. A decimal one (an amount) is right-aligned with even-width digits; `suffix` (e.g. ₾) sits inside it. */
+export function Input({ className, invalid, suffix, ...rest }: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; suffix?: ReactNode }) {
+  const numeric = rest.inputMode === 'decimal'
+  const input = <input {...rest} className={cx(inputCls, numeric && 'text-right tabular-nums', suffix != null && 'pr-8', invalid && invalidCls, className)} />
+  if (suffix == null) return input
+  return (
+    <div className="relative">
+      {input}
+      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-500">{suffix}</span>
+    </div>
+  )
 }
 
 export { DatePicker, Select } from './pickers'
