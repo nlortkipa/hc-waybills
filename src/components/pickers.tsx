@@ -5,7 +5,7 @@
  *  - DatePicker: a date field that opens a mini calendar popover.
  * Focus stays on the trigger; the keyboard drives the open popup from there.
  */
-import { CalendarDays, Check, ChevronLeft, ChevronRight, ChevronsUpDown, Search } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, ChevronsUpDown, Search, X } from 'lucide-react'
 import {
   Children,
   Fragment,
@@ -96,6 +96,19 @@ function useDismiss(open: boolean, refs: RefObject<HTMLElement | null>[], onDism
   }, [open])
 }
 
+/** Phone-sized screens, where long menus open as a bottom sheet instead. */
+function useNarrow() {
+  const q = '(max-width: 639.98px)'
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
+  useEffect(() => {
+    const m = window.matchMedia(q)
+    const on = () => setNarrow(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return narrow
+}
+
 const panelBase = 'menu-material animate-menu-in fixed z-[70] rounded-[10px] outline-none'
 const panelCls = `${panelBase} overflow-y-auto overscroll-contain`
 
@@ -159,9 +172,11 @@ export type SelectProps = {
   rich?: boolean
   /** Shown at the top of the open menu, above the options (e.g. what they all have in common). */
   header?: ReactNode
+  /** Title of the bottom sheet a `rich` Select opens as on a phone; the placeholder when missing. */
+  sheetTitle?: string
 }
 
-export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, header }: SelectProps) {
+export function Select({ value, onChange, placeholder, children, invalid, disabled, className, id, 'aria-label': ariaLabel, searchable, icon, title, rich, header, sheetTitle }: SelectProps) {
   const all = collectOptions(children)
   const [query, setQuery] = useState('')
   const q = searchable ? query.trim().toLowerCase() : ''
@@ -188,6 +203,18 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
   }
   useDismiss(open, [btn, panel], close)
 
+  // On a phone, rich options (several lines each) open as an iOS bottom sheet: the page behind stays put.
+  const narrow = useNarrow()
+  const asSheet = !!rich && narrow && !icon
+  useEffect(() => {
+    if (!open || !asSheet) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [open, asSheet])
+
   const show = () => {
     if (disabled) return
     setQuery('')
@@ -205,8 +232,9 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
   // Into the search field once the menu is placed: while it is still hidden for measuring, focus() is ignored.
   const placed = style.visibility !== 'hidden'
   useEffect(() => {
-    if (open && placed) search.current?.focus()
-  }, [open, placed])
+    // Not in a sheet: the keyboard would cover the options before they are even seen.
+    if (open && placed && !asSheet) search.current?.focus()
+  }, [open, placed, asSheet])
 
   // Keep the keyboard-highlighted row visible.
   useEffect(() => {
@@ -275,12 +303,12 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
         className={
           icon
             ? cx('grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-40', open && 'bg-brand-50 text-brand-600', className)
-            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', open && 'ring-2 ring-brand-500/50!', invalid && invalidCls, className)
+            : cx(inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', rich && 'h-auto min-h-11 py-2', open && 'ring-2 ring-brand-500/50!', invalid && invalidCls, className)
         }
       >
         {icon ?? (
           <>
-            <span className={cx('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>{selected ? selected.short : placeholder}</span>
+            <span className={cx('min-w-0 flex-1', rich ? 'line-clamp-2 leading-snug [overflow-wrap:anywhere]' : 'truncate', !selected && 'text-slate-400')}>{selected ? selected.short : placeholder}</span>
             <span className="grid size-[22px] shrink-0 place-items-center rounded-[6px] bg-brand-500 text-white shadow-[0_0.5px_1px_rgba(0,0,0,0.2),inset_0_0.5px_0_rgba(255,255,255,0.25)]">
               <ChevronsUpDown className="size-3.5" strokeWidth={2.5} />
             </span>
@@ -289,6 +317,69 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
       </button>
 
       {open &&
+        asSheet &&
+        createPortal(
+          <div ref={panel} className="fixed inset-0 z-[70]">
+            <div className="animate-fade-in absolute inset-0 bg-black/40" onClick={close} />
+            <div className="animate-sheet-up absolute inset-x-0 bottom-0 flex max-h-[88dvh] flex-col rounded-t-[14px] bg-canvas pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_30px_rgba(0,0,0,0.18)]">
+              <div className="mx-auto mt-1.5 h-[5px] w-9 shrink-0 rounded-full bg-slate-400/50" />
+              <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-2.5 pb-3">
+                <h2 className="min-w-0 truncate text-[17px] font-semibold text-slate-900">{sheetTitle ?? placeholder}</h2>
+                <button type="button" onClick={close} className="pressable grid size-[30px] shrink-0 place-items-center rounded-full bg-fill text-slate-500" aria-label="დახურვა">
+                  <X className="size-4" strokeWidth={2.5} />
+                </button>
+              </div>
+              {searchable && all.length > 1 && (
+                <label className="relative mx-4 mb-3 block shrink-0">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-slate-400" strokeWidth={2.25} />
+                  <input
+                    ref={search}
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="ძებნა"
+                    aria-label="ძებნა"
+                    className="h-9 w-full rounded-[10px] bg-fill pr-3 pl-8 text-[16px] text-slate-900 outline-none placeholder:text-slate-400"
+                  />
+                </label>
+              )}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
+                {opts.length === 0 ? (
+                  <p className="py-10 text-center text-[15px] text-slate-400">{q ? 'ვერაფერი მოიძებნა' : 'ვარიანტები არ არის'}</p>
+                ) : (
+                  <div id={listId} role="listbox" aria-label={sheetTitle ?? placeholder} className="overflow-hidden rounded-xl bg-surface">
+                    {opts.map((o, i) => {
+                      const on = o.value === (flash ?? cur)
+                      return (
+                        <div
+                          key={o.value + ':' + i}
+                          role="option"
+                          aria-selected={on}
+                          aria-disabled={o.disabled || undefined}
+                          onClick={() => choose(o)}
+                          className={cx(
+                            'relative flex cursor-default items-center gap-3 py-3 pr-3.5 pl-4 text-[16px] leading-snug transition-colors select-none active:bg-fill',
+                            // Inset hairline between rows, as in iOS grouped lists.
+                            i > 0 && 'before:absolute before:top-0 before:right-0 before:left-4 before:h-px before:origin-top before:scale-y-50 before:bg-separator',
+                            o.disabled ? 'text-slate-400' : 'text-slate-900',
+                            flash === o.value && 'bg-fill',
+                          )}
+                        >
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{o.label}</span>
+                          <Check className={cx('size-[18px] shrink-0 text-brand-500', !on && 'invisible')} strokeWidth={2.75} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {open &&
+        !asSheet &&
         createPortal(
           <div
             ref={panel}

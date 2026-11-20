@@ -171,6 +171,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 value={route?.id ?? ''}
                 onChange={set('routeId')}
                 placeholder="აირჩიე მარშრუტი…"
+                sheetTitle="მარშრუტი"
                 invalid={!!errors.routeId}
                 disabled={!routes.length}
                 searchable
@@ -190,7 +191,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
 
             <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
               <Field label="მძღოლი" error={errors.driverId}>
-                <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" invalid={!!errors.driverId} searchable rich>
+                <Select value={form.driverId} onChange={set('driverId')} placeholder="აირჩიე მძღოლი…" sheetTitle="მძღოლი" invalid={!!errors.driverId} searchable rich>
                   {d.drivers
                     .filter((x) => !x.deletedAt || x.id === editing?.driverId)
                     .map((x) => {
@@ -204,7 +205,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 </Select>
               </Field>
               <Field label="მანქანა" error={errors.truckId}>
-                <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" invalid={!!errors.truckId} searchable rich>
+                <Select value={form.truckId} onChange={set('truckId')} placeholder="აირჩიე მანქანა…" sheetTitle="მანქანა" invalid={!!errors.truckId} searchable rich>
                   {d.trucks
                     .filter((x) => !x.deletedAt || x.id === editing?.truckId)
                     .map((x) => (
@@ -287,31 +288,55 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
   const { carrier, start, end } = routeAddresses(d.carriers, r)
   const transId = r.transId ?? 1
   const trans = transId === RS_TRANS_OTHER && r.transTxt ? r.transTxt : (transTypes(d.rs).find((t) => t.id === transId)?.name ?? `ტიპი ${transId}`)
-  const meta = [
+  const tags = [
     trans,
     transHasTransporter(transId) && r.transporterTin && `გადამზიდავი ${r.transporterTin}`,
-    transHasCost(transId) && r.transportCost ? `ტრანსპ. ${r.transportCost.toFixed(2)} ₾` : '',
+    transHasCost(transId) && r.transportCost ? `ტრანსპორტი ${r.transportCost.toFixed(2)} ₾` : '',
     r.scaleId && `სასწორი ${r.scaleId}`,
-  ].filter(Boolean)
-  const sub = 'text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]'
+  ].filter((t): t is string => !!t)
+  const goods = r.goods ?? []
+  const muted = 'text-slate-500 group-data-hi:text-white/75'
   return (
-    <span className="block min-w-0 space-y-0.5">
-        <span className="block font-medium [overflow-wrap:anywhere]">
-          {carrier?.name && <span className="font-semibold">{carrier.name}: </span>}
-          {start || '—'} → {end || '—'}
-        </span>
-        {(r.goods ?? []).map((g, i) => (
-          <span key={i} className={`flex min-w-0 flex-wrap items-baseline gap-x-1.5 ${sub}`}>
-            <span className="min-w-0 [overflow-wrap:anywhere]">{g.name}</span>
-            <span className="ml-auto shrink-0 tabular-nums">
-              {formatNumber(g.quantity, 3)}
-              {g.unitTxt ? ` ${g.unitTxt}` : ''}
-              {g.price ? ` × ${g.price.toFixed(2)} = ${itemAmount(g).toFixed(2)} ₾` : ''}
+    <span className="block min-w-0 py-0.5">
+      {/* Carrier: start → end */}
+      <span className="block leading-snug font-medium [overflow-wrap:anywhere]">
+        {carrier?.name && <span className="font-semibold text-brand-600 group-data-hi:text-white">{carrier.name}: </span>}
+        {start || '—'}
+        <span className={`mx-1 ${muted}`}>→</span>
+        {end || '—'}
+      </span>
+
+      {/* Goods: name, then quantity × price and the line total. */}
+      {goods.length > 0 && (
+        <span className="mt-1.5 block space-y-1 rounded-[7px] bg-fill px-2.5 py-1.5 text-[13px] group-data-hi:bg-white/15 sm:mt-1 sm:space-y-0.5 sm:px-2 sm:py-1 sm:text-[12px]">
+          {goods.map((g, i) => (
+            <span key={i} className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <span className="min-w-0 flex-1 basis-32 [overflow-wrap:anywhere]">{g.name}</span>
+              <span className="ml-auto shrink-0 tabular-nums">
+                <span className={muted}>
+                  {formatNumber(g.quantity, 3)}
+                  {g.unitTxt ? ` ${g.unitTxt}` : ''}
+                  {g.price ? ` × ${g.price.toFixed(2)}` : ''}
+                </span>
+                {g.price ? <span className="ml-1.5 font-semibold">{itemAmount(g).toFixed(2)} ₾</span> : null}
+              </span>
             </span>
-          </span>
-        ))}
-        {meta.length > 0 && <span className={`block [overflow-wrap:anywhere] ${sub}`}>{meta.join(' · ')}</span>}
-        {r.comment && <span className={`block italic [overflow-wrap:anywhere] ${sub}`}>{r.comment}</span>}
+          ))}
+        </span>
+      )}
+
+      {/* Transport details and the scale. */}
+      {tags.length > 0 && (
+        <span className="mt-1.5 flex flex-wrap gap-1 sm:mt-1">
+          {tags.map((t) => (
+            <span key={t} className={`rounded-[5px] px-1.5 py-px text-[12px] ring-1 ring-separator ring-inset group-data-hi:ring-white/35 sm:text-[11px] ${muted}`}>
+              {t}
+            </span>
+          ))}
+        </span>
+      )}
+
+      {r.comment && <span className={`mt-1 block text-[13px] italic [overflow-wrap:anywhere] sm:text-[11.5px] ${muted}`}>„{r.comment}“</span>}
     </span>
   )
 }
