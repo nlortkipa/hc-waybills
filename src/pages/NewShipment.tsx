@@ -305,7 +305,8 @@ function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
               <span className={muted}>{g.name}: </span>
               {formatNumber(g.quantity, 3)}
               {g.unitTxt ? ` ${g.unitTxt}` : ''}
-              {g.price ? ` × ${formatMoney(g.price)} ₾ = ${formatMoney(itemAmount(g))} ₾` : ''}
+              {g.price || g.amount != null ? ` × ${formatMoney(g.price)} ₾ = ${formatMoney(itemAmount(g))} ₾` : ''}
+              {g.amount != null && <span className={muted}> (ხელით)</span>}
             </span>
           ))}
           {details.map(([k, v]) => (
