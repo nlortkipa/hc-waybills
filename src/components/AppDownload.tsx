@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { cx } from '../lib/util'
 
 /** Built by `npm run android:apk` and served next to index.html (see vite.config.ts). */
-const APK_URL = './hc-portal.apk'
+const APK_URL = './hc-waybill.apk'
 
 /** Offered on phones and tablets in a browser — not on desktop, and not inside the app itself. */
 const isMobile = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /macintosh/i.test(navigator.userAgent))
@@ -38,7 +38,7 @@ export function AppDownloadButton({ className }: { className?: string }) {
   return (
     <a
       href={APK_URL}
-      download="hc-portal.apk"
+      download="hc-waybill.apk"
       className={cx('pressable flex items-center gap-3 rounded-xl bg-surface p-3.5 text-left shadow-[0_1px_3px_rgba(0,0,0,0.06)] active:bg-slate-500/15', className)}
     >
       <span className="grid size-10 shrink-0 place-items-center rounded-[10px] bg-emerald-500 text-white">

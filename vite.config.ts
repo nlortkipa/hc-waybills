@@ -5,9 +5,9 @@ import { copyFileSync, createReadStream, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 
-/** Latest APK from `npm run android:apk`, served to phones as /hc-portal.apk. */
-const APK = join(import.meta.dirname, 'release', 'hc-portal.apk')
-const APK_NAME = 'hc-portal.apk'
+/** Latest APK from `npm run android:apk`, served to phones as /hc-waybill.apk. */
+const APK = join(import.meta.dirname, 'release', 'hc-waybill.apk')
+const APK_NAME = 'hc-waybill.apk'
 
 function serveApk(): Plugin {
   let outDir = 'dist'

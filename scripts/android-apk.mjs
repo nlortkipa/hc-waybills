@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Builds the web app, syncs it into the Android project and produces an installable
-// APK at release/hc-portal-v<version>.apk (debug build, signed with this machine's debug key).
-// release/hc-portal.apk always holds the latest one: the website offers it to Android
-// phones as /hc-portal.apk (served by `npm run dev`, copied into dist/ by `npm run build`).
+// APK at release/hc-waybill-v<version>.apk (debug build, signed with this machine's debug key).
+// release/hc-waybill.apk always holds the latest one: the website offers it to Android
+// phones as /hc-waybill.apk (served by `npm run dev`, copied into dist/ by `npm run build`).
 // Run from the same machine every time so phones accept it as an update.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -68,9 +68,9 @@ if (!existsSync(apk)) {
   process.exit(1)
 }
 mkdirSync(join(root, 'release'), { recursive: true })
-const out = join(root, 'release', `hc-portal-v${version}.apk`)
+const out = join(root, 'release', `hc-waybill-v${version}.apk`)
 copyFileSync(apk, out)
-copyFileSync(apk, join(root, 'release', 'hc-portal.apk'))
+copyFileSync(apk, join(root, 'release', 'hc-waybill.apk'))
 // Rebuild dist/ for the web so it also offers the new APK (and drops offline.html).
 run('npm', ['run', 'build'])
 console.log(`\n✔ APK ready: ${out}\n  It opens ${appUrl}: keep \`npm run server\` running there. Website updates (\`npm run build\`) reach the app on its next start.`)

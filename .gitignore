@@ -10,7 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-/release
+/release/*
+!/release/hc-waybill.apk
 *.local
 .env
 
