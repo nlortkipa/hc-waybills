@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine, Truck as TruckIcon, UserRound } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
@@ -193,7 +193,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                       const name = `${x.firstName} ${x.lastName}`.trim()
                       return (
                         <option key={x.id} value={x.id} label={name} data-search={`${x.personalId} ${x.phone}`}>
-                          <OptionRow icon={<UserRound />} title={name} sub={[x.phone, x.personalId].filter(Boolean).join(' · ')} />
+                          <OptionRow title={name} sub={[x.phone, x.personalId].filter(Boolean).join(' · ')} />
                         </option>
                       )
                     })}
@@ -213,7 +213,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                     .filter((x) => !x.deletedAt || x.id === editing?.truckId)
                     .map((x) => (
                       <option key={x.id} value={x.id} label={[x.plateNumber, x.model].filter(Boolean).join(' · ')} data-search={x.trailerNumber}>
-                        <OptionRow icon={<TruckIcon />} title={x.plateNumber} sub={[x.model, x.trailerNumber && `მისაბმელი ${x.trailerNumber}`].filter(Boolean).join(' · ')} />
+                        <OptionRow title={x.plateNumber} sub={[x.model, x.trailerNumber && `მისაბმელი ${x.trailerNumber}`].filter(Boolean).join(' · ')} />
                       </option>
                     ))}
                 </Select>
