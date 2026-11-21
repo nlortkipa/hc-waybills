@@ -3,8 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
 import { Button, Card, EmptyState, Field, InfoRow, PageHeader, Select } from '../components/ui'
-import { OptionRow } from '../components/pickers'
-import { formatDateTime, formatNumber, formatMoney } from '../lib/util'
+import { fmtPhone, formatDateTime, formatNumber, formatMoney } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
 import { editable, itemAmount, rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
@@ -186,6 +185,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                   invalid={!!errors.driverId}
                   searchable
                   rich
+                  cards
                 >
                   {d.drivers
                     .filter((x) => !x.deletedAt || x.id === editing?.driverId)
@@ -193,7 +193,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                       const name = `${x.firstName} ${x.lastName}`.trim()
                       return (
                         <option key={x.id} value={x.id} label={name} data-search={`${x.personalId} ${x.phone}`}>
-                          <OptionRow title={name} sub={[x.phone, x.personalId].filter(Boolean).join(' · ')} />
+                          <DetailOption title={name} details={[['ტელ.', x.phone && fmtPhone(x.phone)], ['პ/ნ', x.personalId]]} />
                         </option>
                       )
                     })}
@@ -208,12 +208,13 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                   invalid={!!errors.truckId}
                   searchable
                   rich
+                  cards
                 >
                   {d.trucks
                     .filter((x) => !x.deletedAt || x.id === editing?.truckId)
                     .map((x) => (
                       <option key={x.id} value={x.id} label={[x.plateNumber, x.model].filter(Boolean).join(' · ')} data-search={x.trailerNumber}>
-                        <OptionRow title={x.plateNumber} sub={[x.model, x.trailerNumber && `მისაბმელი ${x.trailerNumber}`].filter(Boolean).join(' · ')} />
+                        <DetailOption title={x.plateNumber} details={[['მოდელი', x.model], ['მისაბმელი', x.trailerNumber]]} />
                       </option>
                     ))}
                 </Select>
@@ -269,6 +270,26 @@ const routePickLabel = (d: Database, r: CarrierRoute) => {
 }
 
 /** A route in the picker: carrier and addresses on top, then everything its waybills will carry. */
+/** A driver or truck in its picker: the name (or plate) and a gray-labelled "label: value" line per filled-in detail, as in the route picker. */
+function DetailOption({ title, details }: { title: string; details: [string, string | undefined][] }) {
+  const lines = details.filter(([, v]) => v)
+  return (
+    <span className="block min-w-0 py-0.5">
+      <span className="block leading-snug font-medium [overflow-wrap:anywhere]">{title || '—'}</span>
+      {lines.length > 0 && (
+        <span className="mt-1.5 block space-y-0.5 text-[13px] sm:mt-1 sm:space-y-0 sm:text-[12px]">
+          {lines.map(([k, v]) => (
+            <span key={k} className="block tabular-nums [overflow-wrap:anywhere]">
+              <span className="text-slate-500 group-data-hi:text-white/75">{k}: </span>
+              {v}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function RouteOption({ d, route: r }: { d: Database; route: CarrierRoute }) {
   const { carrier, start, end } = routeAddresses(d.carriers, r)
   // Everything else the waybill carries, as label: value lines (the transport type is always საავტომობილო).

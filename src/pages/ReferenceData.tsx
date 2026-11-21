@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
 import { useToast } from '../components/toast'
-import { active, cx, phoneKey, formatMoney } from '../lib/util'
+import { active, cx, fmtPhone, phoneKey, formatMoney } from '../lib/util'
 import { useDb } from '../api/store'
 import { roleLabel, useUser } from '../session'
 import { goodsText, routeAddresses, routeLabel } from '../lib/route'
@@ -53,7 +53,6 @@ interface TabDef {
 
 const vPhone = (v: string) => (/^5\d{8}$/.test(phoneKey(v)) ? null : 'ფორმატი: 5XX XX XX XX')
 /** '+995 575780323' → '575 78 03 23' */
-const fmtPhone = (v: string) => phoneKey(v).replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4')
 /** Georgian citizens: 11-digit personal number. Foreigners: passport / ID number as issued. */
 const vPid = (v: string, r: Rec) => (r.citizenship === 'foreign' || /^\d{11}$/.test(v.trim()) ? null : 'პირადი ნომერი უნდა იყოს 11 ციფრი')
 const vEmail = (v: string) => (/^\S+@\S+\.\S+$/.test(v.trim()) ? null : 'ელ-ფოსტა არასწორია')

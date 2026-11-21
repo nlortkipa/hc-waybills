@@ -42,6 +42,8 @@ export const tbilisiStamp = (iso: string) => tbilisi(iso).toISOString().slice(0,
 
 /** Georgian mobile number reduced to its 9 local digits ('+995 575 78 03 23' → '575780323'). */
 export const phoneKey = (v: string) => v.replace(/\D/g, '').replace(/^995(?=\d{9}$)/, '')
+/** A Georgian mobile number as 5XX XX XX XX (anything else as typed, digits only). */
+export const fmtPhone = (v: string) => phoneKey(v).replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4')
 
 /*
  * Georgian formatting done by hand: some WebViews / headless browsers ship without
