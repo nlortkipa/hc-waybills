@@ -82,6 +82,22 @@ export function Card({ className, children }: { className?: string; children: Re
   return <div className={cx('rounded-xl bg-surface', className)}>{children}</div>
 }
 
+/** A label: value line of a details list (`<dl className="divide-y divide-separator text-sm">`). `changed`: the value differs from what this app sent (the waybill was corrected on RS.ge). */
+export function InfoRow({ k, v, mono, changed, sub }: { k: string; v?: string; mono?: boolean; changed?: boolean; sub?: string }) {
+  return (
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 py-2.5">
+      <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">
+        {k}
+        {sub && <span className="block font-mono text-xs text-slate-400">{sub}</span>}
+      </dt>
+      <dd className="ml-auto min-w-0 text-right">
+        <span className={cx('[overflow-wrap:anywhere]', v ? 'text-slate-900' : 'text-slate-300', mono && 'font-mono text-[13px]')}>{v ?? '—'}</span>
+        {changed && <span className="block text-xs text-amber-700">შეცვლილია RS.ge-ზე</span>}
+      </dd>
+    </div>
+  )
+}
+
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">

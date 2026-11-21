@@ -2,7 +2,7 @@ import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine, Truck a
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
-import { Button, Card, EmptyState, Field, PageHeader, Select } from '../components/ui'
+import { Button, Card, EmptyState, Field, InfoRow, PageHeader, Select } from '../components/ui'
 import { OptionRow } from '../components/pickers'
 import { formatDateTime, formatNumber, formatMoney } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
@@ -236,15 +236,15 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         {/* Summary: what the waybill will say, the route's goods included. */}
         <div className="space-y-4">
           <Card className="p-5 xl:sticky xl:top-4">
-            <h2 className="text-sm font-semibold text-slate-900">შეჯამება</h2>
-            <dl className="mt-3 space-y-2.5 text-sm">
-              <Row k="ტიპი" v="შიდა გადაზიდვა" />
-              <Row k="მარშრუტი" v={route ? routePickLabel(d, route) : undefined} />
-              <Row k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
-              <Row k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
-              {goods.length ? goods.map((g) => <Row key={g.barCode} k={g.name} v={`${formatNumber(g.quantity, 3)}${g.unitTxt ? ` ${g.unitTxt}` : ''}`} />) : <Row k="პროდუქტი" />}
-              {goods.length > 1 && <Row k="სულ" v={formatNumber(total, 3)} />}
-              <Row k="თანხა" v={goods.length ? `${formatMoney(amount)} ₾` : undefined} />
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">შეჯამება</h2>
+            <dl className="divide-y divide-separator text-sm">
+              <InfoRow k="ტიპი" v="შიდა გადაზიდვა" />
+              <InfoRow k="მარშრუტი" v={route ? routePickLabel(d, route) : undefined} />
+              <InfoRow k="მძღოლი" v={driver ? `${driver.firstName} ${driver.lastName}` : undefined} />
+              <InfoRow k="მანქანა" v={truck ? `${truck.plateNumber}${truck.trailerNumber ? ` · ${truck.trailerNumber}` : ''}` : undefined} mono />
+              {goods.length ? goods.map((g) => <InfoRow key={g.barCode} k={g.name} v={`${formatNumber(g.quantity, 3)}${g.unitTxt ? ` ${g.unitTxt}` : ''}`} />) : <InfoRow k="პროდუქტი" />}
+              {goods.length > 1 && <InfoRow k="სულ" v={formatNumber(total, 3)} />}
+              <InfoRow k="თანხა" v={goods.length ? `${formatMoney(amount)} ₾` : undefined} />
             </dl>
           </Card>
           {!editing && (
@@ -259,15 +259,6 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
         </div>
       </div>
     </>
-  )
-}
-
-function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
-  return (
-    <div className="flex flex-wrap justify-between gap-x-4">
-      <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">{k}</dt>
-      <dd className={`ml-auto min-w-0 text-right [overflow-wrap:anywhere] ${v ? 'text-slate-900' : 'text-slate-300'} ${mono ? 'font-mono text-[13px]' : ''}`}>{v ?? '—'}</dd>
-    </div>
   )
 }
 

@@ -307,7 +307,7 @@ export function Select({ value, onChange, placeholder, children, invalid, disabl
         className={
           icon
             ? cx('grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-40', open && 'bg-brand-50 text-brand-600', className)
-            : cx(bare ? bareCls : inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', rich && 'h-auto min-h-11 py-2 sm:min-h-9 sm:py-1.5', !bare && open && 'ring-2 ring-brand-500/50!', !bare && invalid && invalidCls, className)
+            : cx(bare ? bareCls : inputCls, 'flex cursor-default items-center gap-2 pr-[9px] text-left', rich && 'h-auto min-h-11 py-2 sm:h-auto sm:min-h-9 sm:py-1.5', !bare && open && 'ring-2 ring-brand-500/50!', !bare && invalid && invalidCls, className)
         }
       >
         {icon ?? (

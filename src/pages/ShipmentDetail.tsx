@@ -2,7 +2,7 @@ import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, FileText, MessageSquar
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { shipments } from '../api'
-import { Badge, Button, Card, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, StepIcon } from '../components/ui'
+import { Badge, Button, Card, InfoRow, RefreshButton, ConfirmModal, DeleteButton, EmptyState, Input, Modal, Segmented, StepIcon } from '../components/ui'
 import { useToast } from '../components/toast'
 import { canUseCarrier } from '../lib/route'
 import { cx, formatDateTime, formatNumber, fromTbilisiInput, toTbilisiInput, formatMoney } from '../lib/util'
@@ -302,36 +302,36 @@ export function ShipmentDetail() {
                   </div>
                   {r?.fullAmountText && <p className="mt-1 text-xs text-slate-500">{r.fullAmountText}</p>}
                   <dl className="mt-3 divide-y divide-separator text-sm">
-                    <Info k="მყიდველი" v={(r ?? w)!.buyerName ? `${(r ?? w)!.buyerName} (${(r ?? w)!.buyerTin})` : (r ?? w)!.buyerTin} />
+                    <InfoRow k="მყიდველი" v={(r ?? w)!.buyerName ? `${(r ?? w)!.buyerName} (${(r ?? w)!.buyerTin})` : (r ?? w)!.buyerTin} />
                     {r ? (
                       <>
-                        <Info k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
+                        <InfoRow k="მარშრუტი" v={`${r.startAddress || '—'} → ${r.endAddress || '—'}`} changed={!!w && (r.startAddress.trim() !== w.startAddress.trim() || r.endAddress.trim() !== w.endAddress.trim())} />
                         {(r.driverTin || r.carNumber) && (
                           <>
-                            <Info k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
-                            <Info k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
+                            <InfoRow k="მძღოლი" v={r.driverName ? `${r.driverName} (${r.driverTin})` : r.driverTin} changed={!!w && r.driverTin !== w.driverTin} />
+                            <InfoRow k="მანქანა" v={r.carNumber} mono changed={!!w && plateKey(r.carNumber) !== plateKey(w.carNumber)} />
                           </>
                         )}
-                        {r.transportCost > 0 && <Info k="ტრანსპორტირება" v={`${formatMoney(r.transportCost)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
-                        {r.receptionInfo && <Info k="მიმწოდებელი" v={r.receptionInfo} />}
-                        {r.receiverInfo && <Info k="მიმღები" v={r.receiverInfo} />}
-                        {r.createdAt && <Info k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
-                        {r.activatedAt && r.status !== 0 && <Info k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
-                        {r.beginAt && r.status !== 0 && <Info k="ტრანსპორტირების დაწყება" v={formatDateTime(r.beginAt)} />}
-                        {r.correctedAt && <Info k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
-                        {r.deliveredAt && <Info k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
-                        {r.closedAt && <Info k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
-                        {r.comment && <Info k="კომენტარი" v={r.comment} />}
+                        {r.transportCost > 0 && <InfoRow k="ტრანსპორტირება" v={`${formatMoney(r.transportCost)} ₾ · იხდის ${r.tranCostPayer === 1 ? 'მყიდველი' : 'გამყიდველი'}`} />}
+                        {r.receptionInfo && <InfoRow k="მიმწოდებელი" v={r.receptionInfo} />}
+                        {r.receiverInfo && <InfoRow k="მიმღები" v={r.receiverInfo} />}
+                        {r.createdAt && <InfoRow k="შეიქმნა" v={formatDateTime(r.createdAt)} />}
+                        {r.activatedAt && r.status !== 0 && <InfoRow k="გააქტიურდა" v={formatDateTime(r.activatedAt)} />}
+                        {r.beginAt && r.status !== 0 && <InfoRow k="ტრანსპორტირების დაწყება" v={formatDateTime(r.beginAt)} />}
+                        {r.correctedAt && <InfoRow k="კორექტირდა" v={formatDateTime(r.correctedAt)} />}
+                        {r.deliveredAt && <InfoRow k="მიწოდება" v={formatDateTime(r.deliveredAt)} />}
+                        {r.closedAt && <InfoRow k={r.status === 2 ? 'დასრულდა' : 'დაიხურა'} v={formatDateTime(r.closedAt)} />}
+                        {r.comment && <InfoRow k="კომენტარი" v={r.comment} />}
                       </>
                     ) : (
                       w && (
                         <>
-                          {w.transporterTin && <Info k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
-                          {w.comment && <Info k="კომენტარი" v={w.comment} />}
+                          {w.transporterTin && <InfoRow k="გადამზიდავის ს/ნ" v={w.transporterTin} mono />}
+                          {w.comment && <InfoRow k="კომენტარი" v={w.comment} />}
                         </>
                       )
                     )}
-                    {s.rsWaybillId && <Info k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
+                    {s.rsWaybillId && <InfoRow k="RS.ge ID" v={String(s.rsWaybillId)} mono />}
                   </dl>
                 </>
               )}
@@ -352,33 +352,33 @@ export function ShipmentDetail() {
           <Card className="p-5">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">დეტალები</h2>
             <dl className="divide-y divide-separator text-sm">
-              <Info k="კარიერი" v={x.carrier} />
-              <Info k="მარშრუტი" v={x.route} />
+              <InfoRow k="კარიერი" v={x.carrier} />
+              <InfoRow k="მარშრუტი" v={x.route} />
               {driver ? (
                 <>
-                  <Info k="მძღოლი" v={x.driver} />
-                  <Info k="პირადი ნომერი" v={driver.personalId} mono />
-                  <Info k="ტელეფონი" v={driver.phone} />
+                  <InfoRow k="მძღოლი" v={x.driver} />
+                  <InfoRow k="პირადი ნომერი" v={driver.personalId} mono />
+                  <InfoRow k="ტელეფონი" v={driver.phone} />
                 </>
               ) : (
-                <Info k="ტრანსპორტირება" v="გარეშე" />
+                <InfoRow k="ტრანსპორტირება" v="გარეშე" />
               )}
               {truck && (
                 <>
-                  <Info k="მანქანა" v={truck.model} />
-                  <Info k="სახელმწიფო ნომერი" v={truck.plateNumber} mono />
-                  <Info k="მისაბმელი" v={truck.trailerNumber || undefined} mono />
+                  <InfoRow k="მანქანა" v={truck.model} />
+                  <InfoRow k="სახელმწიფო ნომერი" v={truck.plateNumber} mono />
+                  <InfoRow k="მისაბმელი" v={truck.trailerNumber || undefined} mono />
                 </>
               )}
               {s.items.map((i, k) => (
-                <Info
+                <InfoRow
                   key={k}
                   k={i.name || 'პროდუქტი'}
                   sub={[i.barCode, i.aId ? `აქციზი ${i.aTitle || i.aId}` : ''].filter(Boolean).join(' · ')}
                   v={`${qtyText(i.quantity, i.unitTxt)} × ${formatMoney(i.price)} ₾ = ${formatMoney(itemAmount(i))} ₾${i.amount != null ? ' (ხელით)' : ''}${i.quantityExt ? ` · დამატ. ${formatNumber(i.quantityExt, 3)}` : ''}`}
                 />
               ))}
-              {s.items.length > 1 && <Info k="სულ" v={formatNumber(s.quantity, 3)} />}
+              {s.items.length > 1 && <InfoRow k="სულ" v={formatNumber(s.quantity, 3)} />}
             </dl>
           </Card>
 
@@ -536,21 +536,5 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
         )}
       </div>
     </Modal>
-  )
-}
-
-/** `changed`: the value differs from what this app sent (the waybill was corrected on RS.ge). */
-function Info({ k, v, mono, changed, sub }: { k: string; v?: string; mono?: boolean; changed?: boolean; sub?: string }) {
-  return (
-    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 py-2.5">
-      <dt className="min-w-0 text-slate-500 [overflow-wrap:anywhere]">
-        {k}
-        {sub && <span className="block font-mono text-xs text-slate-400">{sub}</span>}
-      </dt>
-      <dd className="ml-auto min-w-0 text-right">
-        <span className={cx('text-slate-900 [overflow-wrap:anywhere]', mono && 'font-mono text-[13px]')}>{v ?? '—'}</span>
-        {changed && <span className="block text-xs text-amber-700">შეცვლილია RS.ge-ზე</span>}
-      </dd>
-    </div>
   )
 }
