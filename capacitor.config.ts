@@ -8,7 +8,7 @@ const url = process.env.HC_APP_URL
 
 const config: CapacitorConfig = {
   appId: 'ge.hc.portal',
-  appName: 'HC Portal',
+  appName: 'HC Waybill',
   webDir: 'dist',
   server: url
     ? { url, cleartext: url.startsWith('http://'), errorPath: 'offline.html' }
