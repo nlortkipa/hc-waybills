@@ -65,24 +65,14 @@ const CODE_MAX_TRIES = 5
 const CODE_SENDS_PER_HOUR = 6
 const hashCode = (key: string, code: string) => createHash('sha256').update(`${key}:${code}`).digest('hex')
 
-/**
- * The SMS with the login code. Its last line (`@host #code`) lets Chrome on Android offer the code
- * on the login form (WebOTP); it is only added for the site's own https address.
- */
-export function loginSmsText(code: string, origin?: string): string {
-  let host = ''
-  try {
-    const u = new URL(origin ?? '')
-    if (u.protocol === 'https:') host = u.host
-  } catch {
-    /* no origin */
-  }
-  return `HC Portal: შესვლის კოდი ${code}` + (host ? `\n\n@${host} #${code}` : '')
+/** The SMS with the login code. */
+export function loginSmsText(code: string): string {
+  return `HC Portal: შესვლის კოდი ${code}`
 }
 
 export const auth = {
   /** Texts a 6-digit login code to a known user's number (LOGIN_CODES=console: prints it in the server console). */
-  async sendCode(phone: string, origin?: string): Promise<{ resendIn: number }> {
+  async sendCode(phone: string): Promise<{ resendIn: number }> {
     const key = phoneKey(String(phone ?? ''))
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
@@ -99,7 +89,7 @@ export const auth = {
       const c = smsCreds()
       if (!c) fail('SMS სერვისი არ არის დაკავშირებული', 503)
       try {
-        await smsoffice.send(c!, destination!, loginSmsText(code, origin), newReference(), undefined, loginSmsText('••••••', origin))
+        await smsoffice.send(c!, destination!, loginSmsText(code), newReference(), undefined, loginSmsText('••••••'))
       } catch (e) {
         fail(`კოდი ვერ გაიგზავნა: ${(e as Error).message}`, 502)
       }

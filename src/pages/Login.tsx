@@ -12,16 +12,10 @@ const CODE_LEN = 6
 /** "575780323" → "575 78 03 23". */
 const prettyPhone = (k: string) => k.replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4')
 
-declare global {
-  interface CredentialRequestOptions {
-    otp?: { transport: string[] }
-  }
-}
-
 /**
- * Waits for the login SMS and hands its code over: Chrome's WebOTP on the website, the SMS User
- * Consent prompt in the Android app (MainActivity dispatches `hc-otp`). iOS and other keyboards
- * offer the code themselves through autocomplete="one-time-code".
+ * Waits for the login SMS and hands its code over: the SMS User Consent prompt in the Android app
+ * (MainActivity dispatches `hc-otp`). iOS and other keyboards offer the code themselves through
+ * autocomplete="one-time-code".
  */
 function useSmsCode(active: boolean, onCode: (code: string) => void) {
   const cb = useRef(onCode)
@@ -38,20 +32,7 @@ function useSmsCode(active: boolean, onCode: (code: string) => void) {
     } catch {
       /* older app without the bridge */
     }
-    const ac = new AbortController()
-    if ('OTPCredential' in window && navigator.credentials) {
-      navigator.credentials
-        .get({ otp: { transport: ['sms'] }, signal: ac.signal } as CredentialRequestOptions)
-        .then((c) => {
-          const code = (c as unknown as { code?: string } | null)?.code
-          if (code) cb.current(code)
-        })
-        .catch(() => {})
-    }
-    return () => {
-      window.removeEventListener('hc-otp', onNative)
-      ac.abort()
-    }
+    return () => window.removeEventListener('hc-otp', onNative)
   }, [active])
 }
 

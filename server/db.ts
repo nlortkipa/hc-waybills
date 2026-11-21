@@ -98,7 +98,20 @@ async function openPostgres(url: string): Promise<Sql> {
     },
     close: () => pool.end(),
   }
-  await pool.query(TABLES(', seq BIGSERIAL', 'BIGINT', 'DOUBLE PRECISION'))
+  // Several server copies can start at once; CREATE TABLE IF NOT EXISTS isn't safe to run side by side
+  // in PostgreSQL (duplicate key on pg_type), so one copy at a time creates the tables.
+  const c = await pool.connect()
+  try {
+    await c.query('BEGIN')
+    await c.query('SELECT pg_advisory_xact_lock(4242001)')
+    await c.query(TABLES(', seq BIGSERIAL', 'BIGINT', 'DOUBLE PRECISION'))
+    await c.query('COMMIT')
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    c.release()
+  }
   return db
 }
 
