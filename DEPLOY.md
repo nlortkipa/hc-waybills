@@ -28,7 +28,7 @@ One Vercel project holds everything. The web app and the API run as one Docker c
 2. This adds `DATABASE_URL` to the project's variables.
 3. Open **Deployments**, click **⋯** next to the latest deployment, then **Redeploy**.
 
-The site is now live at `https://<project>.vercel.app`. It starts with only the admin user from the seed.
+The site is now live at `https://hc-waybill.vercel.app`. It starts with only the admin user from the seed.
 
 ## 3. Bring your current data (optional)
 
@@ -52,7 +52,7 @@ database, run this once on your computer:
 Point the APK at the new address and build it again:
 
 ```bash
-VITE_API_URL=https://<project>.vercel.app npm run android:apk
+VITE_API_URL=https://hc-waybill.vercel.app npm run android:apk
 ```
 
 ## Good to know
