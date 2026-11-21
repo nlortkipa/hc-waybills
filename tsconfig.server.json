@@ -5,5 +5,5 @@
     "lib": ["ES2023", "DOM"],
     "strict": true
   },
-  "include": ["server"]
+  "include": ["server", "scripts/*.ts"]
 }

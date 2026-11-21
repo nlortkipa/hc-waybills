@@ -27,7 +27,7 @@ import type {
   User,
   WaybillType,
 } from '../src/types.ts'
-import { createHash, randomInt } from 'node:crypto'
+import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { IntegrationError } from './integrations.ts'
 import { rsCache } from './rscache.ts'
 import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
@@ -49,17 +49,21 @@ const str = (v: unknown) => String(v ?? '').trim()
 
 /* ------------------------------ Auth ------------------------------ */
 
-/** Login codes sent by SMS, by phone key: only a hash is kept, and only in memory. */
-const loginCodes = new Map<string, { hash: string; expires: number; tries: number; sentAt: number; sends: number[] }>()
+/**
+ * Login codes sent by SMS, by phone key: only a hash is kept. In the database, not in memory, so the
+ * code works whichever server process the login reaches.
+ */
+type LoginCode = { hash: string; expires: number; tries: number; sentAt: number; sends: number[] }
+const loginCodes = {
+  get: (key: string) => db.temp.get<LoginCode>(`login:${key}`),
+  // Kept while it can be used, and for an hour after the last send (CODE_SENDS_PER_HOUR).
+  set: (key: string, v: LoginCode) => db.temp.set(`login:${key}`, v, Math.max(v.expires, ...v.sends.map((t) => t + 3600_000))),
+}
 const CODE_TTL_MS = 5 * 60_000
 const CODE_RESEND_MS = 45_000
 const CODE_MAX_TRIES = 5
 const CODE_SENDS_PER_HOUR = 6
 const hashCode = (key: string, code: string) => createHash('sha256').update(`${key}:${code}`).digest('hex')
-setInterval(() => {
-  const now = Date.now()
-  for (const [k, v] of loginCodes) if (v.expires < now && !v.sends.some((t) => now - t < 3600_000)) loginCodes.delete(k)
-}, 10 * 60_000).unref()
 
 /**
  * The SMS with the login code. Its last line (`@host #code`) lets Chrome on Android offer the code
@@ -85,7 +89,7 @@ export const auth = {
     const destination = toDestination(user!.phone)
     if (!destination && !LOGIN_CODES_TO_CONSOLE) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
     const now = Date.now()
-    const prev = loginCodes.get(key)
+    const prev = await loginCodes.get(key)
     const sends = (prev?.sends ?? []).filter((t) => now - t < 3600_000)
     if (prev && now - prev.sentAt < CODE_RESEND_MS) return { resendIn: Math.ceil((CODE_RESEND_MS - (now - prev.sentAt)) / 1000) }
     if (sends.length >= CODE_SENDS_PER_HOUR) fail('ძალიან ბევრი მცდელობა — სცადე ერთ საათში', 429)
@@ -100,26 +104,27 @@ export const auth = {
         fail(`კოდი ვერ გაიგზავნა: ${(e as Error).message}`, 502)
       }
     }
-    loginCodes.set(key, { hash: hashCode(key, code), expires: now + CODE_TTL_MS, tries: 0, sentAt: now, sends: [...sends, now] })
+    await loginCodes.set(key, { hash: hashCode(key, code), expires: now + CODE_TTL_MS, tries: 0, sentAt: now, sends: [...sends, now] })
     return { resendIn: Math.ceil(CODE_RESEND_MS / 1000) }
   },
   /** Checks the SMS code and starts a session. */
-  login(phone: string, code: string): { token: string; user: User } {
+  async login(phone: string, code: string): Promise<{ token: string; user: User }> {
     const key = phoneKey(String(phone ?? ''))
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
-    const entry = loginCodes.get(key)
+    const entry = await loginCodes.get(key)
     const typed = String(code ?? '').replace(/\D/g, '')
     if (!entry || entry.expires < Date.now() || entry.tries >= CODE_MAX_TRIES) fail('კოდს ვადა გაუვიდა — მოითხოვე ახალი', 401)
     if (!typed || hashCode(key, typed) !== entry!.hash) {
       entry!.tries++
+      await loginCodes.set(key, entry!)
       fail(entry!.tries >= CODE_MAX_TRIES ? 'კოდი არასწორია — მოითხოვე ახალი' : 'კოდი არასწორია', 401)
     }
-    loginCodes.set(key, { ...entry!, expires: 0, hash: '', sentAt: 0 })
-    return { token: db.sessions.create(user!.id), user: user! }
+    await loginCodes.set(key, { ...entry!, expires: 0, hash: '', sentAt: 0 })
+    return { token: await db.sessions.create(user!.id), user: user! }
   },
-  user(token: string | undefined): User | null {
-    const id = token && db.sessions.get(token)
+  async user(token: string | undefined): Promise<User | null> {
+    const id = token && (await db.sessions.get(token))
     return (id && db.get().users.find((u) => u.id === id && !u.deletedAt)) || null
   },
   logout(token: string) {
@@ -831,7 +836,31 @@ async function current(id: string, user?: User) {
 
 const noReport = (user: User) => user.role === 'report' && fail('რეპორტ მომხმარებელს არ შეუძლია ამ მოქმედების შესრულება', 403)
 
+/**
+ * Shipments this process is working on (uploading, correcting, completing, texting). Each is also
+ * claimed in the database, so another server process sharing it leaves the shipment alone.
+ */
 const running = new Set<string>()
+const HOLDER = randomBytes(6).toString('base64url')
+/** A claim lapses after this long, should its process die without letting go. */
+const CLAIM_MS = 10 * 60_000
+
+/** Claims the shipment for this process. False when it is busy here or in another process. */
+async function claim(id: string): Promise<boolean> {
+  if (running.has(id)) return false
+  running.add(id)
+  const ok = await db.locks.claim(id, HOLDER, CLAIM_MS).catch((e: Error) => {
+    console.error('[db] claim failed:', e.message)
+    return false
+  })
+  if (!ok) running.delete(id)
+  return ok
+}
+function release(id: string) {
+  running.delete(id)
+  void db.locks.release(id, HOLDER).catch(() => {})
+}
+const BUSY = 'რეისი ახლა მუშავდება — სცადე ცოტა ხანში'
 
 /** What an operator picks for a shipment: everything else comes from the route. */
 export interface NewShipmentInput {
@@ -983,12 +1012,11 @@ export const shipments = {
   async run(id: string, user?: User) {
     get(id, user)
     if (user) noReport(user)
-    if (running.has(id)) return
-    running.add(id)
+    if (!(await claim(id))) return
     try {
       await runPipeline(id)
     } finally {
-      running.delete(id)
+      release(id)
     }
     // Activated, the driver texted: with WAYBILL_AUTO_CLOSE=0:00 it is completed now, not at the next check.
     if (AUTO_CLOSE_MS === 0) void autoClose()
@@ -1002,7 +1030,7 @@ export const shipments = {
     const s = await current(id, user)
     noReport(user)
     if (s.status !== 'saved' || s.waybillState) fail('ზედნადები არ არის შენახულ (გაუაქტიურებელ) მდგომარეობაში')
-    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    if (running.has(id)) fail(BUSY)
     const beginAt = parseBegin(body?.beginAt)
     // The start asked for is stored until the activation is done (the pipeline reads it).
     patch(
@@ -1023,7 +1051,7 @@ export const shipments = {
     // RS.ge's copy decides what may change: read it when none is held.
     const s = await current(id, user)
     noReport(user)
-    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    if (running.has(id)) fail(BUSY)
     if (s.waybillState) fail(s.waybillState === 'closed' ? 'დასრულებულ ზედნადებს ვერ შეცვლი' : 'გაუქმებულ ზედნადებს ვერ შეცვლი')
     if (s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს ვერ შეცვლი')
     if (s.status === 'uploading') fail('რეისი ახლა იტვირთება — სცადე ცოტა ხანში')
@@ -1047,7 +1075,7 @@ export const shipments = {
       return
     }
     if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული')
-    running.add(id)
+    if (!(await claim(id))) fail(BUSY)
     let remote: RsRemoteWaybill | null = null
     try {
       const now = await rsCache.read(s.rsWaybillId!, id).catch((e: Error) => fail(e.message, 502))
@@ -1060,7 +1088,7 @@ export const shipments = {
         .catch((e: Error) => fail(e.message, 502))
       remote = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
-      running.delete(id)
+      release(id)
     }
     if (!remote) rsCache.stale(s.rsWaybillId!)
     const message = active ? `ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე` : 'RS.ge-ზე შენახული ზედნადები განახლდა'
@@ -1081,12 +1109,11 @@ export const shipments = {
     noReport(user)
     // Sent again only when it failed or the phone never got it, so a double click can't text the driver twice.
     if (s.sms.status === 'ok' && !smsUndelivered(s)) fail('SMS უკვე გაიგზავნა')
-    if (!s.waybillNumber || running.has(id)) return
-    running.add(id)
+    if (!s.waybillNumber || !(await claim(id))) return
     try {
       await sendSms(id)
     } finally {
-      running.delete(id)
+      release(id)
     }
   },
 
@@ -1109,12 +1136,12 @@ export const shipments = {
     if (action === 'cancel' && s.waybillState === 'cancelled') fail('ზედნადები უკვე გაუქმებულია')
     if (action === 'cancel' && s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს RS.ge ვერ გააუქმებს — ჯერ გააუქმე ფაქტურა RS.ge-ს პორტალზე')
     if (!s.rsWaybillId) fail('ზედნადების RS.ge ID უცნობია — დაასრულე ან გააუქმე RS.ge-ს პორტალიდან')
-    if (!inPipeline && running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
+    if (!inPipeline && running.has(id)) fail(BUSY)
     const delivered = action === 'close' ? parseDelivered(body?.deliveredAt) : undefined
     const target = action === 'close' ? 'closed' : 'cancelled'
     let error: Error | undefined
     let w: RsRemoteWaybill | null = null
-    if (!inPipeline) running.add(id)
+    if (!inPipeline && !(await claim(id))) fail(BUSY)
     try {
       try {
         if (action === 'close') await rsge.closeWaybill(s.rsWaybillId!, id, delivered)
@@ -1125,7 +1152,7 @@ export const shipments = {
       }
       w = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
-      if (!inPipeline) running.delete(id)
+      if (!inPipeline) release(id)
     }
     // Not read back: read again soon, so the state shown follows.
     if (!w) rsCache.stale(s.rsWaybillId!)
@@ -1161,8 +1188,7 @@ export const shipments = {
     // RS.ge refuses it (-3009) until the planned start of transport has come.
     const begin = s.rsRemote?.beginAt ?? s.waybill?.beginAt
     if (begin && Date.parse(begin) > Date.now()) fail(`ანგარიშ-ფაქტურა გამოიწერება ტრანსპორტირების დაწყების შემდეგ (${tbilisiTime(begin)})`)
-    if (running.has(id)) fail('რეისი ახლა მუშავდება — სცადე ცოტა ხანში')
-    running.add(id)
+    if (!(await claim(id))) fail(BUSY)
     try {
       let inv: number | undefined
       let error: Error | undefined
@@ -1181,7 +1207,7 @@ export const shipments = {
       patch(id, () => ({}), { level: 'success', message: `ანგარიშ-ფაქტურა გამოიწერა RS.ge-ზე (ID ${inv})` })
       return { invoiceId: inv }
     } finally {
-      running.delete(id)
+      release(id)
     }
   },
 
@@ -1221,14 +1247,40 @@ export const shipments = {
 
   /** On server start: finish pipelines interrupted by a restart, and start completing waybills on time. */
   resumeAll() {
-    db.get()
-      .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
-      .forEach((s) => void shipments.run(s.id))
+    void resumePipelines()
     if (AUTO_CLOSE_MS !== null) {
       void autoClose()
       setInterval(() => void autoClose(), AUTO_CLOSE_CHECK_MS).unref()
     }
   },
+}
+
+/**
+ * Pipelines interrupted by a restart (or by a server process that stopped). One another process is
+ * running is claimed by it, so run() leaves it alone.
+ */
+function resumePipelines() {
+  return Promise.all(
+    db
+      .get()
+      .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
+      .map((s) => shipments.run(s.id).catch(() => {})),
+  )
+}
+
+/**
+ * The scheduled pass (/api/cron), for when the server only runs while it is used (Vercel stops an idle
+ * one): finishes interrupted pipelines, completes waybills that are due and asks smsoffice.ge whether
+ * recent messages arrived. The same happens on its own while the server runs; this catches up.
+ */
+export async function scheduledJobs() {
+  await resumePipelines()
+  await autoClose()
+  const pending = db
+    .get()
+    .shipments.filter((s) => s.sms.status === 'ok' && s.sms.reference && !(s.sms.delivery && SMS_FINAL.includes(s.sms.delivery)))
+    .slice(0, 50)
+  for (const s of pending) await checkDelivery(s.id).catch(() => {})
 }
 
 /* ------------------------- Automatic completion ------------------------- */

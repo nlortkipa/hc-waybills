@@ -1,25 +1,30 @@
 /**
- * The database: SQLite through Node's built-in node:sqlite (no dependencies).
+ * The database: PostgreSQL when DATABASE_URL is set (hosting), otherwise a SQLite file (server/db.ts).
  *
  * Only what RS.ge doesn't have is stored. RS.ge's data (products, car numbers, waybills, the seller)
  * is read from RS.ge on demand and kept in memory (server/rscache.ts). A product's unit price and VAT
  * type are shown on RS.ge's portal but its API doesn't carry them, so they are stored here by bar code.
  *
- * Each record is one row holding its JSON, so a change writes only the rows it touches,
- * inside a transaction. A copy of the data is kept in memory for fast reads; every write
- * goes to SQLite first and reaches the copy only after it committed.
+ * Each record is one row holding its JSON. A copy of the data is kept in memory: reads are instant
+ * and the business rules (server/logic.ts) stay synchronous. A change reaches the copy at once and is
+ * written to the database in order, each one in a transaction; every request waits for the writes
+ * before it answers (`flush`), so what a client is told has been stored.
  *
- * On first start an existing db.json (the previous storage) is imported and renamed to
+ * Several server processes may share the database (e.g. Vercel starts more than one under load).
+ * Every write counts up the revision in the database. Before a request is handled (`refresh`), the
+ * copy is read again when the database's revision isn't the one this process last wrote or read.
+ *
+ * On first start an existing db.json (the storage before SQLite) is imported and renamed to
  * db.json.imported. The RS.ge service user and the SMS account are not stored: they come from .env
- * (server/config.ts). The file is readable by its owner only.
+ * (server/config.ts).
  */
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { RS_LIVE_FIELDS, type IntegrationLog, type RsSettings, type SmsSettings, type StoredDatabase as Database } from '../src/types.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
 import { defaultRsSettings } from '../src/lib/rs.ts'
+import { openSql, type Query } from './db.ts'
 import { createSeed, migrate, storedShipment } from './seed.ts'
 
 const DATA = join(import.meta.dirname, 'data')
@@ -50,43 +55,21 @@ const SESSION_TOUCH_MS = 3600_000
 type RecordCol = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'users'
 export type StoredCol = RecordCol | 'shipments'
 type MetaKey = 'rs' | 'sms'
+type Prices = Map<string, { price: number; vatType: 0 | 1 | 2 }>
 
-mkdirSync(dirname(FILE), { recursive: true })
-const sql = new DatabaseSync(FILE)
-try {
-  chmodSync(FILE, 0o600)
-} catch {
-  /* not fatal (e.g. a file owned by another user) */
+// The container sets HC_REQUIRE_DATABASE_URL: its own disk is thrown away, so a file there would lose the data.
+if (process.env.HC_REQUIRE_DATABASE_URL && !process.env.DATABASE_URL?.trim()) {
+  console.error('[db] DATABASE_URL is not set: connect a PostgreSQL database (see DEPLOY.md)')
+  process.exit(1)
 }
-sql.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
-  PRAGMA busy_timeout = 5000;
-  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS carriers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS drivers (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS trucks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS shipments (id TEXT PRIMARY KEY, carrier_id TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
-  CREATE INDEX IF NOT EXISTS shipments_created ON shipments (created_at);
-  CREATE INDEX IF NOT EXISTS shipments_carrier ON shipments (carrier_id);
-  CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, at TEXT NOT NULL, shipment_id TEXT, data TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL);
-  CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
-  CREATE TABLE IF NOT EXISTS product_prices (bar_code TEXT PRIMARY KEY, price REAL NOT NULL, vat_type INTEGER NOT NULL);
-`)
+const sql = await openSql(undefined, FILE)
 
 /* ------------------------------ Low level ------------------------------ */
 
 const RECORD_COLS: RecordCol[] = ['carriers', 'routes', 'drivers', 'trucks', 'users']
 
-function getMeta<T>(key: string): T | undefined {
-  const row = sql.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
-  return row ? (JSON.parse(row.value) as T) : undefined
-}
-const setMetaStmt = sql.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
-const setMeta = (key: string, value: unknown) => setMetaStmt.run(key, JSON.stringify(seal(key, value)))
+const setMeta = (q: Query, key: string, value: unknown) =>
+  q.run('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', [key, JSON.stringify(seal(key, value))])
 
 /* The services' accounts live in .env (server/config.ts). Older versions stored them here: never written again. */
 const ENV_ONLY: Record<MetaKey, string[]> = { rs: ['su', 'sp'], sms: ['apiKey', 'sender'] }
@@ -97,79 +80,130 @@ function seal(key: string, value: unknown) {
   return key in ENV_ONLY ? omit(value, ENV_ONLY[key as MetaKey]) : value
 }
 
-function writeRow(col: StoredCol, rec: { id: string }) {
+function writeRow(q: Query, col: StoredCol, rec: { id: string }) {
   if (col === 'shipments') {
     const s = rec as Database['shipments'][number]
-    sql
-      .prepare('INSERT INTO shipments (id, carrier_id, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET carrier_id = excluded.carrier_id, data = excluded.data')
-      .run(s.id, s.carrierId, s.createdAt, JSON.stringify(s))
-  } else {
-    sql.prepare(`INSERT INTO ${col} (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data`).run(rec.id, JSON.stringify(rec))
+    return q.run(
+      'INSERT INTO shipments (id, carrier_id, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET carrier_id = excluded.carrier_id, data = excluded.data',
+      [s.id, s.carrierId, s.createdAt, JSON.stringify(s)],
+    )
   }
+  return q.run(`INSERT INTO ${col} (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data`, [rec.id, JSON.stringify(rec)])
 }
 
-function writeLog(l: IntegrationLog) {
-  sql.prepare('INSERT OR REPLACE INTO logs (id, at, shipment_id, data) VALUES (?, ?, ?, ?)').run(l.id, l.at, l.shipmentId ?? null, JSON.stringify(l))
-}
+const writeLog = (q: Query, l: IntegrationLog) =>
+  q.run('INSERT INTO logs (id, at, shipment_id, data) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET at = excluded.at, shipment_id = excluded.shipment_id, data = excluded.data', [
+    l.id,
+    l.at,
+    l.shipmentId ?? null,
+    JSON.stringify(l),
+  ])
 
 const parseRows = <T,>(rows: unknown[]) => (rows as { data: string }[]).map((r) => JSON.parse(r.data) as T)
+const selectData = (q: Query, table: string, order = `${sql.seq}`) => q.all(`SELECT data FROM ${table} ORDER BY ${order}`)
 
-const tableExists = (name: string) => !!sql.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)
+interface Loaded {
+  db: Database
+  prices: Prices
+  instance: string
+  /** Revision of the database when it was read. */
+  rev: number
+  /** Log rows beyond what is kept (older versions, or another process's trimming). */
+  extraLogs: string[]
+  /** Accounts older versions stored in the database (now in .env). */
+  staleAccounts: MetaKey[]
+}
 
-function readAll(): Database | null {
-  const version = getMeta<number>('version')
+/** Everything, as stored. null: an empty database. The revision is read first, so it is never newer than the data. */
+async function readAll(): Promise<Loaded | null> {
+  const meta = new Map((await sql.all<{ key: string; value: string }>('SELECT key, value FROM meta')).map((r) => [r.key, JSON.parse(r.value) as unknown]))
+  const version = meta.get('version') as number | undefined
   if (version == null) return null
-  return {
+  const rev = Number(meta.get('rev') ?? 0)
+  const logs = parseRows<IntegrationLog>(await selectData(sql, 'logs', `${sql.seq} DESC`))
+  const kept = trimLogs(logs)
+  const keep = new Set(kept.map((l) => l.id))
+  const raw = (k: MetaKey) => meta.get(k) as Record<string, unknown> | undefined
+  const priceRows = await sql.all<{ bar_code: string; price: number; vat_type: number }>('SELECT bar_code, price, vat_type FROM product_prices')
+  const db: Database = {
     version,
-    carriers: parseRows(sql.prepare('SELECT data FROM carriers ORDER BY rowid').all()),
-    routes: parseRows(sql.prepare('SELECT data FROM routes ORDER BY rowid').all()),
-    drivers: parseRows(sql.prepare('SELECT data FROM drivers ORDER BY rowid').all()),
-    trucks: parseRows(sql.prepare('SELECT data FROM trucks ORDER BY rowid').all()),
-    users: parseRows(sql.prepare('SELECT data FROM users ORDER BY rowid').all()),
-    shipments: parseRows(sql.prepare('SELECT data FROM shipments ORDER BY created_at DESC, rowid DESC').all()),
-    logs: trimLogs(parseRows(sql.prepare('SELECT data FROM logs ORDER BY rowid DESC').all())),
+    carriers: parseRows(await selectData(sql, 'carriers')),
+    routes: parseRows(await selectData(sql, 'routes')),
+    drivers: parseRows(await selectData(sql, 'drivers')),
+    trucks: parseRows(await selectData(sql, 'trucks')),
+    users: parseRows(await selectData(sql, 'users')),
+    shipments: parseRows(await selectData(sql, 'shipments', `created_at DESC, ${sql.seq} DESC`)),
+    logs: kept,
     // Before v19: the one admin-set cargo, which migrate() turns into a product.
-    ...(version < 19 && { cargo: getMeta('cargo') }),
+    ...(version < 19 && { cargo: meta.get('cargo') as never }),
     // Before v24 products were stored; migrate() reads them to point route lines at their bar codes.
-    ...(version < 24 && { products: tableExists('products') ? parseRows(sql.prepare('SELECT data FROM products ORDER BY rowid').all()) : [] }),
-    rs: { ...defaultRsSettings(), ...omit(getMeta<RsSettings>('rs'), ENV_ONLY.rs) },
+    ...(version < 24 && { products: (await sql.tableExists('products')) ? parseRows(await selectData(sql, 'products')) : [] }),
+    rs: { ...defaultRsSettings(), ...omit(raw('rs') as RsSettings | undefined, ENV_ONLY.rs) },
     // Missing before v17 (migrate() adds it); defaults also cover a v17 file written without it.
-    sms: { ...defaultSmsSettings(), ...omit(getMeta<SmsSettings>('sms'), ENV_ONLY.sms) },
+    sms: { ...defaultSmsSettings(), ...omit(raw('sms') as SmsSettings | undefined, ENV_ONLY.sms) },
+  }
+  return {
+    db,
+    prices: new Map(priceRows.map((r) => [r.bar_code, { price: Number(r.price), vatType: r.vat_type as 0 | 1 | 2 }])),
+    instance: (meta.get('instance') as string | undefined) ?? '',
+    rev,
+    extraLogs: logs.filter((l) => !keep.has(l.id)).map((l) => l.id),
+    staleAccounts: (['rs', 'sms'] as const).filter((k) => ENV_ONLY[k].some((f) => raw(k)?.[f] !== undefined)),
   }
 }
 
-/** Survives restarts so a client's last-seen revision never matches stale data. */
-let rev = getMeta<number>('rev') ?? 0
-/** New for every database (a deleted file starts over at a new id, not at an old revision). */
-let instance = getMeta<string>('instance') ?? ''
+/* ------------------------------ Writing ------------------------------ */
 
-/** Runs `fn` in one transaction and bumps the revision. Throws (and changes nothing) if any statement fails. */
-function tx(fn: () => void, bump = true) {
-  sql.exec('BEGIN IMMEDIATE')
-  try {
-    fn()
-    if (bump) setMeta('rev', rev + 1)
-    sql.exec('COMMIT')
-  } catch (e) {
-    sql.exec('ROLLBACK')
-    throw e
-  }
-  if (bump) rev++
+/** Revision of the data in memory: the database's when it was last read or written here. */
+let rev = 0
+/** New for every database (a deleted one starts over at a new id, not at an old revision). */
+let instance = ''
+/** The copy in memory may be behind the database: read it again before the next request. */
+let stale = false
+let pending: Promise<void> = Promise.resolve()
+/** Writes queued so far, and how many failed: a request that saw a failure answers with an error. */
+let queued = 0
+let failures = 0
+
+/**
+ * Queues `fn` to run in one transaction after the writes before it, and counts up the revision
+ * (unless `bump` is false: nothing a client is shown changed). A failure is logged and the copy in
+ * memory is read again from the database before the next request.
+ */
+function write(fn: (q: Query) => Promise<unknown>, bump = true) {
+  queued++
+  pending = pending.then(() =>
+    sql
+      .tx(async (q) => {
+        await fn(q)
+        if (!bump) return
+        const [row] = await q.all<{ value: string }>("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'rev' RETURNING value")
+        const next = Number(row.value)
+        // Another process wrote in between: its change isn't in memory here yet.
+        if (next !== rev + 1) stale = true
+        rev = next
+      })
+      .catch((e) => {
+        failures++
+        stale = true
+        console.error('[db] a write failed; the data is read again from the database:', e)
+      }),
+  )
 }
 
 function replaceAll(db: Database) {
-  tx(() => {
-    for (const t of [...RECORD_COLS, 'shipments', 'logs']) sql.exec(`DELETE FROM ${t}`)
+  write(async (q) => {
+    for (const t of [...RECORD_COLS, 'shipments', 'logs']) await q.run(`DELETE FROM ${t}`)
     // Products are RS.ge's only since v24.
-    sql.exec('DROP TABLE IF EXISTS products')
-    for (const col of RECORD_COLS) for (const r of db[col]) writeRow(col, r)
-    for (const s of db.shipments) writeRow('shipments', storedShipment(s))
-    for (const l of trimLogs(db.logs).reverse()) writeLog(l)
-    setMeta('version', db.version)
-    sql.prepare("DELETE FROM meta WHERE key IN ('settings', 'cargo')").run()
-    setMeta('rs', db.rs)
-    setMeta('sms', db.sms)
-    if (!instance) setMeta('instance', (instance = randomBytes(6).toString('base64url')))
+    await q.run('DROP TABLE IF EXISTS products')
+    for (const col of RECORD_COLS) for (const r of db[col]) await writeRow(q, col, r)
+    for (const s of db.shipments) await writeRow(q, 'shipments', storedShipment(s))
+    for (const l of trimLogs(db.logs).reverse()) await writeLog(q, l)
+    await setMeta(q, 'version', db.version)
+    await q.run("DELETE FROM meta WHERE key IN ('settings', 'cargo')")
+    await setMeta(q, 'rs', db.rs)
+    await setMeta(q, 'sms', db.sms)
+    if (!instance) await setMeta(q, 'instance', (instance = randomBytes(6).toString('base64url')))
   })
 }
 
@@ -188,51 +222,110 @@ function readOldJson(): { db: Database; sessions: Record<string, string>; file: 
   return null
 }
 
-let mem: Database = (() => {
-  const existing = readAll()
+let mem: Database
+let prices: Prices = new Map()
+let staleAccounts: MetaKey[] = []
+
+/** Takes what was read as the copy in memory. False when its schema is newer than this code knows. */
+function adopt(l: Loaded): boolean {
+  const db = migrate(l.db)
+  if (!db) return false
+  mem = db
+  prices = l.prices
+  instance = l.instance
+  rev = l.rev
+  staleAccounts = l.staleAccounts
+  return true
+}
+
+{
+  const existing = await readAll()
   if (existing) {
-    const db = migrate(existing)
     // Never silently start over on top of real data: stop and let a person look.
-    if (!db) throw new Error(`[db] ${FILE} has schema v${existing.version}, which can't be upgraded`)
-    if (db.version !== existing.version) {
-      replaceAll(db)
-      console.log(`[db] upgraded ${FILE} from schema v${existing.version} to v${db.version}`)
+    if (!adopt(existing)) throw new Error(`[db] ${sql.where} has schema v${existing.db.version}, which can't be upgraded`)
+    if (mem!.version !== existing.db.version) {
+      replaceAll(mem!)
+      console.log(`[db] upgraded ${sql.where} from schema v${existing.db.version} to v${mem!.version}`)
+    } else if (existing.extraLogs.length) {
+      write(async (q) => {
+        for (const id of existing.extraLogs) await q.run('DELETE FROM logs WHERE id = ?', [id])
+      }, false)
     }
-    return db
+  } else {
+    // Only a local SQLite file has an older JSON file next to it.
+    const old = sql.kind === 'sqlite' ? readOldJson() : null
+    mem = old?.db ?? createSeed()
+    rev = Number((await sql.all<{ value: string }>("SELECT value FROM meta WHERE key = 'rev'"))[0]?.value ?? 0)
+    replaceAll(mem)
+    if (old) {
+      const now = Date.now()
+      write(async (q) => {
+        for (const [token, userId] of Object.entries(old.sessions)) {
+          await q.run('INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT (token_hash) DO NOTHING', [hashToken(token), userId, now, now])
+        }
+      }, false)
+      if (old.file === OLD_JSON) renameSync(OLD_JSON, `${OLD_JSON}.imported`)
+      console.log(`[db] imported ${old.file} into ${sql.where}`)
+    }
   }
-  const old = readOldJson()
-  const db = old?.db ?? createSeed()
-  replaceAll(db)
-  if (old) {
-    const now = Date.now()
-    tx(() => {
-      for (const [token, userId] of Object.entries(old.sessions)) {
-        sql.prepare('INSERT OR IGNORE INTO sessions VALUES (?, ?, ?, ?)').run(hashToken(token), userId, now, now)
-      }
-    }, false)
-    if (old.file === OLD_JSON) renameSync(OLD_JSON, `${OLD_JSON}.imported`)
-    console.log(`[db] imported ${old.file} into ${FILE}`)
-  }
-  return db
-})()
-console.log(`[db] ${FILE}`)
+  await pending
+  if (failures) throw new Error(`[db] could not write to ${sql.where}`)
+  console.log(`[db] ${sql.where}`)
+}
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
 
+let refreshing: Promise<void> | null = null
+
+async function reloadIfChanged() {
+  // A few tries: a write made here while reading means what was read may lack it.
+  for (let i = 0; i < 3; i++) {
+    await pending
+    const [row] = await sql.all<{ value: string }>("SELECT value FROM meta WHERE key = 'rev'")
+    if (!stale && Number(row?.value) === rev) return
+    const before = queued
+    const l = await readAll()
+    if (queued !== before) continue
+    if (!l) return
+    if (!adopt(l)) {
+      console.error(`[db] the database has schema v${l.db.version}, newer than this server: an update is being deployed`)
+      return
+    }
+    stale = false
+    return
+  }
+}
+
 /* ------------------------------- Surface ------------------------------- */
 
 export const store = {
+  /** Which database: 'postgres' or 'sqlite'. */
+  kind: sql.kind,
   /** The current data. Treat as read-only; change it through the methods below. */
   get: (): Database => mem,
   /** Changes whenever the data does, including across restarts and new databases. */
   rev: () => `${instance}.${rev}`,
 
+  /** Reads the data again if another process changed it. Called before each request is handled. */
+  refresh(): Promise<void> {
+    refreshing ??= reloadIfChanged().finally(() => (refreshing = null))
+    return refreshing
+  },
+
+  /** Waits until every change made so far is in the database. Throws if one of them failed since `since`. */
+  async flush(since = failures) {
+    await pending
+    if (failures !== since) throw new Error('[db] a change could not be stored')
+  },
+  /** Failures so far, to pass to flush(). */
+  failures: () => failures,
+
   /** Inserts or replaces one record. */
   put<C extends StoredCol>(col: C, rec: Database[C][number]) {
     if (col === 'shipments') rec = storedShipment(rec as Database['shipments'][number]) as Database[C][number]
-    tx(() => writeRow(col, rec))
+    write((q) => writeRow(q, col, rec))
     const list = mem[col] as { id: string }[]
     const exists = list.some((r) => r.id === rec.id)
     const next = exists ? list.map((r) => (r.id === rec.id ? rec : r)) : col === 'shipments' ? [rec, ...list] : [...list, rec]
@@ -240,7 +333,7 @@ export const store = {
   },
 
   remove(col: StoredCol, id: string) {
-    tx(() => sql.prepare(`DELETE FROM ${col} WHERE id = ?`).run(id))
+    write((q) => q.run(`DELETE FROM ${col} WHERE id = ?`, [id]))
     mem = { ...mem, [col]: (mem[col] as { id: string }[]).filter((r) => r.id !== id) }
   },
 
@@ -251,88 +344,153 @@ export const store = {
   },
 
   set<K extends MetaKey>(key: K, value: Database[K]) {
-    tx(() => setMeta(key, value))
+    write((q) => setMeta(q, key, value))
     mem = { ...mem, [key]: value }
   },
 
   addLog(entry: IntegrationLog) {
-    tx(() => {
-      writeLog(entry)
-      // Each kind is trimmed on its own, so frequent read-backs never push out the uploads.
-      const isRead = "json_extract(data, '$.readBack') IS NOT NULL"
-      sql.prepare(`DELETE FROM logs WHERE ${isRead} AND rowid NOT IN (SELECT rowid FROM logs WHERE ${isRead} ORDER BY rowid DESC LIMIT ${READ_LOG_LIMIT})`).run()
-      sql.prepare(`DELETE FROM logs WHERE NOT ${isRead} AND rowid NOT IN (SELECT rowid FROM logs WHERE NOT ${isRead} ORDER BY rowid DESC LIMIT ${LOG_LIMIT})`).run()
+    // Each kind is trimmed on its own, so frequent read-backs never push out the uploads.
+    const all = [entry, ...mem.logs]
+    const kept = trimLogs(all)
+    const keep = new Set(kept.map((l) => l.id))
+    const dropped = all.filter((l) => !keep.has(l.id)).map((l) => l.id)
+    write(async (q) => {
+      await writeLog(q, entry)
+      for (const id of dropped) await q.run('DELETE FROM logs WHERE id = ?', [id])
     })
-    mem = { ...mem, logs: trimLogs([entry, ...mem.logs]) }
+    mem = { ...mem, logs: kept }
   },
 
   /** Unit price and VAT type of RS.ge's products, by bar code (lower case). */
   productPrices: {
-    all(): Map<string, { price: number; vatType: 0 | 1 | 2 }> {
-      const rows = sql.prepare('SELECT bar_code, price, vat_type FROM product_prices').all() as { bar_code: string; price: number; vat_type: number }[]
-      return new Map(rows.map((r) => [r.bar_code, { price: r.price, vatType: r.vat_type as 0 | 1 | 2 }]))
-    },
+    all: (): Prices => prices,
     set(barCode: string, price: number, vatType: 0 | 1 | 2) {
-      tx(() => sql.prepare('INSERT INTO product_prices VALUES (?, ?, ?) ON CONFLICT (bar_code) DO UPDATE SET price = excluded.price, vat_type = excluded.vat_type').run(barCode.toLowerCase(), price, vatType))
+      const key = barCode.toLowerCase()
+      write((q) => q.run('INSERT INTO product_prices VALUES (?, ?, ?) ON CONFLICT (bar_code) DO UPDATE SET price = excluded.price, vat_type = excluded.vat_type', [key, price, vatType]))
+      prices = new Map(prices).set(key, { price, vatType })
     },
     remove(barCodes: string[]) {
       if (!barCodes.length) return
-      tx(() => {
-        for (const b of barCodes) sql.prepare('DELETE FROM product_prices WHERE bar_code = ?').run(b.toLowerCase())
+      const keys = barCodes.map((b) => b.toLowerCase())
+      write(async (q) => {
+        for (const b of keys) await q.run('DELETE FROM product_prices WHERE bar_code = ?', [b])
       })
+      prices = new Map(prices)
+      for (const b of keys) prices.delete(b)
     },
   },
 
   /** Removes the accounts older versions stored (now in .env). Called once .env's accounts were checked and work. */
   dropStoredAccounts() {
-    const stale = (['rs', 'sms'] as const).filter((k) => ENV_ONLY[k].some((f) => getMeta<Record<string, unknown>>(k)?.[f] !== undefined))
-    if (!stale.length) return
-    tx(() => stale.forEach((k) => setMeta(k, mem[k])), false)
-    console.log(`[db] removed the stored ${stale.join(' and ')} account (now in .env)`)
+    if (!staleAccounts.length) return
+    const keys = staleAccounts
+    staleAccounts = []
+    write(async (q) => {
+      for (const k of keys) await setMeta(q, k, mem[k])
+    }, false)
+    console.log(`[db] removed the stored ${keys.join(' and ')} account (now in .env)`)
   },
 
   clearLogs() {
-    tx(() => sql.exec('DELETE FROM logs'))
+    write((q) => q.run('DELETE FROM logs'))
     mem = { ...mem, logs: [] }
   },
 
   sessions: {
     /** Starts a session and returns its token. Only a hash of the token is stored. */
-    create(userId: string): string {
+    async create(userId: string): Promise<string> {
       const token = randomBytes(32).toString('base64url')
       const now = Date.now()
-      sql.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?)').run(hashToken(token), userId, now, now)
+      await sql.run('INSERT INTO sessions VALUES (?, ?, ?, ?)', [hashToken(token), userId, now, now])
       return token
     },
     /** The user id of a live session, or undefined. Expired sessions are removed. */
-    get(token: string): string | undefined {
+    async get(token: string): Promise<string | undefined> {
       if (!token) return undefined
       const h = hashToken(token)
-      const row = sql.prepare('SELECT user_id, created_at, last_used_at FROM sessions WHERE token_hash = ?').get(h) as
-        | { user_id: string; created_at: number; last_used_at: number }
-        | undefined
+      const [row] = await sql.all<{ user_id: string; created_at: number; last_used_at: number }>(
+        'SELECT user_id, created_at, last_used_at FROM sessions WHERE token_hash = ?',
+        [h],
+      )
       if (!row) return undefined
       const now = Date.now()
-      if (now - row.last_used_at > SESSION_IDLE_MS || now - row.created_at > SESSION_MAX_MS) {
-        sql.prepare('DELETE FROM sessions WHERE token_hash = ?').run(h)
+      if (now - Number(row.last_used_at) > SESSION_IDLE_MS || now - Number(row.created_at) > SESSION_MAX_MS) {
+        await sql.run('DELETE FROM sessions WHERE token_hash = ?', [h])
         return undefined
       }
-      if (now - row.last_used_at > SESSION_TOUCH_MS) sql.prepare('UPDATE sessions SET last_used_at = ? WHERE token_hash = ?').run(now, h)
+      if (now - Number(row.last_used_at) > SESSION_TOUCH_MS) await sql.run('UPDATE sessions SET last_used_at = ? WHERE token_hash = ?', [now, h])
       return row.user_id
     },
     delete(token: string) {
-      sql.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
+      write((q) => q.run('DELETE FROM sessions WHERE token_hash = ?', [hashToken(token)]), false)
     },
     /** Logs a user out everywhere, optionally keeping the session making the change. */
     deleteForUser(userId: string, keepToken?: string) {
-      sql.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, keepToken ? hashToken(keepToken) : '')
+      write((q) => q.run('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?', [userId, keepToken ? hashToken(keepToken) : '']), false)
     },
-    purgeExpired() {
+    async purgeExpired() {
       const now = Date.now()
-      sql.prepare('DELETE FROM sessions WHERE last_used_at < ? OR created_at < ?').run(now - SESSION_IDLE_MS, now - SESSION_MAX_MS)
+      await sql.run('DELETE FROM sessions WHERE last_used_at < ? OR created_at < ?', [now - SESSION_IDLE_MS, now - SESSION_MAX_MS])
     },
+  },
+
+  /** Short-lived values by key (login codes), shared by every server process. */
+  temp: {
+    async get<T>(key: string): Promise<T | undefined> {
+      const [row] = await sql.all<{ data: string; expires: number }>('SELECT data, expires FROM login_codes WHERE key = ?', [key])
+      return row && Number(row.expires) > Date.now() ? (JSON.parse(row.data) as T) : undefined
+    },
+    /** Kept until `keepUntil` (ms). */
+    async set(key: string, value: unknown, keepUntil: number) {
+      await sql.run('INSERT INTO login_codes (key, data, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET data = excluded.data, expires = excluded.expires', [
+        key,
+        JSON.stringify(value),
+        keepUntil,
+      ])
+    },
+    async purgeExpired() {
+      await sql.run('DELETE FROM login_codes WHERE expires < ?', [Date.now()])
+    },
+  },
+
+  /**
+   * Claims on shipments, so two server processes never work on the same one at once (one could
+   * otherwise upload a waybill or text a driver the other is already handling).
+   */
+  locks: {
+    /** Claims `id` for `holder` for `ms`, unless another holder has a live claim. True when claimed. */
+    async claim(id: string, holder: string, ms: number): Promise<boolean> {
+      const now = Date.now()
+      const rows = await sql.all(
+        'INSERT INTO locks (id, holder, expires) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET holder = excluded.holder, expires = excluded.expires WHERE locks.expires < ? OR locks.holder = ? RETURNING id',
+        [id, holder, now + ms, now, holder],
+      )
+      return rows.length > 0
+    },
+    async release(id: string, holder: string) {
+      await sql.run('DELETE FROM locks WHERE id = ? AND holder = ?', [id, holder])
+    },
+    /** Shipments another holder has a live claim on. */
+    async heldByOthers(holder: string): Promise<Set<string>> {
+      const rows = await sql.all<{ id: string }>('SELECT id FROM locks WHERE expires >= ? AND holder != ?', [Date.now(), holder])
+      return new Set(rows.map((r) => r.id))
+    },
+    async purgeExpired() {
+      await sql.run('DELETE FROM locks WHERE expires < ?', [Date.now()])
+    },
+  },
+
+  /** Writes what is queued and closes the database (on shutdown). */
+  async close() {
+    await pending
+    await sql.close()
   },
 }
 
-store.sessions.purgeExpired()
-setInterval(() => store.sessions.purgeExpired(), 6 * 3600_000).unref()
+/** Removes expired sessions, login codes and claims. Runs at start, every 6 hours, and from /api/cron. */
+export async function purgeExpired() {
+  await Promise.all([store.sessions.purgeExpired(), store.temp.purgeExpired(), store.locks.purgeExpired()]).catch((e) => console.error('[db] purge failed:', e))
+}
+
+void purgeExpired()
+setInterval(() => void purgeExpired(), 6 * 3600_000).unref()

@@ -1,0 +1,30 @@
+# HC Portal as one container: the API server, which also serves the built web app (dist/).
+#
+# Vercel builds and runs this file on its own (the ".vercel" name tells it to use the container,
+# not the Vite preset). Locally: docker compose up --build (see docker-compose.yml). See DEPLOY.md.
+#
+# Data goes to PostgreSQL (DATABASE_URL); the accounts come from environment variables (.env.example).
+
+FROM node:26-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:26-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+# Vercel sends traffic to port 80 unless PORT is set in the project settings.
+ENV PORT=80
+# Refuse to start without DATABASE_URL: the container's own disk doesn't keep anything.
+ENV HC_REQUIRE_DATABASE_URL=1
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+# The server runs its TypeScript as it is and shares types and rules with the web app (src/).
+COPY server ./server
+COPY src ./src
+COPY scripts ./scripts
+COPY --from=build /app/dist ./dist
+EXPOSE 80
+CMD ["node", "server/index.ts"]

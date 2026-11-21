@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+dist
+release
+android
+Service
+server/data
+.mockdb
+docs
+*.log

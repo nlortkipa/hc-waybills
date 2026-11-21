@@ -8,6 +8,10 @@
  *
  * Also serves the built web app from dist/ when it exists, so one process is
  * enough in production. The Android app talks to it over the network.
+ *
+ * Hosting (Vercel, Docker): the data is in PostgreSQL (DATABASE_URL), several processes may run at
+ * once, and an idle one is stopped. GET /api/cron (with CRON_SECRET) runs the scheduled pass. See
+ * DEPLOY.md.
  */
 import './env.ts'
 import { createReadStream, existsSync, statSync } from 'node:fs'
@@ -15,10 +19,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, checkServices, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
+import { auth, checkServices, scheduledJobs, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
 import { AUTO_CLOSE_MS, LOGIN_CODES_TO_CONSOLE } from './config.ts'
 import { rsCache } from './rscache.ts'
-import { store } from './store.ts'
+import { purgeExpired, store } from './store.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -35,6 +39,18 @@ type Ctx = { req: IncomingMessage; body: any; params: string[]; user: User; toke
 type Handler = (c: Ctx) => unknown
 
 const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolean][] = [
+  // The scheduled pass (Vercel Cron, or any scheduler), allowed with "Authorization: Bearer <CRON_SECRET>".
+  [
+    'GET',
+    /^\/api\/cron$/,
+    async ({ req }) => {
+      const secret = process.env.CRON_SECRET?.trim()
+      if (!secret || req.headers.authorization !== `Bearer ${secret}`) throw new HttpError(404, 'Not found')
+      await scheduledJobs()
+      await purgeExpired()
+    },
+    true,
+  ],
   // Login: an SMS code to a known number, then the number and the code start a session.
   ['POST', /^\/api\/login\/code$/, ({ req, body }) => auth.sendCode(body?.phone, req.headers.origin), true],
   ['POST', /^\/api\/login$/, ({ body }) => auth.login(body?.phone, body?.code), true],
@@ -188,11 +204,16 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     for (const [method, re, handler, isPublic] of routes) {
       const m = re.exec(path)
       if (!m || method !== req.method) continue
+      // Another server process may have changed the data.
+      await store.refresh()
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? ''
-      const user = auth.user(token)
+      const user = isPublic ? null : await auth.user(token)
       if (!user && !isPublic) throw new HttpError(401, 'სესია ამოიწურა — შედი თავიდან')
       const body = await readBody(req)
+      const failures = store.failures()
       const out = await handler({ req, body, params: m.slice(1), user: user!, token })
+      // Answered only once what it changed is stored.
+      await store.flush(failures)
       if (out === NOT_MODIFIED) return send(res, 204)
       return send(res, 200, out ?? { ok: true })
     }
@@ -206,6 +227,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
 // Background pipelines run detached from requests: log a stray rejection instead of exiting.
 process.on('unhandledRejection', (e) => console.error('[api] unhandled rejection:', e))
+
+// Stopped (Vercel stops an idle server, Docker on `docker stop`): store what is queued, then exit.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    server.close()
+    void store
+      .close()
+      .catch((e) => console.error('[db] closing:', e))
+      .finally(() => process.exit(0))
+  })
+}
 
 // Both services must work before anything is served.
 console.log('[api] checking RS.ge and SMS…')

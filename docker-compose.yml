@@ -1,0 +1,35 @@
+# The whole app with its own PostgreSQL, on any machine with Docker:
+#
+#   docker compose up --build        → http://localhost:8080
+#
+# Reads the accounts from .env (copy .env.example). The data stays in the "pgdata" volume.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hc
+      POSTGRES_PASSWORD: hc
+      POSTGRES_DB: hc
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hc']
+      interval: 2s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.vercel
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://hc:hc@db:5432/hc?sslmode=disable
+    ports:
+      - '8080:80'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
