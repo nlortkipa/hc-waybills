@@ -120,5 +120,6 @@ export function waybillDefaults(route?: RouteWaybill): ShipmentWaybill {
 /** A shipment's waybill options; shipments from before they were kept get them from the settings. */
 export const shipmentWaybill = (s: Pick<Shipment, 'waybill'>, route?: CarrierRoute): ShipmentWaybill => s.waybill ?? waybillDefaults(route)
 
-/** Whether a shipment can still be changed: not while uploading, not once completed, cancelled or invoiced. */
-export const editable = (s: Pick<Shipment, 'waybillState' | 'invoiceId' | 'status'>) => !s.waybillState && !s.invoiceId && (s.status === 'rs_failed' || s.status === 'saved' || s.status === 'uploaded')
+/** Whether a shipment can still be changed: not while uploading, not once cancelled or invoiced (a completed waybill is corrected). */
+export const editable = (s: Pick<Shipment, 'waybillState' | 'invoiceId' | 'status'>) =>
+  s.waybillState !== 'cancelled' && !s.invoiceId && (s.status === 'rs_failed' || s.status === 'saved' || s.status === 'uploaded')

@@ -44,6 +44,8 @@ export interface RsAccount {
 const URL = process.env.RS_WAYBILL_URL ?? 'https://services.rs.ge/WayBillService/WayBillService.asmx'
 const NS = 'http://tempuri.org/'
 const TIMEOUT_MS = 30_000
+/** How far ahead of our clock "now" is sent as a transport start: RS.ge refuses one it sees as past. */
+const START_LEAD_MS = 60_000
 const LOG_ENDPOINT = (op: string) => `POST services.rs.ge/WayBillService › ${op}`
 
 export interface RsCreds {
@@ -203,10 +205,12 @@ export type XmlGood = RsWaybillPayload['goods'][number] & { rsId?: number; delet
 export interface SaveOpts {
   /** Transport start written into the waybill (RS.ge dateTime). */
   beginDate: string
-  /** An existing waybill: a draft is overwritten, an active one corrected. */
+  /** An existing waybill: a draft is overwritten, an active or completed one corrected. */
   id?: number
-  /** 0 saved (draft), 1 active (a correction). */
-  status?: 0 | 1
+  /** 0 saved (draft), 1 active, 2 completed (1 and 2: a correction). */
+  status?: 0 | 1 | 2
+  /** DELIVERY_DATE (RS.ge dateTime): kept when a completed waybill is corrected. */
+  deliveryDate?: string
   /** Rows to write instead of p.goods: corrections carry row IDs and deleted rows. */
   goods?: XmlGood[]
 }
@@ -241,8 +245,8 @@ function waybillXml(p: RsWaybillPayload, seller: { unId: number; userId: number 
     el('TRANSPORT_COAST', p.transportCost) +
     el('RECEPTION_INFO', p.receptionInfo) +
     el('RECEIVER_INFO', p.receiverInfo) +
-    el('DELIVERY_DATE', '') +
-    // 0 = saved (send_waybill activates it); 1 = a correction of an active waybill.
+    el('DELIVERY_DATE', o.deliveryDate ?? '') +
+    // 0 = saved (send_waybill activates it); 1 / 2 = a correction of an active / completed waybill.
     el('STATUS', o.status ?? 0) +
     el('SELER_UN_ID', seller.unId) +
     el('PAR_ID', '') +
@@ -435,15 +439,20 @@ const live = {
    * Activates a saved waybill and returns its number. send_waybil_vd (sic, one "l") sets the
    * transport start to now; plain send_waybill would keep the time of save_waybill, which is wrong
    * when activation is retried later. An already active waybill answers -1 (see activate in logic.ts).
+   *
+   * RS.ge refuses a begin_date already past by its own clock with an empty answer (no code), and its
+   * clock runs a few seconds ahead of ours: "now" is sent as a minute ahead (START_LEAD_MS).
    */
   async sendWaybill(c: RsCreds, waybillId: number, shipmentId: string | undefined, begin?: Date): Promise<string> {
     const send = async (op: 'send_waybil_vd' | 'send_waybill', extra: Param[]) =>
       tag(await soap(op, [...creds(c), ...extra, ['waybill_id', waybillId]], shipmentId, (x) => /^[^-]/.test(tag(x, `${op}Result`))), `${op}Result`)
-    // A planned start still ahead is kept; one already passed (a late activation) becomes now.
-    const start = begin && begin.getTime() > Date.now() ? begin : new Date()
-    let number = await send('send_waybil_vd', [['begin_date', rsDate(start)]])
-    // -1034: start before the waybill's creation time (our clock behind RS.ge's) → let RS.ge pick it.
-    if (number === '-1034' && start.getTime() - Date.now() < 60_000) number = await send('send_waybill', [])
+    // A planned start still ahead is kept; none, or one already passed (a late activation), becomes now.
+    const earliest = Date.now() + START_LEAD_MS
+    const planned = !!begin && begin.getTime() > earliest
+    let number = await send('send_waybil_vd', [['begin_date', rsDate(planned ? begin : new Date(earliest))]])
+    // Still refused for the start (-1034: before the waybill's creation; empty: already past) while
+    // starting now → plain send_waybill, which keeps the start written by save_waybill.
+    if (!planned && (number === '-1034' || !number)) number = await send('send_waybill', [])
     if (!number || /^-\d+$/.test(number)) throw rsError(await describe(Number(number) || -1, c))
     return number
   },

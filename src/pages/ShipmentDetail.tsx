@@ -185,7 +185,7 @@ export function ShipmentDetail() {
           )}
           {canAct && editable(s) && (
             <Button variant="secondary" size="sm" icon={<PencilLine className="size-3.5" />} onClick={() => nav(`/shipments/${s.id}/edit`)}>
-              {isActive ? 'კორექტირება' : 'რედაქტირება'}
+              {s.status === 'uploaded' ? 'კორექტირება' : 'რედაქტირება'}
             </Button>
           )}
           {canInvoice && (

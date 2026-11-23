@@ -857,6 +857,11 @@ export interface NewShipmentInput {
   routeId: string
   driverId: string
   truckId: string
+  /**
+   * The quantity (estimated weight) of each goods line, in the order of the lines; missing = the
+   * route's (or, on the same route, the waybill's) as they are.
+   */
+  quantities?: number[]
 }
 
 /**
@@ -874,7 +879,7 @@ async function parseShipment(body: Partial<NewShipmentInput>, user: User, prev?:
   if (!same && !route.goods?.length) fail('ამ მარშრუტზე პროდუქტები ჯერ არ არის მითითებული — მიმართე ადმინისტრატორს')
   // Always შიდა გადაზიდვა.
   const kept = same && prev!.waybill ? { ...prev!.waybill, type: 1 as const, buyerTin: '', buyerName: '', buyerForeign: false } : undefined
-  const content = routeContent(route, prev, kept && { items: prev!.items, waybill: kept })
+  const content = withQuantities(routeContent(route, prev, kept && { items: prev!.items, waybill: kept }), body.quantities)
   // A driver or truck kept from before may have been deleted since; a new pick must be live.
   const usable = <T extends { id: string; deletedAt?: string }>(xs: T[], id: string, was?: string) => xs.some((x) => x.id === id && (!x.deletedAt || id === was))
   if (!usable(d.drivers, input.driverId, prev?.driverId)) fail('აირჩიე მძღოლი')
@@ -894,6 +899,24 @@ function routeContent(route: CarrierRoute, prev: Pick<Shipment, 'waybill'> | und
   const beginAt = prev?.waybill?.beginAt && Date.parse(prev.waybill.beginAt) > Date.now() ? prev.waybill.beginAt : undefined
   const waybill: ShipmentWaybill = { ...rest, ...(beginAt && { beginAt }) }
   return { items, quantity, waybill }
+}
+
+/**
+ * The goods lines with the quantities typed for this shipment. A line whose quantity changes loses a
+ * line total typed in by hand (it is quantity × price again, as on the route form and RS.ge's).
+ */
+function withQuantities<T extends { items: ShipmentItem[]; quantity: number }>(content: T, raw: unknown): T {
+  if (raw == null) return content
+  const typed: unknown[] = Array.isArray(raw) ? raw : []
+  if (typed.length !== content.items.length) fail('რაოდენობები არ ემთხვევა მარშრუტის პროდუქტებს — განაახლე გვერდი')
+  const items = content.items.map((g, k) => {
+    const q = Math.round(num(typed[k], NaN) * 1000) / 1000
+    if (!(q > 0)) fail(`${g.name}: რაოდენობა უნდა იყოს 0-ზე მეტი`)
+    if (q === g.quantity) return g
+    const { amount: _a, ...rest } = g
+    return { ...rest, quantity: q }
+  })
+  return { ...content, items, quantity: Math.round(items.reduce((a, i) => a + i.quantity, 0) * 1000) / 1000 }
 }
 
 /** The shipment's items with what was sent to RS.ge (a product may have been renamed since the shipment was made). */
@@ -1033,16 +1056,17 @@ export const shipments = {
 
   /**
    * Changes a shipment. Before anything reached RS.ge only the record changes (retry sends it). A
-   * draft on RS.ge is overwritten; an active waybill is corrected (კორექტირება), as on the portal: its
-   * type and start stay, the rest follows the new route (and its goods and options), driver and truck. The driver
-   * is texted again when the driver or truck changed.
+   * draft on RS.ge is overwritten; an active or completed waybill is corrected (კორექტირება), as on the
+   * portal: its type, start (and a completed one's delivery date) stay, the rest follows the new route
+   * (and its goods and options), driver, truck and quantities. The driver of an active waybill is texted
+   * again when the driver or truck changed. A cancelled or invoiced waybill can't be changed.
    */
   async edit(id: string, body: Partial<NewShipmentInput>, user: User) {
     // RS.ge's copy decides what may change: read it when none is held.
     const s = await current(id, user)
     noReport(user)
     if (running.has(id)) fail(BUSY)
-    if (s.waybillState) fail(s.waybillState === 'closed' ? 'დასრულებულ ზედნადებს ვერ შეცვლი' : 'გაუქმებულ ზედნადებს ვერ შეცვლი')
+    if (s.waybillState === 'cancelled') fail('გაუქმებულ ზედნადებს ვერ შეცვლი')
     if (s.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს ვერ შეცვლი')
     if (s.status === 'uploading') fail('რეისი ახლა იტვირთება — სცადე ცოტა ხანში')
     if (s.status === 'rs_failed' && !s.rsWaybillId && s.rsSaveAttemptedAt)
@@ -1067,28 +1091,43 @@ export const shipments = {
     if (!storedCreds()) fail('RS.ge არ არის დაკავშირებული')
     if (!(await claim(id))) fail(BUSY)
     let remote: RsRemoteWaybill | null = null
+    // Completed on RS.ge (read now): corrected as completed, without texting the driver.
+    let closed = false
     try {
       const now = await rsCache.read(s.rsWaybillId!, id).catch((e: Error) => fail(e.message, 502))
-      if (active && now.status !== 1) fail(`RS.ge-ზე ზედნადები ${RS_STATUS_TEXT[now.status] ?? now.status}-ა — შეცვლა შეუძლებელია`)
+      if (active && now.status !== 1 && now.status !== 2) fail(`RS.ge-ზე ზედნადები ${RS_STATUS_TEXT[now.status] ?? now.status}-ა — შეცვლა შეუძლებელია`)
       if (now.invoiceId) fail('ანგარიშ-ფაქტურაზე მიბმულ ზედნადებს ვერ შეცვლი')
       if (!active && now.status !== 0) fail('RS.ge-ზე ზედნადები უკვე აღარ არის შენახულ მდგომარეობაში — განაახლე გვერდი')
+      closed = now.status === 2
       const begin = active ? (now.beginAt ? new Date(now.beginAt) : new Date()) : (plannedBegin(next) ?? new Date())
+      // A completed waybill keeps the delivery date it was completed with.
+      const delivered = closed ? (now.deliveredAt ?? now.closedAt) : undefined
       await rsge
-        .saveWaybill(payload, id, { id: s.rsWaybillId!, status: active ? 1 : 0, beginDate: rsDate(begin), goods: rowsFor(payload.goods, now) })
+        .saveWaybill(payload, id, {
+          id: s.rsWaybillId!,
+          status: closed ? 2 : active ? 1 : 0,
+          beginDate: rsDate(begin),
+          ...(delivered && { deliveryDate: rsDate(new Date(delivered)) }),
+          goods: rowsFor(payload.goods, now),
+        })
         .catch((e: Error) => fail(e.message, 502))
       remote = await rsCache.read(s.rsWaybillId!, id).catch(() => null)
     } finally {
       release(id)
     }
     if (!remote) rsCache.stale(s.rsWaybillId!)
-    const message = active ? `ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე` : 'RS.ge-ზე შენახული ზედნადები განახლდა'
+    const message = closed
+      ? `დასრულებული ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე`
+      : active
+        ? `ზედნადები №${s.waybillNumber} დაკორექტირდა RS.ge-ზე`
+        : 'RS.ge-ზე შენახული ზედნადები განახლდა'
     // RS.ge has the waybill: what was typed isn't kept (store.ts drops it), RS.ge's copy is shown.
     patch(id, (y) => ({ ...x, rsWaybill: payload, items: sentItems({ ...y, ...x }, payload) }), {
       level: 'success',
       message: `${message}${changes.length ? ` — ${changes.join('; ')}` : ''}`,
     })
-    // The new driver (or the same one, with another truck) gets the waybill by SMS.
-    if (active && x.driverId && (x.driverId !== s.driverId || x.truckId !== s.truckId)) {
+    // The new driver (or the same one, with another truck) of an active waybill gets it by SMS.
+    if (active && !closed && x.driverId && (x.driverId !== s.driverId || x.truckId !== s.truckId)) {
       patch(id, () => ({ sms: { status: 'pending' } }))
       void shipments.run(id)
     }

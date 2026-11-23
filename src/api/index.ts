@@ -175,6 +175,8 @@ export interface NewShipmentInput {
   routeId: string
   driverId: string
   truckId: string
+  /** Quantity (estimated weight) of each goods line, in their order; missing = as the route has them. */
+  quantities?: number[]
 }
 
 export const shipments = {

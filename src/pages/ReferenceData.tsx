@@ -1,4 +1,4 @@
-import { AlertTriangle, Building2, Check, CircleCheck, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, CircleCheck, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
@@ -10,7 +10,7 @@ import { goodsText, routeAddresses, routeLabel } from '../lib/route'
 import { RS_UNIT_OTHER, RS_VAT_TYPES, rsUnits, tonneUnit } from '../lib/rs'
 import type { CarrierRoute, Database } from '../types'
 import { blankGood, checkGoods, fromDrafts, RouteGoodsEditor, toDraft, type GoodDraft } from '../components/RouteGoods'
-import { OptionRow } from '../components/pickers'
+import { MultiSelect, OptionRow } from '../components/pickers'
 
 type Rec = Record<string, string | undefined> & { id: string }
 
@@ -743,16 +743,24 @@ function EditModal({ tab, rec, onClose }: { tab: TabDef; rec: Rec; onClose: () =
         {lastFields.map((f) => renderField(f, lastFields))}
 
         {pickCarriers && (
-          <Chips
-            label="კარიერები"
-            items={liveCarriers.map((c) => ({ id: c.id, label: c.name }))}
-            value={carrierIds}
-            onChange={(v) => {
-              setCarrierIds(v)
-              setErrors((x) => ({ ...x, carrierIds: '' }))
-            }}
-            error={errors.carrierIds}
-          />
+          <div className="sm:col-span-2">
+            {/* Not a <label> (Field): a click on the field would go to the first tag's ✕ and remove that carrier. */}
+            <span className="mb-1 ml-1 block text-[12px] font-medium text-slate-600">კარიერები</span>
+            <MultiSelect
+              aria-label="კარიერები"
+              placeholder="აირჩიე ან მოძებნე კარიერი"
+              icon={<Building2 />}
+              sheetTitle="კარიერები"
+              options={liveCarriers.map((c) => ({ value: c.id, label: c.name, sub: c.startAddress || undefined }))}
+              value={carrierIds}
+              invalid={!!errors.carrierIds}
+              onChange={(v) => {
+                setCarrierIds(v)
+                setErrors((x) => ({ ...x, carrierIds: '' }))
+              }}
+            />
+            {errors.carrierIds && <span className="mt-1 ml-1 block text-xs text-rose-600">{errors.carrierIds}</span>}
+          </div>
         )}
 
         <button type="submit" className="hidden" />
@@ -824,37 +832,5 @@ function RsNameLine({ lookup, current, onUse }: { lookup: NameLookup; current: s
         </button>
       )}
     </p>
-  )
-}
-
-/** Toggle buttons for picking several records (an operator's carriers). */
-function Chips({ label, items, value, onChange, error }: { label: string; items: { id: string; label: string }[]; value: string[]; onChange: (v: string[]) => void; error?: string }) {
-  return (
-    <div className="sm:col-span-2">
-      <p className="mb-1.5 ml-1 text-[13px] text-slate-500">{label}</p>
-      {items.length > 0 && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
-          {items.map((x) => {
-            const on = value.includes(x.id)
-            return (
-              <button
-                key={x.id}
-                type="button"
-                aria-pressed={on}
-                onClick={() => onChange(on ? value.filter((v) => v !== x.id) : [...value, x.id])}
-                className={cx(
-                  'pressable flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm ring-1 transition-colors',
-                  on ? 'bg-brand-600 font-medium text-white ring-brand-600' : 'bg-surface text-slate-700 ring-slate-200 hover:bg-fill',
-                )}
-              >
-                {on && <Check className="size-4" />}
-                {x.label}
-              </button>
-            )
-          })}
-        </div>
-      )}
-      {error && <p className="mt-1 ml-1 text-xs text-rose-600">{error}</p>}
-    </div>
   )
 }

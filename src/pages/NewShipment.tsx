@@ -2,19 +2,26 @@ import { ArrowLeft, CheckCircle2, FileCheck2, Info, Loader2, PencilLine } from '
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { rsPending, shipments, usableCarriers, useRsLoad, type NewShipmentInput } from '../api'
-import { Button, Card, EmptyState, Field, InfoRow, PageHeader, Select } from '../components/ui'
+import { Button, Card, EmptyState, Field, InfoRow, Input, PageHeader, Select } from '../components/ui'
 import { fmtPhone, formatDateTime, formatNumber, formatMoney } from '../lib/util'
 import { canUseCarrier, goodsText, routeAddresses, routeLabel, routeUsable } from '../lib/route'
 import { editable, itemAmount, rsMissing } from '../lib/rs'
 import { useToast } from '../components/toast'
 import { useDb } from '../api/store'
 import { useUser } from '../session'
-import type { CarrierRoute, Database, Shipment } from '../types'
+import type { CarrierRoute, Database, Shipment, ShipmentItem } from '../types'
 
 /** Where the form starts: empty, a copy of another shipment (`?from=`), or the shipment being edited. */
 type Seed = { routeId: string; driverId: string; truckId: string }
 
 const seedFrom = (s: Shipment): Seed => ({ routeId: s.routeId, driverId: s.driverId, truckId: s.truckId })
+
+/** A typed quantity: '' or not a number = null. A comma works as the decimal point. */
+const numOf = (v: string) => (v.trim() && Number.isFinite(Number(v.trim().replace(',', '.'))) ? Number(v.trim().replace(',', '.')) : null)
+
+/** The quantities the form starts with: the goods lines' own, or those of `prev` (the shipment edited) where its line is the same product. */
+const startQuantities = (goods: ShipmentItem[], prev?: ShipmentItem[]) =>
+  goods.map((g, k) => String(prev?.[k] && prev[k].barCode === g.barCode ? prev[k].quantity : g.quantity))
 
 /** Waiting for RS.ge's copy of a waybill: its goods are read from RS.ge, not stored here. */
 function ReadingFromRs({ s }: { s: Shipment }) {
@@ -46,7 +53,7 @@ export function EditShipment() {
       <EmptyState
         icon={<PencilLine className="size-6" />}
         title="ამ ზედნადების შეცვლა აღარ შეიძლება"
-        text={s.invoiceId ? 'ზედნადებზე ანგარიშ-ფაქტურაა გამოწერილი.' : s.waybillState ? 'ზედნადები დასრულებული ან გაუქმებულია.' : 'რეისი ახლა მუშავდება.'}
+        text={s.invoiceId ? 'ზედნადებზე ანგარიშ-ფაქტურაა გამოწერილი.' : s.waybillState ? 'ზედნადები გაუქმებულია.' : 'რეისი ახლა მუშავდება.'}
         action={<Link to={`/shipments/${s.id}`} className="text-sm font-medium text-brand-600">რეისზე დაბრუნება</Link>}
       />
     )
@@ -67,8 +74,9 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   const [form, setForm] = useState<Seed>(seed ?? { routeId: '', driverId: '', truckId: '' })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
-  // Active on RS.ge: a correction.
+  // Active or completed on RS.ge: a correction.
   const correcting = editing?.status === 'uploaded'
+  const closed = editing?.waybillState === 'closed'
 
   // Every route of the user's carriers (the one being edited stays even if it can't be picked anew).
   const routes = d.routes.filter((x) => carriers.some((c) => c.id === x.carrierId) && (routeUsable(d.carriers, x) || x.id === editing?.routeId))
@@ -82,7 +90,23 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
 
   // A waybill on RS.ge keeps its goods and transport details while the route stays the same; otherwise they are the route's.
   const kept = !!editing?.rsWaybillId && route?.id === editing.routeId && editing.items.length > 0
-  const goods = kept ? editing!.items : (route?.goods ?? [])
+  const baseGoods = kept ? editing!.items : (route?.goods ?? [])
+  // Quantities as typed, per goods line; they start from the shipment edited while
+  // its route is picked, else from the route, and start over when another route is picked.
+  const [typed, setTyped] = useState<{ routeId?: string; values: string[] }>({ values: [] })
+  const qty = typed.routeId === route?.id ? typed.values : startQuantities(baseGoods, route && editing?.routeId === route.id ? editing.items : undefined)
+  const setQty = (k: number) => (e: { target: { value: string } }) => {
+    const v = e.target.value
+    setTyped({ routeId: route?.id, values: qty.map((x, i) => (i === k ? v : x)) })
+    setErrors((x) => ({ ...x, [`q${k}`]: '' }))
+  }
+  // The goods as the waybill will have them: a line with a new quantity is quantity × price again.
+  const goods = baseGoods.map((g, k) => {
+    const q = numOf(qty[k] ?? '')
+    if (q == null || q <= 0 || q === g.quantity) return g
+    const { amount: _a, ...rest } = g
+    return { ...rest, quantity: Math.round(q * 1000) / 1000 }
+  })
   const driver = d.drivers.find((r) => r.id === form.driverId)
   const truck = d.trucks.find((r) => r.id === form.truckId)
   const total = goods.reduce((a, g) => a + g.quantity, 0)
@@ -97,9 +121,13 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
     if (!route) err.routeId = 'აირჩიე მარშრუტი'
     if (!form.driverId) err.driverId = 'აირჩიე მძღოლი'
     if (!form.truckId) err.truckId = 'აირჩიე მანქანა'
+    baseGoods.forEach((_, k) => {
+      const q = numOf(qty[k] ?? '')
+      if (q == null || !(q > 0)) err[`q${k}`] = 'შეიყვანე 0-ზე მეტი'
+    })
     setErrors(err)
     if (Object.keys(err).length || !route) return
-    const input: NewShipmentInput = { routeId: route.id, driverId: form.driverId, truckId: form.truckId }
+    const input: NewShipmentInput = { routeId: route.id, driverId: form.driverId, truckId: form.truckId, quantities: goods.map((g) => g.quantity) }
     setBusy(true)
     try {
       if (editing) {
@@ -120,7 +148,7 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
   const title = editing ? (correcting ? 'ზედნადების კორექტირება' : 'რეისის რედაქტირება') : 'ახალი რეისი'
   const subtitle = editing
     ? correcting
-      ? `№${editing.waybillNumber} — ცვლილება RS.ge-ზე კორექტირებად აისახება.`
+      ? `№${editing.waybillNumber}${closed ? ' (დასრულებული)' : ''} — ცვლილება RS.ge-ზე კორექტირებად აისახება.`
       : editing.status === 'saved'
         ? 'ზედნადები RS.ge-ზე შენახულია და ჯერ არ არის გააქტიურებული.'
         : 'ცვლილების შემდეგ დააჭირე „ხელახლა ცდას“.'
@@ -220,6 +248,33 @@ function ShipmentForm({ seed, editing, copiedFrom }: { seed?: Seed; editing?: Sh
                 </Select>
               </Field>
             </div>
+
+            {/* Each goods line's quantity (in its own unit: ტონა, შეკვრა, ცალი…), prefilled from the route and changeable per shipment. */}
+            {baseGoods.length > 0 && (
+              <div className="space-y-3 border-t border-separator pt-5">
+                <h2 className="text-sm font-semibold text-slate-900">რაოდენობა</h2>
+                <div className="grid grid-cols-1 gap-5 @md:grid-cols-2">
+                  {baseGoods.map((g, k) => {
+                    return (
+                      <Field key={k} label={g.name} error={errors[`q${k}`]}>
+                        {/* The unit sits beside the box, not inside it: unit names (შეკვრა, კილოგრამი…) are too long for an inline suffix. */}
+                        <div className="flex items-center gap-2.5">
+                          <Input
+                            className="min-w-0 flex-1"
+                            inputMode="decimal"
+                            value={qty[k] ?? ''}
+                            onChange={setQty(k)}
+                            invalid={!!errors[`q${k}`]}
+                            aria-label={`${g.name} — რაოდენობა${g.unitTxt ? ` (${g.unitTxt})` : ''}`}
+                          />
+                          {g.unitTxt && <span className="max-w-[40%] shrink-0 truncate text-sm text-slate-500">{g.unitTxt}</span>}
+                        </div>
+                      </Field>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </Card>
 
           {rsNotReady && <div className="rounded-[10px] bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">RS.ge არ არის დაკავშირებული — მიმართე ადმინისტრატორს.</div>}

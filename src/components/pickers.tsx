@@ -31,8 +31,19 @@ import { bareCls, inputCls, invalidCls } from './fieldStyles'
 /**
  * `content`: re-placed when it changes (e.g. a search filtering the list), so the panel stays against the anchor.
  * `fixedWidth`: the panel is exactly this wide (or the anchor's width when wider) instead of as wide as its content.
+ * `cap`: the panel is never taller than this; it is placed by that height, so it stays against the anchor.
+ * `roomBelow`: opens below whenever at least this much room is there (the panel shrinks to fit), as search results do.
  */
-function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null>, panel: RefObject<HTMLElement | null>, matchWidth: boolean, content?: unknown, fixedWidth?: number) {
+function useAnchoredPosition(
+  open: boolean,
+  anchor: RefObject<HTMLElement | null>,
+  panel: RefObject<HTMLElement | null>,
+  matchWidth: boolean,
+  content?: unknown,
+  fixedWidth?: number,
+  cap = Infinity,
+  roomBelow = Infinity,
+) {
   const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0, visibility: 'hidden' })
 
   useLayoutEffect(() => {
@@ -43,11 +54,11 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       if (!a || !p) return
       const m = 8
       const gap = 6
-      const ph = p.scrollHeight
+      const ph = Math.min(p.scrollHeight, cap)
       const below = window.innerHeight - a.bottom - m - gap
       const above = a.top - m - gap
-      const up = ph > below && above > below
-      const maxHeight = Math.max(120, up ? above : below)
+      const up = ph > below && above > below && below < roomBelow
+      const maxHeight = Math.min(cap, Math.max(120, up ? above : below))
       const h = Math.min(ph, maxHeight)
       const maxWidth = window.innerWidth - 2 * m
       const w = Math.min(fixedWidth ? Math.max(matchWidth ? a.width : 0, fixedWidth) : Math.max(matchWidth ? a.width : 0, p.offsetWidth), maxWidth)
@@ -70,7 +81,7 @@ function useAnchoredPosition(open: boolean, anchor: RefObject<HTMLElement | null
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, anchor, panel, matchWidth, content, fixedWidth])
+  }, [open, anchor, panel, matchWidth, content, fixedWidth, cap, roomBelow])
 
   return style
 }
@@ -475,6 +486,321 @@ export function OptionRow({ icon, title, sub }: { icon?: ReactNode; title: React
         )}
       </span>
     </span>
+  )
+}
+
+/* ------------------------------ MultiSelect ----------------------------- */
+
+export type MultiOpt = { value: string; label: string; sub?: string }
+
+/**
+ * Picks several records out of a long list, like a token field: the chosen ones sit in the field as tokens (✕ removes
+ * one), and typing in the field filters a menu of rich rows that toggle without closing it, so several can be ticked in
+ * a row. A row's icon tile turns into a filled checkmark while it is chosen. On a phone the menu is a bottom sheet.
+ * Keyboard: ↑/↓ move, Enter toggles, Backspace on an empty search removes the last token, Escape closes.
+ * Not for use inside a <label>: a click on the field would be forwarded to the first token's ✕.
+ */
+export function MultiSelect({
+  value,
+  onChange,
+  options,
+  placeholder = 'აირჩიე',
+  icon,
+  sheetTitle,
+  invalid,
+  disabled,
+  id,
+  'aria-label': ariaLabel,
+}: {
+  value: string[]
+  onChange: (v: string[]) => void
+  options: MultiOpt[]
+  placeholder?: string
+  /** Shown in each row's tile while it isn't chosen. */
+  icon?: ReactNode
+  /** Title of the bottom sheet on a phone; the aria-label when missing. */
+  sheetTitle?: string
+  invalid?: boolean
+  disabled?: boolean
+  id?: string
+  'aria-label'?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(-1)
+  const box = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLInputElement>(null)
+  const listId = useId()
+  const narrow = useNarrow()
+
+  const q = query.trim().toLowerCase()
+  const opts = q ? options.filter((o) => `${o.label} ${o.sub ?? ''}`.toLowerCase().includes(q)) : options
+  const chosen = value.map((v) => options.find((o) => o.value === v)).filter((o): o is MultiOpt => !!o)
+  // As wide as the field (at least 320px), at most 340px tall, below the field unless it's cramped there, and re-placed
+  // as the field grows a row or the search narrows the list.
+  const style = useAnchoredPosition(open && !narrow, box, panel, true, `${query}|${value.length}`, 320, 340, 240)
+
+  const close = () => {
+    setOpen(false)
+    setQuery('')
+    setActive(-1)
+  }
+  useDismiss(open && !narrow, [box, panel], close)
+
+  useEffect(() => {
+    if (!open || !narrow) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [open, narrow])
+
+  const show = () => {
+    if (disabled || open) return
+    setOpen(true)
+    setActive(-1)
+  }
+
+  const toggle = (v: string) => {
+    onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v])
+    // In the field, a search typed to find one record is done once it's picked: the full list comes back.
+    if (query && !narrow) {
+      setQuery('')
+      setActive(-1)
+    }
+    if (!narrow) input.current?.focus()
+  }
+
+  useEffect(() => {
+    if (open && active >= 0) panel.current?.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [open, active])
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    const key = e.key
+    const handled = () => {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    if (key === 'Backspace' && !query && value.length) return onChange(value.slice(0, -1))
+    if (!open) {
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter') {
+        handled()
+        show()
+      }
+      return
+    }
+    if (key === 'Escape') return handled(), close()
+    if (key === 'Tab') return close()
+    if (key === 'ArrowDown') return handled(), setActive((i) => Math.min(i + 1, opts.length - 1))
+    if (key === 'ArrowUp') return handled(), setActive((i) => (i <= 0 ? opts.length - 1 : i - 1))
+    if (key === 'Enter') {
+      handled()
+      if (active >= 0 && opts[active]) toggle(opts[active].value)
+    }
+  }
+
+  /** The tile at a row's leading edge: the record's icon, or a filled checkmark while it is chosen. */
+  const tile = (on: boolean) => (
+    <span
+      className={cx(
+        'grid size-9 shrink-0 place-items-center rounded-[8px] transition-colors sm:size-8 sm:rounded-[7px] [&>svg]:size-[17px] sm:[&>svg]:size-4',
+        on ? 'bg-brand-500 text-white group-data-hi:bg-white group-data-hi:text-brand-600' : 'bg-brand-500/12 text-brand-600 group-data-hi:bg-white/20 group-data-hi:text-white',
+      )}
+    >
+      {on ? <Check strokeWidth={3} /> : icon}
+    </span>
+  )
+  const text = (o: MultiOpt) => (
+    <span className="min-w-0 flex-1">
+      <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]">{o.label}</span>
+      {o.sub && <span className="block truncate text-[13px] text-slate-500 group-data-hi:text-white/80 sm:text-[11.5px]">{o.sub}</span>}
+    </span>
+  )
+  const empty = <p className="px-3 py-6 text-center text-[15px] text-slate-400 sm:py-3 sm:text-[13px]">{q ? 'ვერაფერი მოიძებნა' : 'ვარიანტები არ არის'}</p>
+
+  return (
+    <>
+      <div
+        ref={box}
+        onMouseDown={(e) => {
+          if (disabled) return
+          // Clicks on the field (not on a token's ✕) go to the search box and open or close the menu.
+          if ((e.target as HTMLElement).closest('button')) return
+          if (e.target !== input.current) e.preventDefault()
+          if (!narrow) input.current?.focus()
+          if (open && e.target !== input.current) close()
+          else show()
+        }}
+        className={cx(
+          inputCls,
+          'flex h-auto min-h-11 cursor-text items-start gap-1 py-[6px] pr-[9px] pl-[6px] focus-within:ring-2 focus-within:ring-brand-500/50 sm:h-auto sm:min-h-9 sm:py-1 sm:pl-1',
+          open && 'ring-2 ring-brand-500/50!',
+          invalid && invalidCls,
+          disabled && 'pointer-events-none opacity-50',
+        )}
+      >
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+          {chosen.map((o) => (
+            <span
+              key={o.value}
+              className="animate-menu-in flex h-8 max-w-full items-center gap-0.5 rounded-[6px] bg-brand-500/15 pr-0.5 pl-2.5 text-[15px] text-slate-900 sm:h-7 sm:rounded-[5px] sm:pl-2 sm:text-[13px]"
+            >
+              <span className="min-w-0 truncate">{o.label}</span>
+              <button
+                type="button"
+                tabIndex={-1}
+                disabled={disabled}
+                onClick={() => onChange(value.filter((x) => x !== o.value))}
+                className="grid size-7 shrink-0 place-items-center rounded-[5px] text-slate-500 transition-colors hover:bg-brand-500/20 hover:text-slate-900 sm:size-6 sm:rounded-[4px]"
+                aria-label={`${o.label} — მოხსნა`}
+              >
+                <X className="size-3.5 sm:size-3" strokeWidth={2.5} />
+              </button>
+            </span>
+          ))}
+          <input
+            ref={input}
+            id={id}
+            role="combobox"
+            aria-label={ariaLabel}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
+            aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
+            aria-autocomplete="list"
+            autoComplete="off"
+            // On a phone the sheet has its own search field: this one only opens it, without raising the keyboard.
+            readOnly={narrow}
+            disabled={disabled}
+            value={narrow ? '' : query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActive(e.target.value.trim() ? 0 : -1)
+              show()
+            }}
+            onKeyDown={onKeyDown}
+            placeholder={chosen.length ? (narrow ? '' : 'ძებნა…') : placeholder}
+            className="h-8 min-w-[8rem] flex-1 bg-transparent px-1.5 text-[16px] text-slate-900 outline-none placeholder:text-slate-400 sm:h-7 sm:text-[14px]"
+          />
+        </div>
+        <span className="grid h-8 shrink-0 place-items-center sm:h-7">
+          <ChevronsUpDown className="size-4 text-slate-500" strokeWidth={2} />
+        </span>
+      </div>
+
+      {open &&
+        !narrow &&
+        createPortal(
+          <div
+            ref={panel}
+            id={listId}
+            role="listbox"
+            aria-multiselectable="true"
+            style={style}
+            className={cx(panelBase, 'flex flex-col overflow-hidden')}
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseLeave={() => setActive(-1)}
+          >
+            {value.length > 0 && (
+              <div className="mx-[5px] flex shrink-0 items-center justify-between border-b border-separator py-1.5 pr-1.5 pl-2 text-[12px] text-slate-500">
+                <span>არჩეულია {value.length}</span>
+                <button type="button" onClick={() => onChange([])} className="rounded-[4px] px-1 font-medium text-brand-600 hover:bg-brand-500/10">
+                  ყველას მოხსნა
+                </button>
+              </div>
+            )}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-[5px]">
+              {opts.length === 0 && empty}
+              {opts.map((o, i) => {
+                const on = value.includes(o.value)
+                const hi = i === active
+                return (
+                  <div
+                    key={o.value}
+                    id={`${listId}-${i}`}
+                    data-i={i}
+                    data-hi={hi || undefined}
+                    role="option"
+                    aria-selected={on}
+                    onMouseMove={() => active !== i && setActive(i)}
+                    onClick={() => toggle(o.value)}
+                    className={cx(
+                      'group flex min-h-12 cursor-default items-center gap-2.5 rounded-[7px] py-1.5 pr-2.5 pl-1.5 text-[15px] leading-snug select-none sm:min-h-11 sm:text-[13px]',
+                      hi ? 'bg-brand-500 text-white' : 'text-slate-900',
+                    )}
+                  >
+                    {tile(on)}
+                    {text(o)}
+                  </div>
+                )
+              })}
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {open &&
+        narrow &&
+        createPortal(
+          <div ref={panel} className="fixed inset-0 z-[70]">
+            <div className="animate-fade-in absolute inset-0 bg-black/40" onClick={close} />
+            <div className="animate-sheet-up absolute inset-x-0 bottom-0 flex max-h-[88dvh] flex-col rounded-t-[14px] bg-canvas pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_30px_rgba(0,0,0,0.18)]">
+              <div className="mx-auto mt-1.5 h-[5px] w-9 shrink-0 rounded-full bg-slate-400/50" />
+              <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-2.5 pb-3">
+                <h2 className="min-w-0 truncate text-[17px] font-semibold text-slate-900">
+                  {sheetTitle ?? ariaLabel}
+                  {value.length > 0 && <span className="ml-1.5 font-normal text-slate-500">{value.length}</span>}
+                </h2>
+                <button type="button" onClick={close} className="pressable shrink-0 text-[17px] font-semibold text-brand-600">
+                  მზადაა
+                </button>
+              </div>
+              {options.length > 1 && (
+                <label className="relative mx-4 mb-3 block shrink-0">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-slate-400" strokeWidth={2.25} />
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="ძებნა"
+                    aria-label="ძებნა"
+                    className="h-9 w-full rounded-[10px] bg-fill pr-3 pl-8 text-[16px] text-slate-900 outline-none placeholder:text-slate-400"
+                  />
+                </label>
+              )}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
+                {opts.length === 0 ? (
+                  empty
+                ) : (
+                  <div id={listId} role="listbox" aria-multiselectable="true" aria-label={sheetTitle ?? ariaLabel} className="overflow-hidden rounded-xl bg-surface">
+                    {opts.map((o, i) => {
+                      const on = value.includes(o.value)
+                      return (
+                        <div
+                          key={o.value}
+                          role="option"
+                          aria-selected={on}
+                          onClick={() => toggle(o.value)}
+                          className={cx(
+                            'group relative flex cursor-default items-center gap-3 py-2.5 pr-3.5 pl-3 text-[16px] leading-snug text-slate-900 transition-colors select-none active:bg-fill',
+                            i > 0 && 'before:absolute before:top-0 before:right-0 before:left-[60px] before:h-px before:origin-top before:scale-y-50 before:bg-separator',
+                          )}
+                        >
+                          {tile(on)}
+                          {text(o)}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   )
 }
 
