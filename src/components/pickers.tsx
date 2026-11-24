@@ -968,10 +968,12 @@ export function DatePicker({ value, onChange, min, max, invalid, disabled, class
                     aria-selected={sel}
                     disabled={!ok}
                     onClick={() => pick(d.key)}
-                    onMouseEnter={() => setCursor(d.key)}
+                    // Hovering a spill-over day from the next/previous month must not flip the shown month.
+                    onMouseEnter={() => d.inMonth && setCursor(d.key)}
                     className={cx(
                       'grid size-9 cursor-default place-items-center rounded-full text-[15px] tabular-nums transition-colors duration-100 sm:size-[30px] sm:text-[13px]',
                       !ok && 'opacity-30',
+                      !d.inMonth && ok && !sel && 'hover:bg-fill',
                       sel ? 'bg-brand-500 font-semibold text-white' : d.key === today ? 'font-semibold text-brand-600' : d.inMonth ? 'text-slate-900' : 'text-slate-400',
                       !sel && isCursor && ok && 'bg-fill',
                     )}
