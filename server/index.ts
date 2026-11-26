@@ -9,7 +9,7 @@
  * Also serves the built web app from dist/ when it exists, so one process is
  * enough in production. The Android app talks to it over the network.
  *
- * Hosting (Vercel, Docker): the data is in PostgreSQL or MariaDB (DATABASE_URL), several processes may run at
+ * Hosting (Vercel, Docker): the data is in PostgreSQL (DATABASE_URL), several processes may run at
  * once, and an idle one is stopped. GET /api/cron (with CRON_SECRET) runs the scheduled pass. See
  * DEPLOY.md.
  */

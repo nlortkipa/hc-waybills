@@ -84,20 +84,3 @@ docker compose cp server/data/hc.db app:/tmp/hc.db
 docker compose exec app node scripts/db-import.ts /tmp/hc.db
 docker compose restart app
 ```
-
-## A client's own machine with MariaDB
-
-The same image runs against a MariaDB (10.5+) the client already has. Nothing else changes: with a
-`mysql://` (or `mariadb://`) `DATABASE_URL` the server uses MariaDB and creates its tables there on first
-start. To build the package to send:
-
-```bash
-npm run docker:export            # add -- --arm for an Apple Silicon Mac
-```
-
-This writes `release/hc-waybill-docker-v<version>.tar.gz`: the image, a `docker-compose.yml`, a settings
-template and a README for the client (from `docker/client/`). The client unpacks it and follows its
-README: create the database and user, fill in `hc-waybill.env`, then `docker load` and `docker compose up -d`.
-
-To bring existing data into their MariaDB, run `npm run db:import` with `DATABASE_URL='mysql://…'` (see
-step 3).

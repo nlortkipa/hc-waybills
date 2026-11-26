@@ -1,10 +1,9 @@
 /**
- * Copies a local SQLite database (default server/data/hc.db) into the PostgreSQL or MariaDB database
- * at DATABASE_URL, e.g. the one a Vercel project uses. Everything is copied: records, logs, sessions
+ * Copies a local SQLite database (default server/data/hc.db) into the PostgreSQL database at
+ * DATABASE_URL, e.g. the one a Vercel project uses. Everything is copied: records, logs, sessions
  * (logged-in users stay logged in) and product prices.
  *
  *   DATABASE_URL='postgres://…' npm run db:import [-- path/to/hc.db] [--replace]
- *   DATABASE_URL='mysql://…' npm run db:import [-- path/to/hc.db] [--replace]
  *
  * Refuses when the target already holds data, unless --replace (which deletes it first). Stop the
  * server using the SQLite file first, or copy it with `sqlite3 hc.db ".backup copy.db"`.
@@ -20,7 +19,7 @@ const file = args.find((a) => !a.startsWith('--')) ?? join(import.meta.dirname, 
 const url = process.env.DATABASE_URL?.trim()
 
 if (!url) {
-  console.error('Set DATABASE_URL to the PostgreSQL or MariaDB database to copy into.')
+  console.error('Set DATABASE_URL to the PostgreSQL database to copy into.')
   process.exit(1)
 }
 if (!existsSync(file)) {
@@ -40,7 +39,7 @@ if (!src.prepare("SELECT 1 FROM meta WHERE key = 'version'").get()) {
 }
 
 const pg = await openSql(url)
-if (pg.kind === 'sqlite') throw new Error('DATABASE_URL is not a PostgreSQL or MariaDB database')
+if (pg.kind !== 'postgres') throw new Error('DATABASE_URL is not a PostgreSQL database')
 const [existing] = await pg.all("SELECT value FROM meta WHERE key = 'version'")
 if (existing && !replace) {
   console.error(`${pg.where} already holds data (schema v${existing.value}). Run again with --replace to overwrite it.`)
