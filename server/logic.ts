@@ -17,6 +17,8 @@ import type {
   RsRemoteWaybill,
   RsSettings,
   RsWaybillPayload,
+  Scale,
+  ScaleState,
   Shipment,
   ShipmentEvent,
   ShipmentItem,
@@ -27,11 +29,23 @@ import type {
   User,
   WaybillType,
 } from '../src/types.ts'
-import { createHash, randomBytes, randomInt } from 'node:crypto'
-import { IntegrationError } from './integrations.ts'
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { IntegrationError, log } from './integrations.ts'
 import { rsCache } from './rscache.ts'
 import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
-import { AUTO_CLOSE_MS, configProblems, LOGIN_CODES_TO_CONSOLE, SMS_API_KEY, SMS_SENDER, RS_SU } from './config.ts'
+import {
+  AUTO_CLOSE_MS,
+  configProblems,
+  LOGIN_CODES_TO_CONSOLE,
+  RS_SU,
+  SCALE_CALLBACK_PASSWORD,
+  SCALE_CALLBACK_SECRET,
+  SCALE_CALLBACK_USER,
+  SCALE_TRUCK_CODE,
+  SMS_API_KEY,
+  SMS_SENDER,
+} from './config.ts'
+import { scale, type ScaleAction, type ScaleOrder } from './scale.ts'
 import { newReference, smsoffice, toDestination, type SmsCreds } from './smsoffice.ts'
 import { store as db } from './store.ts'
 
@@ -258,7 +272,7 @@ export function viewFor(user: User): Database {
 
 /* ------------------------- Reference data ------------------------- */
 
-export const REF_COLLECTIONS = ['carriers', 'routes', 'drivers', 'trucks', 'products', 'users'] as const
+export const REF_COLLECTIONS = ['carriers', 'routes', 'scales', 'drivers', 'trucks', 'products', 'users'] as const
 export type RefCollection = (typeof REF_COLLECTIONS)[number]
 type RefRecord = Database[RefCollection][number]
 
@@ -268,12 +282,12 @@ const requireAdmin = (u: User) => u.role === 'admin' || fail('მოქმედ
 const otherAdmins = (id: string) => active(db.get().users).filter((u) => u.role === 'admin' && u.id !== id).length
 const LAST_ADMIN = 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
 
-function shipmentCount(col: Exclude<RefCollection, 'products'>, id: string): number {
+function shipmentCount(col: Exclude<RefCollection, 'products' | 'scales'>, id: string): number {
   return db.get().shipments.filter((s) => shipmentUses(s, col, id)).length
 }
 
 /** Removes a record, or soft-deletes it when shipments reference it so they keep showing it. */
-function removeOrRetire(col: Exclude<RefCollection, 'products'>, rec: RefRecord) {
+function removeOrRetire(col: Exclude<RefCollection, 'products' | 'scales'>, rec: RefRecord) {
   if (shipmentCount(col, rec.id) > 0) db.put(col, { ...rec, deletedAt: rec.deletedAt ?? nowIso() } as never)
   else db.remove(col, rec.id)
 }
@@ -390,6 +404,18 @@ export const refs = {
       }
       if (changed && x.citizenship === 'foreign' && storedCreds() && (await rsName(x.personalId))) fail('ეს პირადი ნომერი საქართველოს რეესტრშია — აირჩიე „საქართველოს მოქალაქე“')
     }
+    if (col === 'scales') {
+      const x = rec as Scale
+      const code = str(x.code).trim()
+      const url = str(x.url).trim().replace(/\/+$/, '')
+      if (!code) fail('შეიყვანე სასწორის ID')
+      // The scale stores it in a 20-character column (InputFileData.FactoryCode).
+      if (code.length > 20) fail('სასწორის ID მაქსიმუმ 20 სიმბოლოა')
+      if (!/^https?:\/\/[^\s/]+(\/\S*)?$/i.test(url)) fail('API მისამართი უნდა იწყებოდეს http:// ან https://-ით, მაგ. http://kc00001:5000')
+      if (active(db.get().scales).some((y) => y.id !== x.id && y.code.trim().toLowerCase() === code.toLowerCase())) fail('ამ ID-ით სასწორი უკვე არსებობს')
+      for (const k of Object.keys(x)) if (k !== 'id') delete (x as unknown as Record<string, unknown>)[k]
+      Object.assign(x, { code, url })
+    }
     if (col === 'carriers') {
       const c = rec as Carrier
       Object.assign(c, { name: str(c.name).trim(), startAddress: str(c.startAddress).trim() })
@@ -408,7 +434,8 @@ export const refs = {
       const endAddress = str(r.endAddress).trim()
       if (!endAddress) fail('შეიყვანე დასრულების მისამართი')
       const scaleId = str(r.scaleId).trim()
-      if (!scaleId) fail('შეიყვანე სასწორის ID')
+      // A scale deleted since stays on a route that already had it.
+      if (!d.scales.some((x) => x.id === scaleId && (!x.deletedAt || scaleId === was?.scaleId))) fail('აირჩიე სასწორი')
       const goods = parseItems(raw.goods, was?.goods)
       const extras = parseRouteWaybill(raw)
       // Only these fields are kept.
@@ -436,9 +463,19 @@ export const refs = {
       const n = active(db.get().users).filter((x) => x.role === 'operator' && x.carrierIds?.includes(id)).length
       if (n) fail(`წაშლა შეუძლებელია: მიბმულია ${n} ოპერატორთან — ჯერ მოხსენი ეს კარიერი მათ ანგარიშებში.`)
     }
+    if (col === 'scales') {
+      const x = db.get().scales.find((y) => y.id === id)
+      if (!x) return fail('ჩანაწერი ვერ მოიძებნა', 404)
+      const n = active(db.get().routes).filter((r) => r.scaleId === id).length
+      if (n) fail(`წაშლა შეუძლებელია: გამოიყენება ${n} მარშრუტზე — ჯერ შეუცვალე მათ სასწორი.`)
+      // Deleted routes (and their shipments' updates) still point at it: kept, marked deleted.
+      if (db.get().routes.some((r) => r.scaleId === id)) db.put('scales', { ...x, deletedAt: x.deletedAt ?? nowIso() })
+      else db.remove('scales', id)
+      return
+    }
     const rec = (db.get()[col] as RefRecord[]).find((r) => r.id === id)
     if (!rec) fail('ჩანაწერი ვერ მოიძებნა', 404)
-    removeOrRetire(col, rec!)
+    removeOrRetire(col as Exclude<RefCollection, 'products' | 'scales'>, rec!)
     if (col === 'carriers') dropCarrierRoutes(id)
     if (col === 'users') db.sessions.deleteForUser(id)
   },
@@ -1014,6 +1051,8 @@ export const shipments = {
       status: 'uploading',
       rs: { status: 'pending' },
       sms: { status: 'pending' },
+      // Sent to its route's scale once RS.ge numbers the waybill.
+      scale: { status: 'pending' },
       events: [{ at: nowIso(), level: 'info', message: 'მოთხოვნილია ზედნადების ატვირთვა' }],
     }
     db.put('shipments', s)
@@ -1131,6 +1170,18 @@ export const shipments = {
       patch(id, () => ({ sms: { status: 'pending' } }))
       void shipments.run(id)
     }
+    // The scale gets the corrected order (driver, truck, goods, estimated weight) until the truck is weighed.
+    if (active && scaleSent(stored(id).scale)) void sendToScale(id, 'U')
+  },
+
+  /** Sends the shipment to the scale again after it failed (the same action as the one that failed). */
+  async retryScale(id: string, user: User) {
+    const s = stored(id, user)
+    noReport(user)
+    const sc = s.scale
+    if (sc?.status !== 'failed') return fail('სასწორზე გაგზავნა არ არის ჩავარდნილი')
+    if (!s.waybillNumber) fail('ზედნადებს ჯერ ნომერი არ აქვს')
+    await sendToScale(id, sc.action ?? 'I')
   },
 
   async retrySms(id: string, user: User) {
@@ -1201,6 +1252,8 @@ export const shipments = {
     })
     // Completed from here (not on the rs.ge portal): the driver is told.
     if (action === 'close' && !inPipeline) await sendDoneSms(id, w?.closedAt ?? nowIso())
+    // Cancelled: the order leaves the scale, unless the truck was weighed already.
+    if (action === 'cancel' && scaleSent(stored(id).scale)) void sendToScale(id, 'D')
   },
 
   /**
@@ -1292,7 +1345,13 @@ function resumePipelines() {
   return Promise.all(
     db
       .get()
-      .shipments.filter((s) => s.status === 'uploading' || s.sms.status === 'running' || (s.status === 'uploaded' && s.sms.status === 'pending'))
+      .shipments.filter(
+        (s) =>
+          s.status === 'uploading' ||
+          s.sms.status === 'running' ||
+          (s.status === 'uploaded' && s.sms.status === 'pending') ||
+          (s.status === 'uploaded' && !!s.waybillNumber && (s.scale?.status === 'pending' || s.scale?.status === 'running')),
+      )
       .map((s) => shipments.run(s.id).catch(() => {})),
   )
 }
@@ -1394,7 +1453,13 @@ function reconcile(id: string, prev: RsRemoteWaybill | undefined, w: RsRemoteWay
     }
     return
   }
-  if (!s.waybillNumber && w.number) patch(id, () => ({ waybillNumber: w.number }))
+  if (!s.waybillNumber && w.number) {
+    patch(id, () => ({ waybillNumber: w.number }))
+    // Numbered only now (sent to the transporter first): the scale gets it.
+    if (s.scale?.status === 'pending') void shipments.run(id)
+  }
+  // Cancelled on the rs.ge portal: the order leaves the scale, unless the truck was weighed already.
+  if (w.status === -2 && scaleSent(s.scale)) void sendToScale(id, 'D')
   // Changes are told against the copy read before (none after a restart: nothing to compare with).
   if (!prev) return
   const changes: string[] = []
@@ -1476,9 +1541,17 @@ async function runPipeline(id: string) {
     }
   }
 
-  // 2. SMS to driver (a waybill without transport has none)
+  // 2. SMS to driver, 3. the order to the scale. Neither waits for the other to succeed.
   s = stored(id)
   if (s.status !== 'uploaded') return
+  await smsStep(id)
+  const sc = stored(id).scale
+  if (stored(id).waybillNumber && (sc?.status === 'pending' || sc?.status === 'running')) await sendToScale(id, 'I')
+}
+
+/** The driver's SMS (a waybill without transport has none). */
+async function smsStep(id: string) {
+  const s = stored(id)
   if (!s.driverId) {
     if (s.sms.status === 'pending') patch(id, () => ({ sms: { status: 'skipped' } }))
     return
@@ -1491,6 +1564,171 @@ async function runPipeline(id: string) {
     if (!a.waybillState && a.rsWaybillId && transportStart(a) <= Date.now()) await shipments.finish(id, 'close', undefined, undefined, true).catch(() => {})
   }
   await sendSms(id)
+}
+
+/* ------------------------------- Scale ------------------------------- */
+
+/** Whether the scale holds an order for the shipment that may still change: sent (or refused), not weighed, not removed. */
+const scaleSent = (sc: ScaleState | undefined) => !!sc && (sc.status === 'ok' || sc.status === 'failed') && sc.action !== 'D' && sc.weight == null
+
+/** Shipments whose order is being sent to the scale now (in this process). */
+const scaleBusy = new Set<string>()
+
+/** Tonnes, as the history shows them. */
+const tonnes = (n: number) => `${Math.round(n * 1000) / 1000} ტ`
+
+/**
+ * The order a scale gets for a shipment (field by field in docs/scale-api.md), or why there is none.
+ * `target`: the scale it goes to (whsCode is its ID). Uses RS.ge's copy of the waybill (goods,
+ * quantity, buyer): throws while it isn't read.
+ */
+function scaleOrder(s: Shipment, action: ScaleAction, target: Scale): ScaleOrder {
+  const d = db.get()
+  const route = d.routes.find((r) => r.id === s.routeId)
+  if (!s.waybillNumber) throw new Error('ზედნადებს ჯერ ნომერი არ აქვს')
+  const main = s.items[0]
+  if (!main) throw new Error('ზედნადების პროდუქცია RS.ge-დან ჯერ არ წაკითხულა — სცადე ცოტა ხანში')
+  const r = s.rsRemote
+  const rs = rsge.account()
+  const driver = d.drivers.find((x) => x.id === s.driverId)
+  const truck = d.trucks.find((x) => x.id === s.truckId)
+  const plate = plateKey(r?.carNumber || truck?.plateNumber || '')
+  const cardCode = r?.buyerTin || rs?.tin || ''
+  if (!cardCode) throw new Error('მყიდველის საიდენტიფიკაციო კოდი უცნობია — RS.ge-დან ჯერ არ წაკითხულა')
+  // The scale's columns are this long (InputFileData): longer codes would fail there, names are cut.
+  if (main.barCode.length > 20) throw new Error(`პროდუქტის კოდი „${main.barCode}“ 20 სიმბოლოზე გრძელია — სასწორი მას ვერ მიიღებს`)
+  const cut = (v: string, n: number) => v.trim().slice(0, n)
+  return {
+    actionFlag: action,
+    processType: 'S',
+    docEntry: s.waybillNumber,
+    // The day it was activated, as SAP sends it (midnight, local time).
+    docDate: `${rsDate(new Date(s.rs.at ?? s.createdAt)).slice(0, 10)}T00:00:00`,
+    cardCode,
+    cardName: cut(r?.buyerName || rs?.name || cardCode, 150),
+    u_ShipToCodeS: s.routeId,
+    shipToCode: r?.endAddress || route?.endAddress || null,
+    u_DriverName: cut(driver ? `${driver.firstName} ${driver.lastName}` : r?.driverName || '', 100),
+    u_TruckNum: plate,
+    // Stored there as "plate/trailer", at most 20 characters.
+    u_TruckNum2: truck?.trailerNumber && plate.length < 19 ? cut(plateKey(truck.trailerNumber), 19 - plate.length) : null,
+    u_Truck: SCALE_TRUCK_CODE,
+    // One truck is weighed once: the first goods line names the product, the quantity is the whole load.
+    itemCode: main.barCode,
+    description: cut(main.name, 150),
+    quantity: Math.round(s.quantity * 1000) / 1000,
+    whsCode: target.code.trim(),
+  }
+}
+
+/** Sends one order to a scale; the error (Georgian) when it didn't take it. */
+async function sendOrder(target: Scale, order: ScaleOrder, id: string): Promise<string | null> {
+  if (!target.url) return `სასწორს „${target.code}“ API მისამართი არ აქვს — შეავსე ცნობარებში (სასწორი)`
+  return scale.send(target.url, order, id).then(
+    () => null,
+    (e: Error) => e.message,
+  )
+}
+
+/**
+ * Sends the shipment's order to a scale: I when its waybill got its number (to its route's scale), U
+ * when it was corrected, D when it was cancelled (both to the scale that has it). A corrected shipment
+ * whose route now has another scale leaves the old one (D) and goes to the new one (I). The outcome goes
+ * into `scale` and the history; nothing else waits for it.
+ */
+async function sendToScale(id: string, action: ScaleAction): Promise<void> {
+  if (scaleBusy.has(id)) return
+  scaleBusy.add(id)
+  try {
+    const s = get(id)
+    const d = db.get()
+    const failed = (message: string, act: ScaleAction) =>
+      patch(id, (y) => ({ scale: { ...y.scale, status: 'failed', action: act, error: message, at: nowIso() } }), { level: 'error', message: message.startsWith('სასწორ') ? message : `სასწორი: ${message}` })
+    if (!s.driverId || !s.truckId) {
+      patch(id, (y) => ({ scale: { ...y.scale, status: 'skipped', error: 'ტრანსპორტირების გარეშე — სასწორზე არ იგზავნება', at: nowIso() } }))
+      return
+    }
+    const sent = s.scale?.scaleId ? d.scales.find((x) => x.id === s.scale!.scaleId) : undefined
+    const routeScale = d.scales.find((x) => x.id === d.routes.find((r) => r.id === s.routeId)?.scaleId)
+    const target = action === 'D' ? (sent ?? routeScale) : routeScale
+    if (!target) {
+      patch(id, (y) => ({ scale: { ...y.scale, status: 'skipped', error: 'მარშრუტს სასწორი არ აქვს', at: nowIso() } }))
+      return
+    }
+    let order: ScaleOrder
+    try {
+      order = scaleOrder(s, action, target)
+    } catch (e) {
+      failed((e as Error).message, action)
+      return
+    }
+    patch(id, (y) => ({ scale: { ...y.scale, status: 'running' } }))
+    let act = action
+    // Corrected onto a route with another scale: the order leaves the old scale first.
+    if (action === 'U' && sent && sent.id !== target.id) {
+      const error = await sendOrder(sent, scaleOrder(s, 'D', sent), id)
+      if (error) return failed(`ძველი სასწორიდან („${sent.code}“) შეკვეთა ვერ მოიხსნა: ${error}`, 'U')
+      patch(id, () => ({}), { level: 'info', message: `შეკვეთა №${order.docEntry} მოიხსნა სასწორიდან „${sent.code}“` })
+      act = 'I'
+      order = { ...order, actionFlag: 'I' }
+    }
+    const error = await sendOrder(target, order, id)
+    if (error) return failed(error, action)
+    const q = order.quantity
+    patch(id, (y) => ({ scale: { ...y.scale, status: 'ok', action: act, scaleId: target.id, error: undefined, at: nowIso(), ...(act !== 'D' && { estimated: q }) } }), {
+      level: 'success',
+      message:
+        act === 'D'
+          ? `შეკვეთა №${order.docEntry} მოიხსნა სასწორიდან „${target.code}“`
+          : `სასწორს „${target.code}“ ${act === 'U' ? 'განუახლდა' : 'გაეგზავნა'} შეკვეთა №${order.docEntry} — სავარაუდო წონა ${tonnes(q)}`,
+    })
+  } finally {
+    scaleBusy.delete(id)
+  }
+}
+
+/** Equal strings, compared in constant time. */
+function sameText(a: string, b: string) {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+/**
+ * The real weight from the scale (POST /api/scale/weight): the scale's operator weighed the truck and
+ * the scale posts { DocEntry, Weight, Signature } to its SAP:API:URL:Output, with Basic auth
+ * (SAP:API:Auth:User/Pass) and Signature = Base64(SHA-256(DocEntry + Weight + SAP:API:Secret)).
+ * DocEntry is the waybill number; Weight a whole number (kilograms).
+ */
+export function receiveWeight(authorization: string | undefined, body: unknown) {
+  if (!SCALE_CALLBACK_SECRET) throw new HttpError(404, 'Not found')
+  const started = Date.now()
+  const b = (body ?? {}) as Record<string, unknown>
+  const docEntry = str(b.DocEntry ?? b.docEntry)
+  const rawWeight = b.Weight ?? b.weight
+  const signature = str(b.Signature ?? b.signature)
+  const request = { DocEntry: docEntry, Weight: rawWeight, Signature: signature ? '••••••' : '' }
+  const endpoint = 'POST /api/scale/weight'
+  const refuse = (status: number, message: string, shipmentId?: string): never => {
+    log({ service: 'Scale', direction: 'in', endpoint, request, response: { http: status, error: message }, ok: false, durationMs: Date.now() - started, shipmentId })
+    throw new HttpError(status, message)
+  }
+  const basic = `Basic ${Buffer.from(`${SCALE_CALLBACK_USER}:${SCALE_CALLBACK_PASSWORD}`).toString('base64')}`
+  if (!sameText(authorization ?? '', basic)) refuse(401, 'Unauthorized')
+  const weight = typeof rawWeight === 'number' ? rawWeight : Number(str(rawWeight))
+  if (!docEntry || str(rawWeight) === '' || !Number.isFinite(weight)) refuse(400, 'DocEntry and Weight are required')
+  // Signed as .NET writes it: DocEntry, the weight as a plain integer, the secret.
+  const expected = createHash('sha256').update(`${docEntry}${String(rawWeight)}${SCALE_CALLBACK_SECRET}`).digest('base64')
+  if (!sameText(signature, expected)) refuse(401, 'Bad signature')
+  const s = db.get().shipments.find((x) => x.waybillNumber === docEntry)
+  if (!s) refuse(404, `No shipment with waybill number ${docEntry}`)
+  const sc = s!.scale
+  patch(s!.id, (y) => ({ scale: { ...(y.scale ?? { status: 'ok' as const }), weight, weighedAt: nowIso() } }), {
+    level: 'success',
+    message: `სასწორმა დააბრუნა რეალური წონა: ${weight} კგ${sc?.estimated != null ? ` (სავარაუდო ${tonnes(sc.estimated)})` : ''}${sc?.weight != null ? ` — წინა: ${sc.weight} კგ` : ''}`,
+  })
+  log({ service: 'Scale', direction: 'in', endpoint, request, response: { http: 200, ok: true }, ok: true, durationMs: Date.now() - started, shipmentId: s!.id })
+  return { ok: true }
 }
 
 /**

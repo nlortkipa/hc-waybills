@@ -1,8 +1,9 @@
 import { defaultRsSettings } from '../src/lib/rs.ts'
 import { defaultSmsSettings } from '../src/lib/sms.ts'
-import type { Carrier, CarrierRoute, Database, Product, RsSettings, Shipment, ShipmentItem, ShipmentWaybill, StoredDatabase, User } from '../src/types.ts'
+import type { Carrier, CarrierRoute, Database, Product, RsSettings, Scale, Shipment, ShipmentItem, ShipmentWaybill, StoredDatabase, User } from '../src/types.ts'
+import { uid } from '../src/lib/util.ts'
 
-export const DB_VERSION = 30
+export const DB_VERSION = 31
 
 /**
  * A shipment as it is stored. What RS.ge reports is never stored; what was typed for the waybill is
@@ -27,6 +28,7 @@ export function createSeed(): StoredDatabase {
     version: DB_VERSION,
     carriers: [],
     routes: [],
+    scales: [],
     drivers: [],
     trucks: [],
     users,
@@ -58,7 +60,7 @@ type V22Rs = RsSettings & { price?: number; vatType?: 0 | 1 | 2 }
 /** Upgrades an older stored database in place instead of starting over. Returns null if it can't. */
 export function migrate(db: StoredDatabase): StoredDatabase | null {
   // Products were stored before v24: the steps below still see them.
-  let d = { products: [], ...db } as Database & { version: number }
+  let d = { products: [], ...db, scales: db.scales ?? [] } as Database & { version: number }
   // v9 → v10: RS.ge settings added.
   if (d.version === 9) d = { ...d, version: 10, rs: defaultRsSettings() }
   // v10 → v11: RS.ge simulator and mode removed. IDs from the simulator mean nothing to RS.ge, so drop them.
@@ -287,6 +289,24 @@ export function migrate(db: StoredDatabase): StoredDatabase | null {
           )
         : d.users
     d = { ...d, version: 30, users }
+  }
+  // v30 → v31: scales are their own records (ID + API address, ცნობარები → სასწორი) and a route
+  // points at one. Each scale ID typed on routes becomes a scale without an address (the admin adds it).
+  if (d.version === 30) {
+    const scales: Scale[] = [...(d.scales ?? [])]
+    const byCode = new Map(scales.map((x) => [x.code.trim().toLowerCase(), x]))
+    const routes = d.routes.map((r) => {
+      const code = String(r.scaleId ?? '').trim()
+      if (!code) return { ...r, scaleId: '' }
+      let x = byCode.get(code.toLowerCase())
+      if (!x) {
+        x = { id: uid('w'), code, url: '' }
+        scales.push(x)
+        byCode.set(code.toLowerCase(), x)
+      }
+      return { ...r, scaleId: x.id }
+    })
+    d = { ...d, version: 31, routes, scales }
   }
   if (d.version !== DB_VERSION) return null
   const { products: _p, ...stored } = d

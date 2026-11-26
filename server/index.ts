@@ -9,7 +9,7 @@
  * Also serves the built web app from dist/ when it exists, so one process is
  * enough in production. The Android app talks to it over the network.
  *
- * Hosting (Vercel, Docker): the data is in PostgreSQL (DATABASE_URL), several processes may run at
+ * Hosting (Vercel, Docker): the data is in PostgreSQL or MariaDB (DATABASE_URL), several processes may run at
  * once, and an idle one is stopped. GET /api/cron (with CRON_SECRET) runs the scheduled pass. See
  * DEPLOY.md.
  */
@@ -19,8 +19,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
-import { auth, checkServices, scheduledJobs, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
-import { AUTO_CLOSE_MS, LOGIN_CODES_TO_CONSOLE } from './config.ts'
+import { auth, checkServices, scheduledJobs, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, receiveWeight, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
+import { AUTO_CLOSE_MS, LOGIN_CODES_TO_CONSOLE, SCALE_CALLBACK_SECRET } from './config.ts'
 import { rsCache } from './rscache.ts'
 import { purgeExpired, store } from './store.ts'
 
@@ -51,6 +51,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
     },
     true,
   ],
+  // The scale posts the real weight of a weighed truck here (its SAP:API:URL:Output), signed: see receiveWeight.
+  ['POST', /^\/api\/scale\/weight$/, ({ req, body }) => receiveWeight(req.headers.authorization, body), true],
   // Login: an SMS code to a known number, then the number and the code start a session.
   ['POST', /^\/api\/login\/code$/, ({ body }) => auth.sendCode(body?.phone), true],
   ['POST', /^\/api\/login$/, ({ body }) => auth.login(body?.phone, body?.code), true],
@@ -90,6 +92,8 @@ const routes: [method: string, path: RegExp, handler: Handler, isPublic?: boolea
   ['POST', /^\/api\/shipments\/([\w-]+)\/invoice$/, ({ params, user }) => shipments.invoice(params[0], user)],
   ['POST', /^\/api\/shipments\/([\w-]+)\/run$/, ({ params, user }) => void shipments.run(params[0], user).catch(() => {})],
   ['POST', /^\/api\/shipments\/([\w-]+)\/retry-sms$/, ({ params, user }) => void shipments.retrySms(params[0], user).catch(() => {})],
+  // Sends the order to the scale again after it failed; the outcome arrives with the next state poll.
+  ['POST', /^\/api\/shipments\/([\w-]+)\/retry-scale$/, ({ params, user }) => shipments.retryScale(params[0], user)],
   ['POST', /^\/api\/shipments\/([\w-]+)\/(close|cancel|delete)$/, ({ params, body, user }) => shipments.finish(params[0], params[1] as 'close' | 'cancel' | 'delete', user, body)],
   // Re-reads the waybill from RS.ge; the result arrives with the next state poll.
   ['POST', /^\/api\/shipments\/([\w-]+)\/rs-refresh$/, ({ params, user }) => shipments.refreshFromRs(params[0], user)],
@@ -257,6 +261,7 @@ server.listen(PORT, HOST, () => {
         ? `[api] active waybills are completed ${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} after transport starts`
         : '[api] active waybills are completed as soon as transport starts',
   )
+  if (!SCALE_CALLBACK_SECRET) console.warn('[api] SCALE_CALLBACK_* not set: the scale cannot report real weights to /api/scale/weight')
   if (LOGIN_CODES_TO_CONSOLE) console.warn('[api] LOGIN_CODES=console: login codes are printed here, not texted — for testing only')
   shipments.resumeAll()
 })

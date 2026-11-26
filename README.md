@@ -194,6 +194,16 @@ Per shipment, after RS.ge returns the waybill number, the server sends the drive
 - **Restarts:** the reference is saved before the send. If the server stops mid-send, on restart it asks smsoffice.ge about that reference first and sends again only if smsoffice.ge doesn't know the message. A timeout with no answer at all is reported as an error; resending then may text the driver twice.
 - smsoffice.ge's error code 40 says "text over 160 characters". The waybill SMS is Georgian (Unicode) and usually 100–150 characters, so it's billed as more than one message. If your account refuses long texts with code 40, shorten the text in `sendSms` (`server/logic.ts`).
 
+### Scale (სასწორი)
+
+Scales are a reference list (ცნობარები → **სასწორი**): each has its ID (the factory code the scale
+knows) and the address of its API, and every route picks one from a dropdown. Each shipment goes to its
+route's scale once RS.ge gives its waybill a number: the waybill number is the order number there, and the waybill's quantity is the estimated
+weight. A correction updates the order and a cancellation removes it, until the truck is weighed. The
+scale then posts the real weight back to `POST /api/scale/weight` (Basic auth plus a SHA-256
+signature, `SCALE_CALLBACK_*`). The shipment page shows it next to the estimate; RS.ge isn't changed.
+Requests, answers and the scale's tables are described in [docs/scale-api.md](docs/scale-api.md).
+
 ### Mock assumptions to confirm with the client
 
 - A waybill can carry several products, one goods line each. The admin sets up a route's lines (product, quantity, unit price, VAT type); the operator only picks the route, driver and truck. Every line is sent exactly as written on the route; renaming or removing a product in the list doesn't change routes already filled from it. A shipment's lines are read from the route again until its waybill is on RS.ge, so fixing a price after a refusal applies to the retry; changing a route later doesn't rewrite waybills already on RS.ge.

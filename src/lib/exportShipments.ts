@@ -8,7 +8,7 @@ import { downloadXlsx } from './xlsx'
 /** Shipments as an Excel sheet: the same columns from the list and the reports. */
 export function exportShipments(filename: string, rows: Shipment[], L: Lookup) {
   return downloadXlsx(filename, [
-    ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'SMS', 'სტატუსი'],
+    ['ზედნადები', 'შექმნის დრო', 'კარიერი', 'მარშრუტი', 'მძღოლი', 'მანქანის ნომერი', 'ტვირთი', 'დეკლარირებული (ტ)', 'რეალური წონა (ტ)', 'SMS', 'სტატუსი'],
     ...rows.map((s) => {
       const x = L.describe(s)
       return [
@@ -20,6 +20,7 @@ export function exportShipments(filename: string, rows: Shipment[], L: Lookup) {
         x.plate,
         x.item,
         shipmentQuantity(s),
+        s.scale?.weight != null ? s.scale.weight / 1000 : '',
         s.sms.status === 'ok' ? 'გაგზავნილი' : s.sms.status === 'failed' ? 'შეცდომა' : '',
         s.waybillState === 'cancelled' ? 'გაუქმებული' : s.waybillState === 'closed' ? 'დასრულებული' : statusMeta[s.status].label,
       ]

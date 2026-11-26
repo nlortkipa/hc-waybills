@@ -49,7 +49,7 @@ export const auth = {
 
 /* ------------------------- Reference data ------------------------- */
 
-export type RefCollection = 'carriers' | 'routes' | 'drivers' | 'trucks' | 'products' | 'users'
+export type RefCollection = 'carriers' | 'routes' | 'scales' | 'drivers' | 'trucks' | 'products' | 'users'
 type RefRecord<K extends RefCollection> = Database[K][number]
 
 export const refs = {
@@ -59,6 +59,8 @@ export const refs = {
 
   /** Number of shipments that reference the record (they keep showing it after deletion). */
   shipmentCount(col: RefCollection, id: string): number {
+    // Shipments know a scale only through their route.
+    if (col === 'scales') return 0
     return db.get().shipments.filter((s) => shipmentUses(s, col, id)).length
   },
 
@@ -67,6 +69,10 @@ export const refs = {
     if (col === 'users') {
       const admins = active(db.get().users).filter((u) => u.role === 'admin')
       if (admins.length === 1 && admins[0].id === id) return 'ეს ერთადერთი ადმინისტრატორია — ჯერ დანიშნე სხვა ადმინისტრატორი.'
+    }
+    if (col === 'scales') {
+      const n = active(db.get().routes).filter((r) => r.scaleId === id).length
+      if (n) return `გამოიყენება ${n} მარშრუტზე — ჯერ შეუცვალე მათ სასწორი.`
     }
     if (col === 'carriers') {
       const u = refs.boundOperators(id)
@@ -208,6 +214,11 @@ export const shipments = {
 
   async retrySms(id: string) {
     await call('POST', `/api/shipments/${encodeURIComponent(id)}/retry-sms`)
+  },
+
+  /** Sends the shipment to the scale again after it failed. */
+  async retryScale(id: string) {
+    await call('POST', `/api/shipments/${encodeURIComponent(id)}/retry-scale`)
   },
 
   /** Completes (goods delivered, now or on `deliveredAt`), cancels, or deletes (a draft) the shipment's waybill on RS.ge. */

@@ -13,6 +13,7 @@ const EMPTY: Database = {
   version: 0,
   carriers: [],
   routes: [],
+  scales: [],
   drivers: [],
   trucks: [],
   products: [],

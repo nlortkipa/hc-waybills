@@ -10,8 +10,8 @@ import { useDb } from '../api/store'
 import { useUser } from '../session'
 import type { ServiceName } from '../types'
 
-const serviceTone: Record<ServiceName, 'blue' | 'violet'> = { 'RS.ge': 'blue', SMS: 'violet' }
-const serviceLabel: Record<ServiceName, string> = { 'RS.ge': 'RS.ge', SMS: 'SMS' }
+const serviceTone: Record<ServiceName, 'blue' | 'violet' | 'amber'> = { 'RS.ge': 'blue', SMS: 'violet', Scale: 'amber' }
+const serviceLabel: Record<ServiceName, string> = { 'RS.ge': 'RS.ge', SMS: 'SMS', Scale: 'სასწორი' }
 /** Who asked for an RS.ge read-back: the background sync, or someone opening a shipment. */
 const readBackLabel = { sync: 'სინქრონიზაცია', page: 'რეისის გახსნა' } as const
 
@@ -35,7 +35,7 @@ export function ApiLog() {
 
       <Card className="min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator px-5 py-3">
-          <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
+          <Segmented value={svc} onChange={setSvc} options={(['', 'RS.ge', 'SMS', 'Scale'] as const).map((x) => ({ value: x, label: x ? serviceLabel[x] : 'ყველა' }))} />
           {user.role === 'admin' && d.logs.length > 0 && (
             <DeleteButton onClick={() => setConfirmClear(true)}>
               <span className="hidden sm:inline">გასუფთავება</span>

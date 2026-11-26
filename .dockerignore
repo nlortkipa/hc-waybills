@@ -11,3 +11,4 @@ server/data
 .mockdb
 docs
 *.log
+docker

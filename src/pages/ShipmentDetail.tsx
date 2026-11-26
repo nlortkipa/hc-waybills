@@ -1,4 +1,4 @@
-import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RotateCw } from 'lucide-react'
+import { ArrowLeft, Ban, CalendarClock, CheckCheck, Copy, FileText, MessageSquare, PencilLine, Play, Printer, ReceiptText, RotateCw, Scale } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { shipments } from '../api'
@@ -158,6 +158,29 @@ export function ShipmentDetail() {
       ),
     },
   ]
+  const sc = s.scale
+  if (sc)
+    steps.push({
+      title: 'სასწორზე გაგზავნა',
+      icon: <Scale className="size-4" />,
+      status: sc.status,
+      detail:
+        sc.status === 'ok'
+          ? sc.action === 'D'
+            ? 'შეკვეთა მოიხსნა სასწორიდან (ზედნადები გაუქმდა)'
+            : (
+                <>
+                  სავარაუდო წონა {formatNumber(sc.estimated ?? 0, 3)} ტ ·{' '}
+                  {sc.weight != null ? <b>რეალური წონა {weightText(sc.weight)}</b> : 'ელოდება აწონვას'}
+                </>
+              )
+          : (sc.error ?? (sc.status === 'running' ? 'იგზავნება…' : s.status === 'saved' ? 'გაიგზავნება გააქტიურებისას' : 'გაიგზავნება ზედნადების ნომრის მიღებისას')),
+      action: canAct && sc.status === 'failed' && (
+        <Button size="sm" variant="secondary" icon={<RotateCw className="size-3.5" />} onClick={() => shipments.retryScale(s.id).catch((e: Error) => toast('error', e.message))}>
+          ხელახლა გაგზავნა
+        </Button>
+      ),
+    })
 
   const printable = (s.status === 'uploaded' || isDraft) && !!s.rsWaybillId
   const title = s.waybillNumber ? `№ ${s.waybillNumber}` : s.status === 'saved' ? 'შენახული ზედნადები' : 'ზედნადები მოლოდინშია'
@@ -379,6 +402,7 @@ export function ShipmentDetail() {
                 />
               ))}
               {s.items.length > 1 && <InfoRow k="სულ" v={formatNumber(s.quantity, 3)} />}
+              {sc?.weight != null && <InfoRow k="რეალური წონა (სასწორი)" v={weightText(sc.weight)} sub={sc.weighedAt && formatDateTime(sc.weighedAt)} />}
             </dl>
           </Card>
 
@@ -538,3 +562,6 @@ export function CloseModal({ open, busy, number, begin, onClose, onConfirm }: { 
     </Modal>
   )
 }
+
+/** A weight the scale reported (whole kilograms), in tonnes and kilograms. */
+const weightText = (kg: number) => `${formatNumber(kg / 1000, 3)} ტ (${formatNumber(kg, 0)} კგ)`

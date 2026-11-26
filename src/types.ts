@@ -24,10 +24,23 @@ export interface CarrierRoute extends SoftDeletable, RouteWaybill {
   id: string
   carrierId: string
   endAddress: string
-  /** ID of the scale at the end address. */
+  /** The route's scale: a Scale record's id (its ID at the scale is Scale.code). */
   scaleId: string
   /** The goods lines of this route's waybills, sent as written. Empty on routes not set up yet (they can't be picked). */
   goods: RouteGood[]
+}
+
+/**
+ * A scale (სასწორი): a weighing service the admin registered, with its ID there (the factory code
+ * the scale knows, sent as whsCode) and the address of its API. Each route picks one; shipments go to
+ * the API of their route's scale (docs/scale-api.md).
+ */
+export interface Scale extends SoftDeletable {
+  id: string
+  /** The scale's ID (its factory code, e.g. GE11). */
+  code: string
+  /** Its API's address, e.g. http://kc00001:5000. */
+  url: string
 }
 
 /** A goods line of a route: what one goods row of its waybills says, quantity included. */
@@ -228,10 +241,32 @@ export interface Shipment {
     delivery?: SmsDelivery
     deliveryCheckedAt?: string
   }
+  /**
+   * The shipment at the scale (სასწორი, docs/scale-api.md): sent with the estimated weight once RS.ge
+   * numbered the waybill, to the API of its route's scale; the scale reports the real weight after
+   * weighing the truck. Missing on shipments made before scales were connected.
+   */
+  scale?: ScaleState
   events: ShipmentEvent[]
 }
 
-export type ServiceName = 'RS.ge' | 'SMS'
+export interface ScaleState {
+  /** Sending the order: 'skipped' = nothing to send (no transport, or the route has no scale ID). */
+  status: StepStatus
+  error?: string
+  at?: string
+  /** What the last order sent did: I added it, U changed it, D removed it (the waybill was cancelled). */
+  action?: 'I' | 'U' | 'D'
+  /** The scale (Scale.id) the last order went to: a later U or D goes there. */
+  scaleId?: string
+  /** Estimated weight sent (the waybill's quantity, tonnes). */
+  estimated?: number
+  /** The real weight the scale reported, as it sends it (a whole number: kilograms). */
+  weight?: number
+  weighedAt?: string
+}
+
+export type ServiceName = 'RS.ge' | 'SMS' | 'Scale'
 
 /** Delivery status of a sent SMS, as smsoffice.ge reports it. */
 export type SmsDelivery = 'Pending' | 'Delivered' | 'Undelivered' | 'Expired' | 'Unknown'
@@ -471,6 +506,7 @@ export interface Database {
   version: number
   carriers: Carrier[]
   routes: CarrierRoute[]
+  scales: Scale[]
   drivers: Driver[]
   trucks: Truck[]
   /** From RS.ge. */

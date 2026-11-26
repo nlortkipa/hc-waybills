@@ -1,4 +1,4 @@
-import { AlertTriangle, Building2, CircleCheck, Loader2, Package, Pencil, Plus, Route, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Building2, CircleCheck, Loader2, Package, Pencil, Plus, Route, Scale, Search, Trash2, Truck, UserRound, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { products, refs, rsSettings, trucks, type RefCollection } from '../api'
 import { Badge, Button, Card, ConfirmModal, DeleteButton, EmptyState, Field, FilterChips, Input, Modal, PageHeader, RefreshButton, Select } from '../components/ui'
@@ -74,6 +74,10 @@ const carrierNames = (d: Database, r: Rec) =>
     .join(', ') || '—'
 
 const carrierName = (d: Database, id?: string) => d.carriers.find((c) => c.id === id)?.name ?? '—'
+/** A route's scale ID (Scale.code). */
+const scaleCode = (d: Database, id?: string) => d.scales.find((x) => x.id === id)?.code ?? ''
+const vUrl = (v: string) => (/^https?:\/\/[^\s/]+(\/\S*)?$/i.test(v.trim()) ? null : 'მაგ. http://kc00001:5000')
+const vScaleCode = (v: string) => (!v.trim() ? 'შეიყვანე სასწორის ID' : v.trim().length > 20 ? 'მაქსიმუმ 20 სიმბოლო' : null)
 /** A route record resolved to its carrier and addresses. */
 const routeOf = (d: Database, r: Rec) => routeAddresses(d.carriers, r as unknown as CarrierRoute)
 /** A route record's goods lines. */
@@ -104,7 +108,16 @@ const TABS: TabDef[] = [
     fields: [
       { key: 'carrierId', label: 'კარიერი', type: 'select', placeholder: 'აირჩიე კარიერი…', wide: true, options: (d) => active(d.carriers).map((c) => ({ value: c.id, label: c.name, icon: <Building2 />, sub: c.startAddress })) },
       { key: 'endAddress', label: 'დასრულების მისამართი', placeholder: 'ჩაბარების პუნქტი', wide: true },
-      { key: 'scaleId', label: 'სასწორის ID', placeholder: 'SC-01', mono: true, wide: true },
+      {
+        key: 'scaleId',
+        label: 'სასწორი',
+        type: 'select',
+        placeholder: 'აირჩიე სასწორი…',
+        wide: true,
+        // A scale used by a route can't be deleted, so the route's own scale is always listed.
+        options: (d) => d.scales.filter((x) => !x.deletedAt).map((x) => ({ value: x.id, label: x.code, icon: <Scale />, sub: x.url || 'API მისამართი არ არის' })),
+        initial: () => '',
+      },
       // The waybill's transport details, the same on every shipment of the route. The transport type is always საავტომობილო.
       { key: 'transportCost', label: 'ტრანსპორტირების ხარჯი', placeholder: '0.00', suffix: '₾', optional: true, validate: vPrice, inputMode: 'decimal', wide: true },
       { key: 'comment', label: 'კომენტარი', optional: true, wide: true, afterGoods: true },
@@ -122,7 +135,7 @@ const TABS: TabDef[] = [
           </span>
         ),
       },
-      { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px] whitespace-nowrap">{r.scaleId || '—'}</span> },
+      { label: 'სასწორი', render: (r, d) => <span className="font-mono text-[13px] whitespace-nowrap">{scaleCode(d, r.scaleId) || '—'}</span> },
       {
         label: 'პროდუქტები',
         render: (r) => {
@@ -131,6 +144,23 @@ const TABS: TabDef[] = [
           return goods.length ? <span className="block min-w-40">{goodsText(goods)}</span> : <Badge tone="amber">არ არის მითითებული</Badge>
         },
       },
+    ],
+  },
+  {
+    key: 'scales',
+    label: 'სასწორი',
+    singular: 'სასწორის',
+    icon: Scale,
+    fields: [
+      { key: 'code', label: 'სასწორის ID', placeholder: 'GE11', mono: true, validate: vScaleCode },
+      { key: 'url', label: 'API მისამართი', placeholder: 'http://kc00001:5000', mono: true, validate: vUrl, wide: true },
+    ],
+    title: (r) => r.code!,
+    subtitle: (r) => r.url || 'API მისამართი არ არის',
+    columns: [
+      { label: 'სასწორის ID', render: (r) => <span className="font-mono text-[13px] font-medium text-slate-900">{r.code}</span> },
+      { label: 'API მისამართი', render: (r) => (r.url ? <span className="font-mono text-[13px] [overflow-wrap:anywhere]">{r.url}</span> : <Badge tone="amber">არ არის მითითებული</Badge>) },
+      { label: 'მარშრუტები', render: (r, d) => active(d.routes).filter((x) => x.scaleId === r.id).length },
     ],
   },
   {
@@ -266,7 +296,7 @@ export function ReferenceData() {
     const text = (r: Rec): string[] => {
       if (tab.key === 'routes') {
         const x = routeOf(d, r)
-        return [carrierName(d, r.carrierId), x.start, x.end, r.scaleId ?? '', ...goodsOf(r).flatMap((g) => [g.name, g.barCode])]
+        return [carrierName(d, r.carrierId), x.start, x.end, scaleCode(d, r.scaleId), ...goodsOf(r).flatMap((g) => [g.name, g.barCode])]
       }
       return [...Object.values(r).filter((v) => typeof v === 'string'), ...(tab.key === 'users' ? [carrierNames(d, r)] : [])]
     }
