@@ -1,5 +1,6 @@
 /**
- * The database: PostgreSQL when DATABASE_URL is set (hosting), otherwise a SQLite file (server/db.ts).
+ * The database: PostgreSQL or MariaDB when DATABASE_URL is set (hosting, Docker), otherwise a SQLite
+ * file (server/db.ts).
  *
  * Only what RS.ge doesn't have is stored. RS.ge's data (products, car numbers, waybills, the seller)
  * is read from RS.ge on demand and kept in memory (server/rscache.ts). A product's unit price and VAT
@@ -59,7 +60,7 @@ type Prices = Map<string, { price: number; vatType: 0 | 1 | 2 }>
 
 // The container sets HC_REQUIRE_DATABASE_URL: its own disk is thrown away, so a file there would lose the data.
 if (process.env.HC_REQUIRE_DATABASE_URL && !process.env.DATABASE_URL?.trim()) {
-  console.error('[db] DATABASE_URL is not set: connect a PostgreSQL database (see DEPLOY.md)')
+  console.error('[db] DATABASE_URL is not set: connect a PostgreSQL or MariaDB database (see DEPLOY.md)')
   process.exit(1)
 }
 const sql = await openSql(undefined, FILE)
@@ -177,7 +178,7 @@ function write(fn: (q: Query) => Promise<unknown>, bump = true) {
       .tx(async (q) => {
         await fn(q)
         if (!bump) return
-        const [row] = await q.all<{ value: string }>("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'rev' RETURNING value")
+        const [row] = await bumpRev(q)
         const next = Number(row.value)
         // Another process wrote in between: its change isn't in memory here yet.
         if (next !== rev + 1) stale = true
@@ -191,11 +192,20 @@ function write(fn: (q: Query) => Promise<unknown>, bump = true) {
   )
 }
 
+/** Counts up the revision; resolves to the new one. MariaDB has no UPDATE … RETURNING: it reads the row it just changed (and holds). */
+async function bumpRev(q: Query) {
+  const inc = "UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'rev'"
+  if (sql.kind !== 'mariadb') return q.all<{ value: string }>(`${inc} RETURNING value`)
+  await q.run(inc)
+  return q.all<{ value: string }>("SELECT value FROM meta WHERE key = 'rev'")
+}
+
 function replaceAll(db: Database) {
   write(async (q) => {
     for (const t of [...RECORD_COLS, 'shipments', 'logs']) await q.run(`DELETE FROM ${t}`)
-    // Products are RS.ge's only since v24.
-    await q.run('DROP TABLE IF EXISTS products')
+    // Products are RS.ge's only since v24. (A MariaDB database never had them, and DROP TABLE there
+    // would commit this transaction halfway.)
+    if (sql.kind !== 'mariadb') await q.run('DROP TABLE IF EXISTS products')
     for (const col of RECORD_COLS) for (const r of db[col]) await writeRow(q, col, r)
     for (const s of db.shipments) await writeRow(q, 'shipments', storedShipment(s))
     for (const l of trimLogs(db.logs).reverse()) await writeLog(q, l)
@@ -301,7 +311,7 @@ async function reloadIfChanged() {
 /* ------------------------------- Surface ------------------------------- */
 
 export const store = {
-  /** Which database: 'postgres' or 'sqlite'. */
+  /** Which database: 'postgres', 'mariadb' or 'sqlite'. */
   kind: sql.kind,
   /** The current data. Treat as read-only; change it through the methods below. */
   get: (): Database => mem,
@@ -461,6 +471,11 @@ export const store = {
     /** Claims `id` for `holder` for `ms`, unless another holder has a live claim. True when claimed. */
     async claim(id: string, holder: string, ms: number): Promise<boolean> {
       const now = Date.now()
+      if (sql.kind === 'mariadb') {
+        // No conditional upsert there: insert if there is no claim, else take it over if it lapsed or is ours.
+        if (await sql.run('INSERT IGNORE INTO locks (id, holder, expires) VALUES (?, ?, ?)', [id, holder, now + ms])) return true
+        return (await sql.run('UPDATE locks SET holder = ?, expires = ? WHERE id = ? AND (expires < ? OR holder = ?)', [holder, now + ms, id, now, holder])) > 0
+      }
       const rows = await sql.all(
         'INSERT INTO locks (id, holder, expires) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET holder = excluded.holder, expires = excluded.expires WHERE locks.expires < ? OR locks.holder = ? RETURNING id',
         [id, holder, now + ms, now, holder],
