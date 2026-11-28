@@ -7,8 +7,9 @@
  *   RS_WAYBILL_URL, SMSOFFICE_URL          optional: other endpoints (default: the live services)
  *   WAYBILL_AUTO_CLOSE                     optional "H:MM": an active waybill is completed this long
  *                                          after transport starts (0:00 = at once, empty = never)
- *   LOGIN_CODES                            optional "sms" (default) or "console": login codes are
- *                                          printed in the server console instead of texted (testing)
+ *   LOGIN_CODES                            optional "sms" (default) or "console": every SMS (login codes,
+ *                                          the driver's waybill SMS, the completion SMS) is printed in the
+ *                                          server console instead of texted (testing)
  *   SCALE_CALLBACK_USER, …_PASSWORD,       what the scale signs the real weight with when it posts it to
  *   SCALE_CALLBACK_SECRET                  /api/scale/weight (its SAP:API:Auth:User/Pass and SAP:API:Secret)
  *   SCALE_TRUCK_CODE                       optional: the scale's transport code for our trucks (T00002)
@@ -31,9 +32,9 @@ const autoClose = AUTO_CLOSE_RE.exec(AUTO_CLOSE)
 /** How long after transport starts an active waybill is completed on its own (ms): 0 = at once, null = never. */
 export const AUTO_CLOSE_MS = autoClose ? (Number(autoClose[1]) * 60 + Number(autoClose[2])) * 60_000 : null
 
-/** Where login codes go: texted to the user (default) or printed in the server console, for testing. */
+/** Where every SMS goes: texted through smsoffice.ge (default) or printed in the server console, for testing. */
 const LOGIN_CODES = env('LOGIN_CODES').toLowerCase() || 'sms'
-export const LOGIN_CODES_TO_CONSOLE = LOGIN_CODES === 'console'
+export const SMS_TO_CONSOLE = LOGIN_CODES === 'console'
 
 /** Basic-auth user and password and the signing secret the scale posts real weights with ('' = not accepted). */
 export const SCALE_CALLBACK_USER = env('SCALE_CALLBACK_USER')

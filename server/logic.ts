@@ -36,7 +36,7 @@ import { rsDate, rsge, storedCreds, type XmlGood } from './rsge.ts'
 import {
   AUTO_CLOSE_MS,
   configProblems,
-  LOGIN_CODES_TO_CONSOLE,
+  SMS_TO_CONSOLE,
   RS_SU,
   SCALE_CALLBACK_PASSWORD,
   SCALE_CALLBACK_SECRET,
@@ -91,14 +91,14 @@ export const auth = {
     const user = active(db.get().users).find((u) => phoneKey(u.phone) === key)
     if (!key || !user) fail('ამ ნომრით მომხმარებელი ვერ მოიძებნა', 401)
     const destination = toDestination(user!.phone)
-    if (!destination && !LOGIN_CODES_TO_CONSOLE) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
+    if (!destination && !SMS_TO_CONSOLE) fail('ეს ნომერი არ არის ქართული მობილურის ნომერი — მიმართე ადმინისტრატორს')
     const now = Date.now()
     const prev = await loginCodes.get(key)
     const sends = (prev?.sends ?? []).filter((t) => now - t < 3600_000)
     if (prev && now - prev.sentAt < CODE_RESEND_MS) return { resendIn: Math.ceil((CODE_RESEND_MS - (now - prev.sentAt)) / 1000) }
     if (sends.length >= CODE_SENDS_PER_HOUR) fail('ძალიან ბევრი მცდელობა — სცადე ერთ საათში', 429)
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
-    if (LOGIN_CODES_TO_CONSOLE) console.log(`[login] code for ${user!.phone} (${user!.firstName} ${user!.lastName}): ${code}`)
+    if (SMS_TO_CONSOLE) console.log(`[login] code for ${user!.phone} (${user!.firstName} ${user!.lastName}): ${code}`)
     else {
       const c = smsCreds()
       if (!c) fail('SMS სერვისი არ არის დაკავშირებული', 503)
@@ -1930,6 +1930,10 @@ async function sendDoneSms(id: string, closedAt: string) {
   const driver = db.get().drivers.find((x) => x.id === s.driverId)
   if (!driver) return
   const text = `ზედნადები №${s.waybillNumber} დასრულებულია ${smsDate(closedAt)}.`
+  if (SMS_TO_CONSOLE) {
+    console.log(`[sms] completion SMS for ${driver.phone} (shipment ${id}):\n${text}`)
+    return void patch(id, () => ({}), { level: 'success', message: `დასრულების SMS დაიბეჭდა სერვერის კონსოლში (${driver.phone}) — LOGIN_CODES=console` })
+  }
   const c = smsCreds()
   const destination = toDestination(driver.phone)
   const failed = (msg: string) => patch(id, () => ({}), { level: 'error', message: `დასრულების SMS ვერ გაიგზავნა: ${msg}` })
@@ -1963,6 +1967,16 @@ async function sendSms(id: string) {
       })
       return
     }
+  }
+
+  if (SMS_TO_CONSOLE) {
+    // No reference: nothing to ask smsoffice.ge about, so no delivery checks follow.
+    console.log(`[sms] waybill SMS for ${driver.phone} (shipment ${id}):\n${text}`)
+    patch(id, () => ({ sms: { status: 'ok', to: driver.phone, text, at: nowIso() } }), {
+      level: 'success',
+      message: `მძღოლის SMS დაიბეჭდა სერვერის კონსოლში (${driver.phone}) — LOGIN_CODES=console`,
+    })
+    return
   }
 
   const c = smsCreds()

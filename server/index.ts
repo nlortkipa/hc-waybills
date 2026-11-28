@@ -20,7 +20,7 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { User } from '../src/types.ts'
 import { randomBytes } from 'node:crypto'
 import { auth, checkServices, scheduledJobs, clearProducts, clearTrucks, HttpError, logs, pushPlates, readRsList, receiveWeight, REF_COLLECTIONS, refs, rsTinName, rsWaybills, shipments, viewFor, type RefCollection } from './logic.ts'
-import { AUTO_CLOSE_MS, LOGIN_CODES_TO_CONSOLE, SCALE_CALLBACK_SECRET } from './config.ts'
+import { AUTO_CLOSE_MS, SCALE_CALLBACK_SECRET, SMS_TO_CONSOLE } from './config.ts'
 import { rsCache } from './rscache.ts'
 import { purgeExpired, store } from './store.ts'
 
@@ -262,6 +262,6 @@ server.listen(PORT, HOST, () => {
         : '[api] active waybills are completed as soon as transport starts',
   )
   if (!SCALE_CALLBACK_SECRET) console.warn('[api] SCALE_CALLBACK_* not set: the scale cannot report real weights to /api/scale/weight')
-  if (LOGIN_CODES_TO_CONSOLE) console.warn('[api] LOGIN_CODES=console: login codes are printed here, not texted — for testing only')
+  if (SMS_TO_CONSOLE) console.warn('[api] LOGIN_CODES=console: every SMS (login codes, waybill SMS to drivers) is printed here, not texted — for testing only')
   shipments.resumeAll()
 })
