@@ -14,7 +14,8 @@
  *   SCALE_CALLBACK_SECRET                  /api/scale/weight (its SAP:API:Auth:User/Pass and SAP:API:Secret)
  *   SCALE_TRUCK_CODE                       optional: the scale's transport code for our trucks (T00002)
  *
- * The server refuses to start unless every one is set and both services accept them (server/index.ts).
+ * The server refuses to start unless every one is set and both services accept them (server/index.ts);
+ * with LOGIN_CODES=console the smsoffice.ge account is optional and not checked.
  */
 import './env.ts'
 
@@ -52,10 +53,13 @@ export function configProblems(): string[] {
   if (!RS_SU) out.push('RS_SERVICE_USER is not set')
   else if (!/^[^:]+:(\d{9}|\d{11})$/.test(RS_SU)) out.push('RS_SERVICE_USER must look like name:taxcode (taxcode: 9 or 11 digits)')
   if (!RS_SP) out.push('RS_SERVICE_PASSWORD is not set')
-  if (!SMS_API_KEY) out.push('SMSOFFICE_API_KEY is not set')
-  if (!SMS_SENDER) out.push('SMSOFFICE_SENDER is not set')
-  else if (!SENDER_RE.test(SMS_SENDER)) out.push('SMSOFFICE_SENDER: at most 11 Latin letters, digits, "-" or "."')
   if (LOGIN_CODES !== 'sms' && LOGIN_CODES !== 'console') out.push('LOGIN_CODES must be "sms" or "console", or be empty')
+  // LOGIN_CODES=console texts nothing, so the smsoffice.ge account isn't needed.
+  else if (!SMS_TO_CONSOLE) {
+    if (!SMS_API_KEY) out.push('SMSOFFICE_API_KEY is not set')
+    if (!SMS_SENDER) out.push('SMSOFFICE_SENDER is not set')
+  }
+  if (SMS_SENDER && !SENDER_RE.test(SMS_SENDER)) out.push('SMSOFFICE_SENDER: at most 11 Latin letters, digits, "-" or "."')
   if (AUTO_CLOSE && !autoClose) out.push('WAYBILL_AUTO_CLOSE must look like H:MM (e.g. 8:30), or be empty')
   const callback = [SCALE_CALLBACK_USER, SCALE_CALLBACK_PASSWORD, SCALE_CALLBACK_SECRET].filter(Boolean).length
   if (callback && callback < 3) out.push('SCALE_CALLBACK_USER, SCALE_CALLBACK_PASSWORD and SCALE_CALLBACK_SECRET are set together, or none of them')

@@ -742,24 +742,29 @@ const smsCreds = (): SmsCreds | null => (SMS_API_KEY && SMS_SENDER ? { apiKey: S
 
 /**
  * Checks the accounts in .env before the server starts: both must be set, RS.ge must accept the service
- * user (the seller is read and kept) and smsoffice.ge the API key (the balance is kept). Resolves with
- * what went wrong, one line each; empty = both work.
+ * user (the seller is read and kept) and smsoffice.ge the API key (the balance is kept). With
+ * LOGIN_CODES=console nothing is texted, so smsoffice.ge isn't asked. Resolves with what went wrong,
+ * one line each; empty = both work.
  */
 export async function checkServices(): Promise<string[]> {
   const problems = configProblems()
   if (problems.length) return problems
-  const [rs, sms] = await Promise.allSettled([rsge.loadAccount(storedCreds()!), smsoffice.balance({ apiKey: SMS_API_KEY })])
+  const [rs, sms] = await Promise.allSettled([
+    rsge.loadAccount(storedCreds()!),
+    SMS_TO_CONSOLE ? Promise.resolve(null) : smsoffice.balance({ apiKey: SMS_API_KEY }),
+  ])
   const why = (label: string, e: unknown) => ((e as Error).message.startsWith(label) ? (e as Error).message : `${label}: ${(e as Error).message}`)
   const out: string[] = []
   if (rs.status === 'rejected') out.push(why('RS.ge', rs.reason))
   if (sms.status === 'rejected') out.push(why('SMS', sms.reason))
   if (out.length) return out
-  const balance = (sms as PromiseFulfilledResult<number>).value
-  db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
+  const balance = (sms as PromiseFulfilledResult<number | null>).value
+  if (balance !== null) db.set('sms', { ...db.get().sms, balance, checkedAt: nowIso() })
   db.dropStoredAccounts()
   const a = (rs as PromiseFulfilledResult<Awaited<ReturnType<typeof rsge.loadAccount>>>).value
   console.log(`[rs.ge] connected: ${a.name} (${a.tin})`)
-  console.log(`[sms] connected: sender ${SMS_SENDER}, ${balance} messages left`)
+  if (balance !== null) console.log(`[sms] connected: sender ${SMS_SENDER}, ${balance} messages left`)
+  else console.log('[sms] LOGIN_CODES=console: smsoffice.ge is not used')
   void rsCache.loadProducts().catch(() => {})
   void rsCache.loadPlates().catch(() => {})
   return []
